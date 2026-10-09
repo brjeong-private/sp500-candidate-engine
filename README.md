@@ -123,7 +123,7 @@ authentication: Microsoft Entra
 | `ref` | issuer, instrument, identifier, state, universe |
 | `market` | daily bar, observation, corporate action |
 | `event` | news, earnings, revision, instrument mapping |
-| `fundamental` | SEC filing·fact, 테이블만 구현 |
+| `fundamental` | SEC filing·fact와 snapshot observation |
 | `analytics` | Qlib run, 미구현 |
 | `selection` | candidate batch, 미구현 |
 
@@ -287,7 +287,7 @@ Cutoff 검증:
 
 `logs/<서울 실행일>.log`에 단계별 JSON 한 줄을 기록합니다.
 
-일일·backfill process는 별도로 `logs/processes/<process_run_id>.jsonl` 한 파일을 사용합니다. 파일은 실행 중에도 flush되므로 완료된 날짜와 현재 DB heartbeat를 확인할 수 있습니다.
+일일·backfill process는 별도로 `logs/processes/<process_run_id>.jsonl` 한 파일을 사용합니다. 파일은 실행 중에도 flush되며 장시간 range download·SEC parse 단계에는 60초 heartbeat를 기록합니다.
 
 필드:
 
@@ -313,6 +313,24 @@ Process 로그의 날짜별 줄:
 - completed/success/failed progress
 
 모든 초기 날짜 처리가 끝난 뒤 `RETRY_CHECK` 줄을 기록하고, 실패 날짜를 재처리할 때 같은 파일에 날짜별 `RETRY` 줄을 추가합니다.
+
+## 3개월 Backfill 실행 결과
+
+2026-10-10에 로컬에서 `2026-07-09`부터 `2026-10-08`까지 실행했다.
+
+| 항목 | 결과 |
+|---|---:|
+| process run | `9d333911-64e9-4f81-bd88-5cfc60f86bef` |
+| 상태 | `SUCCEEDED` |
+| XNYS 거래일 | 65/65 성공 |
+| 실패·재처리 | 0/0 |
+| Massive logical bars | 32,692 |
+| SEC filings | 1,974 |
+| SEC facts | 12,310 |
+| 미래 누수 | bars/actions/events/filings/facts 모두 0 |
+| 동일 payload bar revision 중복 | 0 |
+
+Massive가 bar를 반환하지 않은 경고는 3건이다. VMRK(2026-08-17)와 PSKY(2026-10-06)는 해당 날짜 ticker reference도 없었고, WBD(2026-10-06)는 ticker reference는 유효하지만 aggregate가 0건이었다. 현재 Wikipedia 구성 종목을 과거 날짜에 재사용하는 `HISTORICAL_RECONSTRUCTION` 한계와 provider 원본 결측으로 보존한다.
 
 로그와 raw payload는 Git에 올리지 않습니다.
 
@@ -368,15 +386,18 @@ Process 로그의 날짜별 줄:
 
 배포 계획은 [.azure/deployment-plan.md](.azure/deployment-plan.md)에 있습니다.
 
+West US 3 배포는 준비·검증 중 사용자가 취소했고 실제 3개월 backfill은 로컬에서 완료했다. 향후 VM 배포 시 계획과 validation을 다시 수행해야 한다.
+
 선택 구성:
 
-- Korea Central
+- West US 3
 - Existing resource group `rg-ai-project`
 - Ubuntu 24.04
-- Standard_B4ms
+- Standard_D4as_v5, live capacity 거부 시 동일 리전 D-series fallback
 - 64 GB Standard SSD
 - Password SSH
 - System-assigned managed identity
+- VM 고정 공인 IP만 PostgreSQL public firewall에 허용
 - Auto-shutdown schedule 없음
 
 배포 스크립트:
@@ -403,7 +424,7 @@ VM password와 배포 출력은 `.azure/*.tmp`에 저장하며 Git에서 제외�
 
 - 3~5년 연속 가격
 - 생존편향 없는 과거 S&P 구성·GICS
-- SEC filings/facts
+- SEC 전체 taxonomy·custom concept와 원문 XBRL 확장
 - 과거 earnings revision
 - Qlib 특징·점수
 - 최종 후보 5~10개

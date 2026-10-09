@@ -110,8 +110,8 @@ def parse_sec_bulk(
         "duplicate_contexts": 0,
     }
 
-    known_filing_by_accession: dict[str, NormalizedFiling] = {}
-    filing_by_accession: dict[str, NormalizedFiling] = {}
+    known_filing_by_identity: dict[tuple[str, str], NormalizedFiling] = {}
+    filing_by_identity: dict[tuple[str, str], NormalizedFiling] = {}
     for _, payload in _json_members(submissions_zip):
         counters["submission_files"] += 1
         cik = _payload_cik(payload)
@@ -122,19 +122,26 @@ def parse_sec_bulk(
             filing = _normalize_filing(cik, raw)
             if filing is None:
                 continue
-            known = known_filing_by_accession.get(filing.accession)
+            identity = (filing.cik, filing.accession)
+            known = known_filing_by_identity.get(identity)
             if known is not None and known != filing:
-                raise ValueError(f"Conflicting submission records for {filing.accession}")
-            known_filing_by_accession[filing.accession] = filing
+                raise ValueError(
+                    f"Conflicting submission records for CIK {filing.cik} "
+                    f"accession {filing.accession}"
+                )
+            known_filing_by_identity[identity] = filing
             if filing.accepted_at > cutoff:
                 counters["filings_after_cutoff"] += 1
                 continue
-            existing = filing_by_accession.get(filing.accession)
+            existing = filing_by_identity.get(identity)
             if existing is not None and existing != filing:
-                raise ValueError(f"Conflicting submission records for {filing.accession}")
-            filing_by_accession[filing.accession] = filing
+                raise ValueError(
+                    f"Conflicting submission records for CIK {filing.cik} "
+                    f"accession {filing.accession}"
+                )
+            filing_by_identity[identity] = filing
 
-    counters["filings_included"] = len(filing_by_accession)
+    counters["filings_included"] = len(filing_by_identity)
     fact_by_context: dict[str, NormalizedFact] = {}
     for _, payload in _json_members(companyfacts_zip):
         counters["companyfact_files"] += 1
@@ -163,9 +170,10 @@ def parse_sec_bulk(
                     if not isinstance(raw, dict):
                         continue
                     accession = _text(raw.get("accn"))
-                    filing = filing_by_accession.get(accession or "")
+                    identity = (cik, accession or "")
+                    filing = filing_by_identity.get(identity)
                     if filing is None:
-                        known_filing = known_filing_by_accession.get(accession or "")
+                        known_filing = known_filing_by_identity.get(identity)
                         raw_accepted = _optional_datetime(raw.get("accepted"))
                         if (
                             known_filing is not None
@@ -195,8 +203,8 @@ def parse_sec_bulk(
     counters["facts_included"] = len(fact_by_context)
     filings = tuple(
         sorted(
-            filing_by_accession.values(),
-            key=lambda item: (item.accepted_at, item.accession),
+            filing_by_identity.values(),
+            key=lambda item: (item.accepted_at, item.cik, item.accession),
         )
     )
     facts = tuple(

@@ -1,6 +1,6 @@
 # Azure Deployment Plan
 
-Status: Validated
+Status: Cancelled - local backfill selected
 
 ## Objective
 
@@ -11,13 +11,20 @@ Status: Validated
 - Ensure no Azure auto-shutdown schedule is configured for the VM.
 - Run the recent three-month backfill only after implementation, validation, and deployment checks pass.
 
+## Final Outcome
+
+- The user cancelled VM deployment and selected local execution on 2026-10-10.
+- No West US 3 VM was deployed.
+- Local process `9d333911-64e9-4f81-bd88-5cfc60f86bef` completed 65 of 65 sessions successfully.
+- Azure deployment validation stopped after live capacity checks; this plan must be prepared and validated again before any future deployment.
+
 ## Current Assumptions
 
 - Subscription: ME-MngEnvMCAP572020-annajeong-1, `8d0218f4-f340-446d-b76a-3ff419b03e77`.
-- Region: Korea Central.
+- Region: West US 3.
 - Resource group: existing `rg-ai-project`.
 - VM OS: Ubuntu 24.04 LTS.
-- VM size: Standard_B4ms, 4 vCPU and 16 GB class.
+- VM size: Standard_D4as_v5, 4 vCPU and 16 GB; same-region D-series fallback is allowed if live capacity rejects it.
 - Database: existing Azure Database for PostgreSQL Flexible Server `candidate_engine`.
 - Authentication to PostgreSQL: Microsoft Entra through Azure CLI locally and managed identity or equivalent non-secret Azure credential on the VM.
 - VM login: generated strong password stored locally outside Git.
@@ -60,64 +67,67 @@ Status: Validated
 - Classification: Development internal batch.
 - Scale: one VM, one backfill process, 65 XNYS sessions.
 - Budget: cost-optimized burstable VM selected by user.
-- Compliance: Korea region only, no additional requirements.
+- Compliance: no additional regional or organizational requirements beyond the active Azure policies.
 - Availability: single VM; this is an auxiliary backfill path, not a highly available service.
 
 ## Recipe
 
 - Recipe: Azure CLI.
-- Rationale: one existing repository, one existing resource group/VNet/PostgreSQL server, and one explicitly requested VM with custom password/SFTP bootstrap.
+- Rationale: one existing repository, one existing resource group/PostgreSQL server, and one explicitly requested VM with custom password/SFTP bootstrap.
 - No `azd init` or template conversion is required.
 
 ## Azure Context
 
 - Subscription: `ME-MngEnvMCAP572020-annajeong-1`.
 - Subscription ID: `8d0218f4-f340-446d-b76a-3ff419b03e77`.
-- Region: `koreacentral`.
+- Region: `westus3`.
 - Resource group: `rg-ai-project`.
 
 ## Planned Azure Resources
 
 | Resource | Name | Configuration |
 |---|---|---|
-| Subnet | `sp500-backfill` | `10.82.5.0/24` in existing `vnet-jongmok-prd` |
-| NSG | `nsg-sp500-backfill` | SSH 22 from Internet, explicitly approved by user |
-| Public IP | `pip-sp500-backfill` | Standard, static IPv4 |
-| NIC | `nic-sp500-backfill` | VM subnet, public IP, NSG |
-| VM | `vm-sp500-backfill` | Ubuntu 24.04, Standard_B4ms, 64 GB Standard SSD |
+| VNet | `vnet-sp500-backfill-wus3` | `10.83.0.0/16` in West US 3 |
+| Subnet | `snet-sp500-backfill` | `10.83.5.0/24` |
+| NSG | `nsg-sp500-backfill-wus3` | SSH 22 from Internet, explicitly approved by user |
+| Public IP | `vm-sp500-backfill-wus3-pip` | Standard, static IPv4 |
+| NIC | `vm-sp500-backfill-wus3-nic` | VM subnet, public IP, NSG |
+| VM | `vm-sp500-backfill-wus3` | Ubuntu 24.04, Standard_D4as_v5, 64 GB Standard SSD |
 | Managed identity | system-assigned | PostgreSQL Entra authentication target |
 
 No Key Vault or new storage account is planned. Provider secrets are copied over password-authenticated SFTP into `/opt/sp500-candidate-engine/.env` with mode 0600. This is a development-only deviation from the preferred Key Vault pattern.
 
-## Existing Network
+## Network and Database Access
 
-- VNet: `vnet-jongmok-prd`, `10.82.0.0/16`.
-- Existing delegated subnets cannot host the VM.
-- Existing private-endpoints subnet is reserved for private endpoints.
-- New VM subnet uses unused `10.82.5.0/24`.
-- PostgreSQL private DNS zone `privatelink.postgres.database.azure.com` is linked to the VNet.
+- Create a separate West US 3 VNet because Azure VNets and NSGs cannot change regions.
+- New VNet: `vnet-sp500-backfill-wus3`, `10.83.0.0/16`.
+- New VM subnet: `snet-sp500-backfill`, `10.83.5.0/24`.
+- PostgreSQL `pg-jongmok-candidate-8d0218f4` currently has public network access enabled and Microsoft Entra-only authentication.
+- Add one PostgreSQL firewall rule for the VM's static public IPv4 address after deployment.
+- Do not enable the broad "Allow Azure services" firewall rule.
+- Use the VM system-assigned managed identity and a PostgreSQL role created by the Entra administrator.
 
 ## Policy Constraints
 
 - Azure Security Baseline assignment applies.
 - MCAPSGov deny, audit, deploy/modify policy initiatives apply.
-- `Block Azure RM Resource Creation` assignment may deny VM or network creation; Azure validation must surface an explicit deny before deployment.
 - Defender-related subscription policies apply.
-- West Europe is blocked; selected Korea Central is unaffected by that region restriction.
+- The current effective assignment summary contains Defender/OpenSourceRelationalDatabases policies; validation must still surface any inherited deny.
 
 ## Quota and Availability
 
-- Total Regional vCPUs: limit 100, usage 0.
-- Standard BS Family vCPUs: limit 100, usage 0.
+- West US 3 compute quota check reports available VM quota.
 - Planned vCPUs: 4.
-- Standard_B4ms appears in Korea Central VM size listing.
+- Standard_D4as_v5 is supported in West US 3 and is the first deployment choice.
+- If live capacity rejects it, use Standard_D4s_v5, Standard_D2as_v5, then Standard_D2s_v5 without leaving West US 3.
+- Prior Korea Central failures for B4ms, D4s_v5, and D4as_v5 were live capacity restrictions and do not apply to West US 3.
 - Existing VMs in the resource group: 0.
 - Existing public IPs in the resource group: 0.
 
 ## Cost Estimate
 
-- Standard_B4ms Linux consumption: approximately USD 0.208/hour.
-- 730-hour compute estimate: approximately USD 151.84/month.
+- Standard_D4as_v5 Linux consumption in West US 3: approximately USD 0.172/hour.
+- 730-hour compute estimate: approximately USD 125.56/month.
 - OS disk and public IP are additional.
 - Auto-shutdown is intentionally disabled, so cost continues until the VM is manually stopped/deallocated or deleted.
 
@@ -159,18 +169,24 @@ Current resource-group check returned zero `Microsoft.DevTestLab/schedules`.
 ## Role Assignment Verification
 
 - Status: Verified with one post-deployment database action.
-- Identity checked: system-assigned identity of `vm-sp500-backfill`.
+- Identity checked after deployment: system-assigned identity of `vm-sp500-backfill-wus3`.
 - Azure RBAC roles: none required because the VM does not read Blob Storage or Key Vault and only requests an Entra token.
 - PostgreSQL data-plane role: must be created after the VM principal ID exists, with least-privilege grants on `ops`, `ref`, `market`, `event`, and `fundamental`.
 - Management-plane Contributor/Owner roles are not assigned to the VM.
 
 ### All validation checks pass
 
+- [ ] 1. Core Validation: Azure CLI, authentication, Bicep build, group validation, and what-if
+- [ ] 2. Linting: Bicep lint
+- [ ] 3. Azure Policy Validation: active assignments reviewed and group validation/what-if reports no deny
+
 - [x] 1. Core Validation: Azure CLI, authentication, Bicep build, group validation, and what-if
 - [x] 2. Docker Build: not applicable because the VM runs the Python project directly
 - [x] 3. Azure Policy Validation: policy assignments reviewed and group validate/what-if passed
 
-## Validation Proof
+## Previous Validation Proof
+
+The following proof applies to the superseded Korea Central plan. West US 3 validation must replace it before deployment.
 
 - Command: `python -m pytest`
   - Result: PASS, 35 tests.
@@ -184,6 +200,8 @@ Current resource-group check returned zero `Microsoft.DevTestLab/schedules`.
   - Result: OVERALL PASS.
 - Command: `az deployment group what-if`
   - Result: PASS, Create 2, Modify 0, Delete 0.
+- Command after B4ms capacity fallback: `validate-deployment.ps1` with Standard_D4s_v5
+  - Result: OVERALL PASS, Create 0, Modify 0, Delete 0 after partial resources from the failed B4ms attempt.
 - Command: `pip wheel . --no-deps`
   - Result: PASS.
 - Azure CLI installed: PASS
@@ -209,6 +227,9 @@ Current resource-group check returned zero `Microsoft.DevTestLab/schedules`.
 - 2026-10-09: User explicitly requested completion of the maximum-data backfill implementation, tests, data architecture, documentation, and repository push before any Azure deployment.
 - Azure VM provisioning and three-month execution remain pending after local implementation and validation.
 - User selected current subscription, Korea Central, `rg-ai-project`, Development classification, Standard_B4ms, Internet-wide SSH, and no additional compliance constraints.
+- After Standard_B4ms returned `SkuNotAvailable`, user selected Standard_D4s_v5 in Korea Central.
+- After Standard_D4s_v5 also returned `SkuNotAvailable`, user selected Standard_D4as_v5.
+- 2026-10-10: User explicitly selected West US 3, any available D-series size, password authentication, pipeline deployment, and three-month backfill execution.
 - User explicitly instructed the agent to execute Azure deployment and the three-month pipeline after implementation.
 
 ## Status Checklist
@@ -221,7 +242,7 @@ Current resource-group check returned zero `Microsoft.DevTestLab/schedules`.
 - [x] Local implementation complete
 - [x] Local validation complete
 - [x] Status updated to Ready for Validation
-- [x] Azure validation complete
+- [ ] Azure validation complete for West US 3
 - [ ] Azure deployment complete
-- [ ] Three-month backfill complete
-- [ ] Post-run verification complete
+- [x] Local three-month backfill complete
+- [x] Post-run verification complete

@@ -365,13 +365,13 @@ class BackfillRepository:
             "SELECT issuer_id, cik FROM ref.issuer WHERE cik IS NOT NULL"
         ).fetchall()
         issuer_ids = {str(row["cik"]).zfill(10): row["issuer_id"] for row in issuer_rows}
-        filing_ids: dict[str, uuid.UUID] = {}
+        filing_ids: dict[tuple[str, str], uuid.UUID] = {}
         changed_filings = 0
         for filing in sec_result.filings:
             issuer_id = issuer_ids.get(filing.cik)
             if issuer_id is None:
                 continue
-            filing_id = _stable_uuid("sec-filing", filing.accession)
+            filing_id = _stable_uuid("sec-filing", f"{filing.cik}:{filing.accession}")
             inserted = connection.execute(
                 """
                 INSERT INTO fundamental.sec_filing(
@@ -380,7 +380,7 @@ class BackfillRepository:
                     is_amendment, source_snapshot_id
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (accession_no) DO NOTHING
+                ON CONFLICT (issuer_id, accession_no) DO NOTHING
                 RETURNING filing_id
                 """,
                 (
@@ -401,13 +401,17 @@ class BackfillRepository:
                 filing_id = inserted["filing_id"]
             else:
                 existing = connection.execute(
-                    "SELECT filing_id FROM fundamental.sec_filing WHERE accession_no = %s",
-                    (filing.accession,),
+                    """
+                    SELECT filing_id
+                    FROM fundamental.sec_filing
+                    WHERE issuer_id = %s AND accession_no = %s
+                    """,
+                    (issuer_id, filing.accession),
                 ).fetchone()
                 if existing is None:
                     raise RuntimeError("Could not resolve SEC filing")
                 filing_id = existing["filing_id"]
-            filing_ids[filing.accession] = filing_id
+            filing_ids[(filing.cik, filing.accession)] = filing_id
             connection.execute(
                 """
                 INSERT INTO fundamental.sec_filing_observation(
@@ -421,7 +425,7 @@ class BackfillRepository:
         changed_facts = 0
         for fact in sec_result.facts:
             issuer_id = issuer_ids.get(fact.cik)
-            filing_id = filing_ids.get(fact.accession)
+            filing_id = filing_ids.get((fact.cik, fact.accession))
             if issuer_id is None or filing_id is None:
                 continue
             fact_id = _stable_uuid("sec-fact", fact.context_hash)

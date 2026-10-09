@@ -11,6 +11,7 @@ import pytest
 from sp500_candidate_engine.sec_bulk import parse_sec_bulk
 
 CIK = "0000320193"
+SECOND_CIK = "0001168165"
 CUTOFF = datetime(2026, 10, 9, 9, 30, tzinfo=UTC)
 
 
@@ -175,3 +176,96 @@ def test_results_are_immutable_and_summary_is_sanitized() -> None:
     with pytest.raises(TypeError):
         result.summary["filings_included"] = 0  # type: ignore[index]
     assert all(isinstance(value, int) for value in result.summary.values())
+
+
+def test_same_accession_for_different_ciks_is_preserved() -> None:
+    accession = "0001109357-22-000013"
+    submissions = _zip_json(
+        {
+            "CIK0000320193.json": {
+                "cik": int(CIK),
+                "filings": {
+                    "recent": {
+                        "accessionNumber": [accession],
+                        "filingDate": ["2022-01-10"],
+                        "reportDate": ["2022-01-10"],
+                        "acceptanceDateTime": ["2022-01-11T02:29:59Z"],
+                        "form": ["8-K"],
+                        "primaryDocument": ["first.htm"],
+                    }
+                },
+            },
+            "CIK0001168165.json": {
+                "cik": int(SECOND_CIK),
+                "filings": {
+                    "recent": {
+                        "accessionNumber": [accession],
+                        "filingDate": ["2022-01-10"],
+                        "reportDate": ["2022-01-10"],
+                        "acceptanceDateTime": ["2022-01-10T21:29:59Z"],
+                        "form": ["8-K"],
+                        "primaryDocument": ["second.htm"],
+                    }
+                },
+            },
+        }
+    )
+    companyfacts = _zip_json(
+        {
+            f"CIK{CIK}.json": {
+                "cik": int(CIK),
+                "facts": {
+                    "us-gaap": {
+                        "Assets": {
+                            "units": {
+                                "USD": [
+                                    {
+                                        "end": "2022-01-10",
+                                        "val": 100,
+                                        "accn": accession,
+                                        "form": "8-K",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            },
+            f"CIK{SECOND_CIK}.json": {
+                "cik": int(SECOND_CIK),
+                "facts": {
+                    "us-gaap": {
+                        "Assets": {
+                            "units": {
+                                "USD": [
+                                    {
+                                        "end": "2022-01-10",
+                                        "val": 200,
+                                        "accn": accession,
+                                        "form": "8-K",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+            },
+        }
+    )
+
+    result = parse_sec_bulk(
+        submissions,
+        companyfacts,
+        allowed_ciks={CIK, SECOND_CIK},
+        cutoff_at=CUTOFF,
+    )
+
+    assert {(filing.cik, filing.accession) for filing in result.filings} == {
+        (CIK, accession),
+        (SECOND_CIK, accession),
+    }
+    assert {(fact.cik, fact.accession, fact.value) for fact in result.facts} == {
+        (CIK, accession, 100),
+        (SECOND_CIK, accession, 200),
+    }
+    assert len({fact.context_hash for fact in result.facts}) == 2

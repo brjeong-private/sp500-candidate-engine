@@ -17,5 +17,6 @@
 /data/output/
 /logs/*.log
 /logs/**/*.log
+/logs/processes/
 !/logs/.gitkeep
 /infra/

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable
+from contextlib import suppress
 from datetime import date, datetime
+from typing import TypeVar
 
 from sp500_candidate_engine.backfill import (
     backfill_cutoff,
@@ -27,6 +30,100 @@ from sp500_candidate_engine.production_models import MassiveBackfillRange
 from sp500_candidate_engine.production_pipeline import collect_production_inputs
 from sp500_candidate_engine.raw_store import RawSnapshotWriter
 from sp500_candidate_engine.sec_bulk import SecBulkResult, parse_sec_bulk
+
+T = TypeVar("T")
+
+
+async def _run_fatal_process_stage(
+    awaitable: Awaitable[T],
+    *,
+    stage: str,
+    process_run_id: uuid.UUID,
+    tracker: ProcessTracker,
+    writer: ProcessLogWriter,
+    heartbeat_seconds: float = 60.0,
+) -> T:
+    started_at = datetime.now(UTC)
+    started_counter = time.perf_counter()
+    task = asyncio.ensure_future(awaitable)
+    writer.write(
+        {
+            "process_run_id": str(process_run_id),
+            "event_type": "PROCESS_STAGE_START",
+            "stage": stage,
+            "started_at": started_at.isoformat(),
+            "completed": False,
+        }
+    )
+    try:
+        sequence = 0
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=heartbeat_seconds)
+            if task in done:
+                result = await task
+                writer.write(
+                    {
+                        "process_run_id": str(process_run_id),
+                        "event_type": "PROCESS_STAGE_COMPLETE",
+                        "stage": stage,
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "duration_ms": round(
+                            (time.perf_counter() - started_counter) * 1000,
+                            3,
+                        ),
+                        "completed": True,
+                    }
+                )
+                return result
+            sequence += 1
+            tracker.heartbeat(process_run_id)
+            writer.write(
+                {
+                    "process_run_id": str(process_run_id),
+                    "event_type": "PROCESS_HEARTBEAT",
+                    "stage": stage,
+                    "sequence": sequence,
+                    "heartbeat_at": datetime.now(UTC).isoformat(),
+                    "duration_ms": round(
+                        (time.perf_counter() - started_counter) * 1000,
+                        3,
+                    ),
+                    "completed": False,
+                }
+            )
+    except Exception as error:
+        failure_reason = f"{type(error).__name__}: {error}"
+        writer.write(
+            {
+                "process_run_id": str(process_run_id),
+                "event_type": "PROCESS_STAGE_FAILURE",
+                "stage": stage,
+                "finished_at": datetime.now(UTC).isoformat(),
+                "duration_ms": round(
+                    (time.perf_counter() - started_counter) * 1000,
+                    3,
+                ),
+                "failure_reason": failure_reason,
+                "completed": True,
+            }
+        )
+        summary = tracker.finalize(process_run_id)
+        writer.write(
+            {
+                "process_run_id": str(process_run_id),
+                "event_type": "PROCESS_COMPLETE",
+                "finished_at": datetime.now(UTC).isoformat(),
+                "failure_reason": failure_reason,
+                "completed": True,
+                **summary,
+            }
+        )
+        raise
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 async def run_daily_process(
@@ -253,18 +350,30 @@ async def _run_backfill_dates(
             companyfacts_task = asyncio.create_task(
                 sec_collector.download_bulk("sec_companyfacts_bulk")
             )
-            range_data, submissions_zip, companyfacts_zip = await asyncio.gather(
-                range_data_task,
-                submissions_task,
-                companyfacts_task,
+            range_data, submissions_zip, companyfacts_zip = await _run_fatal_process_stage(
+                asyncio.gather(
+                    range_data_task,
+                    submissions_task,
+                    companyfacts_task,
+                ),
+                stage="RANGE_DOWNLOAD",
+                process_run_id=process_run_id,
+                tracker=tracker,
+                writer=writer,
             )
             allowed_ciks = tuple(member.cik for member in range_universe.members if member.cik)
-            sec_result = await asyncio.to_thread(
-                parse_sec_bulk,
-                submissions_zip,
-                companyfacts_zip,
-                allowed_ciks=allowed_ciks,
-                cutoff_at=backfill_cutoff(range_end),
+            sec_result = await _run_fatal_process_stage(
+                asyncio.to_thread(
+                    parse_sec_bulk,
+                    submissions_zip,
+                    companyfacts_zip,
+                    allowed_ciks=allowed_ciks,
+                    cutoff_at=backfill_cutoff(range_end),
+                ),
+                stage="SEC_PARSE",
+                process_run_id=process_run_id,
+                tracker=tracker,
+                writer=writer,
             )
             range_raw_values = await asyncio.gather(
                 *[

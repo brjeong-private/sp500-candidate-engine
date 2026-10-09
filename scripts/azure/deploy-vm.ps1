@@ -3,16 +3,17 @@ param(
     [string]$PasswordFile,
     [string]$SubscriptionId = "8d0218f4-f340-446d-b76a-3ff419b03e77",
     [string]$ResourceGroup = "rg-ai-project",
-    [string]$Location = "koreacentral",
-    [string]$VnetName = "vnet-jongmok-prd",
-    [string]$SubnetName = "sp500-backfill",
-    [string]$SubnetPrefix = "10.82.5.0/24",
-    [string]$NsgName = "nsg-sp500-backfill",
-    [string]$PublicIpName = "pip-sp500-backfill",
-    [string]$NicName = "nic-sp500-backfill",
-    [string]$VmName = "vm-sp500-backfill",
+    [string]$Location = "westus3",
+    [string]$VnetName = "vnet-sp500-backfill-wus3",
+    [string]$VnetPrefix = "10.83.0.0/16",
+    [string]$SubnetName = "snet-sp500-backfill",
+    [string]$SubnetPrefix = "10.83.5.0/24",
+    [string]$NsgName = "nsg-sp500-backfill-wus3",
+    [string]$PublicIpName = "pip-sp500-backfill-wus3",
+    [string]$NicName = "nic-sp500-backfill-wus3",
+    [string]$VmName = "vm-sp500-backfill-wus3",
     [string]$AdminUsername = "azurebackfill",
-    [string]$VmSize = "Standard_B4ms",
+    [string]$VmSize = "Standard_D4as_v5",
     [string]$OutputFile = ".azure/vm-deployment-output.tmp.json"
 )
 
@@ -50,6 +51,15 @@ if (-not (az network nsg rule show -g $ResourceGroup --nsg-name $NsgName -n Allo
         --source-port-ranges "*" `
         --destination-address-prefixes "*" `
         --destination-port-ranges 22 | Out-Null
+}
+
+if (-not (az network vnet show -g $ResourceGroup -n $VnetName 2>$null)) {
+    az network vnet create `
+        --resource-group $ResourceGroup `
+        --name $VnetName `
+        --location $Location `
+        --address-prefixes $VnetPrefix `
+        --tags workload=sp500-backfill environment=development | Out-Null
 }
 
 if (-not (az network vnet subnet show -g $ResourceGroup --vnet-name $VnetName -n $SubnetName 2>$null)) {

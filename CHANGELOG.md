@@ -79,8 +79,18 @@
 - 2026-10-09 | Azure | 배포 전 실행한 테스트·lint·Bicep build·validate·what-if·wheel build 명령과 결과를 validation proof에 기록했다.
 - 2026-10-09 | Azure | 공식 azure-validate workflow 완료 후 deployment plan 상태를 Validated로 변경했다.
 - 2026-10-09 | Repository | 사용자 요청에 따라 `infra/`를 Git 추적 대상에서 제외했다.
+- 2026-10-09 | Azure | Korea Central B4ms 용량 부족에 따라 사용자 승인 fallback인 Standard_D4s_v5로 계획과 배포 스크립트를 변경했다.
+- 2026-10-09 | Azure | Standard_D4s_v5로 Bicep build·validate·what-if을 재통과하고 plan을 다시 Validated 상태로 변경했다.
+- 2026-10-09 | Azure | D4s_v5 용량 부족 후 사용자 승인 fallback인 Standard_D4as_v5로 계획·스크립트·Bicep을 변경했다.
+- 2026-10-09 | Azure | Standard_D4as_v5 validate·what-if 재검증 후 plan을 Validated로 확정했다.
 - 2026-10-09 | Azure | 비밀번호 SFTP로 앱·환경설정을 전송하고 systemd backfill service를 준비하는 bootstrap 도구를 추가했다.
 - 2026-10-09 | Dependency | Azure VM password SFTP 배포를 위해 Paramiko와 잠금 의존성을 추가했다.
 - 2026-10-09 | Azure | 구독·Korea Central·B4ms·VNet·quota·비용·정책·인터넷 SSH 승인 내용을 반영해 deployment plan을 Ready for Validation으로 확정했다.
 - 2026-10-09 | Documentation | README에 Azure backfill VM 구성과 배포 스크립트·임시 비밀 파일 정책을 추가했다.
 - 2026-10-09 | Maintenance | Azure upload helper의 import와 line format을 lint 규칙에 맞게 정리했다.
+- 2026-10-10 | Azure | West US 3 전용 VNet·subnet·NSG·D-series VM과 고정 공인 IP 기반 PostgreSQL 방화벽 연결로 배포 계획과 IaC를 전환했다.
+- 2026-10-10 | Fix | 공동 제출 SEC 문서의 accession을 CIK와 함께 식별하도록 parser·DB unique key·persistence를 수정했다.
+- 2026-10-10 | Observability | 장시간 range download·SEC parse 단계에 60초 heartbeat와 실패·완료 process 로그를 추가했다.
+- 2026-10-10 | Data | 2026-07-09~2026-10-08 XNYS 65개 세션 backfill을 실패·재처리 없이 완료하고 미래 누수·중복 revision 0을 검증했다.
+- 2026-10-10 | Documentation | 3개월 backfill 실측 bar·SEC 적재량과 provider 원본 결측 3건을 README·데이터 아키텍처·파이프라인 문서에 반영했다.
+- 2026-10-10 | Maintenance | 실행별 JSONL process 로그 디렉터리를 Git 추적에서 제외했다.

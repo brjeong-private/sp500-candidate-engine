@@ -351,7 +351,7 @@ run identifiers:
 - latest input manifest: `5cefeecc-2651-5e15-a89e-3d68302ce217`
 - latest execution context: `7f56908c-23bb-596c-926f-211d136207aa`
 
-SEC `submissions.zip`·`companyfacts.zip` 다운로드 메서드는 구현됐지만 일일 orchestrator에는 아직 연결하지 않았다. 따라서 `fundamental.sec_filing`과 `fundamental.fact`는 현재 0행이다. 공식 calendar·halt collector와 Qlib·selection도 아직 미구현이다.
+SEC `submissions.zip`·`companyfacts.zip`은 historical backfill orchestrator에 연결됐다. 2026-07-09~2026-10-08 실행에서 filing 1,974건과 allowlist fact 12,310건을 적재했고, CIK와 accession의 복합 identity 및 날짜별 cutoff observation을 사용한다. 공식 calendar·halt collector와 Qlib·selection은 아직 미구현이다.
 
 ## 실행 명령
 
