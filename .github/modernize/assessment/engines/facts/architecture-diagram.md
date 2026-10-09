@@ -289,15 +289,16 @@ flowchart LR
 - Massive grouped daily price, dividend, split, news collector
 - Massive shared 5회/분 limiter와 pagination
 - SEC company ticker·exchange reference collector
-- SEC submissions/companyfacts bulk ZIP downloader
+- SEC submissions/companyfacts bulk ZIP downloader·normalizer·filing/fact persistence
 - Alpha Vantage 전체 earnings calendar collector
 - event·corporate-action·instrument-state production schema와 persistence
 - raw snapshot 7종, final manifest와 operational execution context
 - Yahoo/Wikipedia prototype, temporal fence, 변경분 upsert와 JSONL 로그
+- XNYS backfill, range action/news, SEC fact cutoff, 자동·수동 재처리와 process 진행 로그
 
 아직 미구현:
 
-- SEC bulk ZIP의 filing/fact 정규화와 `fundamental` 적재
 - 공식 calendar·halt collector
 - dataset checkpoint 실제 전진 로직
+- staging COPY·set-based merge 최적화
 - Qlib analytics·selection

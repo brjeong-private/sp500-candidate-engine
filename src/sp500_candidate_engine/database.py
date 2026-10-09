@@ -672,25 +672,51 @@ class Database:
                 "identifier",
                 f"{instrument_id}:TICKER:{member.symbol}:{run_spec.target_date}",
             )
-            connection.execute(
+            current_identifier = connection.execute(
                 """
-                INSERT INTO ref.instrument_identifier(
-                    identifier_id, instrument_id, id_type, id_value, valid_from,
-                    source_available_at, observed_at, source_snapshot_id
-                )
-                VALUES (%s, %s, 'TICKER', %s, %s, %s, %s, %s)
-                ON CONFLICT (identifier_id) DO NOTHING
+                SELECT identifier_id, id_value, valid_from, valid_to
+                FROM ref.instrument_identifier
+                WHERE instrument_id = %s AND id_type = 'TICKER'
+                ORDER BY valid_from DESC, revision_no DESC
+                LIMIT 1
                 """,
-                (
-                    identifier_id,
-                    instrument_id,
-                    member.symbol,
-                    run_spec.target_date,
-                    universe.revision_at,
-                    universe.observed_at,
-                    snapshot_id,
-                ),
-            )
+                (instrument_id,),
+            ).fetchone()
+            if current_identifier is None or current_identifier["id_value"] != member.symbol:
+                if current_identifier is not None:
+                    connection.execute(
+                        """
+                        UPDATE ref.instrument_identifier
+                           SET valid_to = %s
+                         WHERE identifier_id = %s
+                           AND valid_to IS NULL
+                           AND valid_from < %s
+                        """,
+                        (
+                            run_spec.target_date - timedelta(days=1),
+                            current_identifier["identifier_id"],
+                            run_spec.target_date,
+                        ),
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO ref.instrument_identifier(
+                        identifier_id, instrument_id, id_type, id_value, valid_from,
+                        source_available_at, observed_at, source_snapshot_id
+                    )
+                    VALUES (%s, %s, 'TICKER', %s, %s, %s, %s, %s)
+                    ON CONFLICT (identifier_id) DO NOTHING
+                    """,
+                    (
+                        identifier_id,
+                        instrument_id,
+                        member.symbol,
+                        run_spec.target_date,
+                        universe.revision_at,
+                        universe.observed_at,
+                        snapshot_id,
+                    ),
+                )
             connection.execute(
                 """
                 INSERT INTO ref.universe_member(

@@ -44,6 +44,14 @@ class MassiveCollection:
 
 
 @dataclass(frozen=True)
+class MassiveBackfillRange:
+    observed_at: datetime
+    actions: tuple[CorporateAction, ...]
+    news: tuple[NewsItem, ...]
+    payloads: dict[str, dict[str, object]]
+
+
+@dataclass(frozen=True)
 class SecCompany:
     cik: str
     name: str

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from psycopg import Connection
 
@@ -15,7 +15,13 @@ from sp500_candidate_engine.database import (
     _run_config_hash,
     _stable_uuid,
 )
-from sp500_candidate_engine.models import NEW_YORK, UTC, RunSpec, UniverseCollection
+from sp500_candidate_engine.models import (
+    NEW_YORK,
+    UTC,
+    KnowledgeMode,
+    RunSpec,
+    UniverseCollection,
+)
 from sp500_candidate_engine.production_models import (
     AlphaEarningsCollection,
     CorporateAction,
@@ -38,6 +44,17 @@ class ProductionPersistedRun:
     changed_actions: int
     changed_events: int
     missing_bars: int
+
+
+def resolve_revision(
+    *,
+    current_revision: int | None,
+    current_hash: str | None,
+    new_hash: str,
+) -> tuple[int, bool]:
+    if current_revision is not None and current_hash == new_hash:
+        return current_revision, False
+    return (current_revision + 1 if current_revision is not None else 1), True
 
 
 class ProductionRepository:
@@ -192,6 +209,7 @@ class ProductionRepository:
         connection: Connection[dict[str, object]],
         run_id: uuid.UUID,
         missing_symbols: list[str],
+        dataset_code: str = "massive_grouped_daily",
     ) -> None:
         connection.execute(
             """
@@ -199,12 +217,12 @@ class ProductionRepository:
                SET status = 'RESOLVED',
                    resolved_at = now()
              WHERE ingestion_run_id = %s
-               AND dataset_code = 'massive_grouped_daily'
+               AND dataset_code = %s
                AND rule_code = 'PROVIDER_BAR_MISSING'
                AND entity_key <> ALL(%s::text[])
                AND status = 'ACTIVE'
             """,
-            (run_id, missing_symbols),
+            (run_id, dataset_code, missing_symbols),
         )
         for symbol in missing_symbols:
             updated = connection.execute(
@@ -215,11 +233,16 @@ class ProductionRepository:
                        last_seen_at = now(),
                        resolved_at = NULL
                  WHERE ingestion_run_id = %s
-                   AND dataset_code = 'massive_grouped_daily'
+                   AND dataset_code = %s
                    AND entity_key = %s
                    AND rule_code = 'PROVIDER_BAR_MISSING'
                 """,
-                (json.dumps({"message": "No grouped daily bar returned"}), run_id, symbol),
+                (
+                    json.dumps({"message": "No grouped daily bar returned"}),
+                    run_id,
+                    dataset_code,
+                    symbol,
+                ),
             ).rowcount
             if updated:
                 continue
@@ -230,7 +253,7 @@ class ProductionRepository:
                     rule_code, severity, details, status, last_seen_at
                 )
                 VALUES (
-                    %s, %s, 'massive_grouped_daily', %s,
+                    %s, %s, %s, %s,
                     'PROVIDER_BAR_MISSING', 'WARNING', %s, 'ACTIVE', now()
                 )
                 ON CONFLICT DO NOTHING
@@ -238,6 +261,7 @@ class ProductionRepository:
                 (
                     uuid.uuid4(),
                     run_id,
+                    dataset_code,
                     symbol,
                     json.dumps({"message": "No grouped daily bar returned"}),
                 ),
@@ -384,7 +408,9 @@ class ProductionRepository:
                 source_available_at=source_available_at,
                 availability_basis=availability_basis,
                 raw=raw_objects[dataset],
-                is_reconstruction=False,
+                is_reconstruction=(
+                    run_spec.knowledge_mode is KnowledgeMode.HISTORICAL_RECONSTRUCTION
+                ),
             )
         return snapshots
 
@@ -417,13 +443,13 @@ class ProductionRepository:
             )
             current = connection.execute(
                 """
-                SELECT revision_no, primary_exchange, status
+                SELECT instrument_state_id, revision_no, primary_exchange, status
                 FROM ref.instrument_state
-                WHERE instrument_id = %s AND valid_from = %s
-                ORDER BY revision_no DESC
+                WHERE instrument_id = %s
+                ORDER BY valid_from DESC, revision_no DESC
                 LIMIT 1
                 """,
-                (instrument_id, run_spec.target_date),
+                (instrument_id,),
             ).fetchone()
             values = (company.exchange, "LISTED")
             if (
@@ -436,6 +462,21 @@ class ProductionRepository:
             ):
                 continue
             revision = int(current["revision_no"]) + 1 if current else 1
+            if current is not None:
+                connection.execute(
+                    """
+                    UPDATE ref.instrument_state
+                       SET valid_to = %s
+                     WHERE instrument_state_id = %s
+                       AND valid_to IS NULL
+                       AND valid_from < %s
+                    """,
+                    (
+                        run_spec.target_date - timedelta(days=1),
+                        current["instrument_state_id"],
+                        run_spec.target_date,
+                    ),
+                )
             state_id = _stable_uuid(
                 "instrument-state",
                 f"{instrument_id}:{run_spec.target_date}:{revision}",
@@ -486,10 +527,15 @@ class ProductionRepository:
                 """,
                 (source_id, action.provider_action_id),
             ).fetchone()
-            if current is not None and current["payload_hash"] == payload_hash:
+            revision, is_changed = resolve_revision(
+                current_revision=int(current["revision_no"]) if current else None,
+                current_hash=str(current["payload_hash"]) if current else None,
+                new_hash=payload_hash,
+            )
+            if not is_changed:
+                assert current is not None
                 action_id = current["action_id"]
             else:
-                revision = int(current["revision_no"]) + 1 if current else 1
                 action_id = _stable_uuid(
                     "corporate-action",
                     f"{source_id}:{action.provider_action_id}:{revision}",
@@ -671,10 +717,15 @@ class ProductionRepository:
             (event_id,),
         ).fetchone()
         changed = 0
-        if current is not None and current["payload_hash"] == payload_hash:
+        revision, is_changed = resolve_revision(
+            current_revision=int(current["revision_no"]) if current else None,
+            current_hash=str(current["payload_hash"]) if current else None,
+            new_hash=payload_hash,
+        )
+        if not is_changed:
+            assert current is not None
             revision_id = current["event_revision_id"]
         else:
-            revision = int(current["revision_no"]) + 1 if current else 1
             revision_id = _stable_uuid("event-revision", f"{event_id}:{revision}")
             connection.execute(
                 """

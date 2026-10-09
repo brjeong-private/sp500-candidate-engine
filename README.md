@@ -190,6 +190,60 @@ Provider connectivity probe:
   --env-file .env probe-providers --date 2026-10-08
 ```
 
+3개월 backfill dry-run 계획, 네트워크나 DB를 변경하지 않습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env plan-backfill `
+  --start 2026-07-09 `
+  --end 2026-10-08
+```
+
+일일 production process 실행:
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env run-daily --date 2026-10-08
+```
+
+Backfill 실행, 1차 전체 완료 후 실패 날짜를 자동 재처리합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env run-backfill `
+  --start 2026-07-09 `
+  --end 2026-10-08
+```
+
+Backfill 포함 데이터:
+
+- Massive grouped daily price
+- Massive range dividend·split
+- Massive 주 단위 news pagination
+- SEC submissions/companyfacts bulk normalization
+- 날짜별 05:30 ET cutoff derived snapshots
+- 날짜별 reconstruction manifest
+
+Alpha historical earnings는 당시 revision을 증명할 수 없어 제외합니다.
+
+이전 process의 실패 날짜를 지정 범위에서 다시 처리:
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env retry-backfill `
+  --process-run-id <uuid> `
+  --start 2026-07-09 `
+  --end 2026-10-08
+```
+
+진행 상태 확인:
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env show-process `
+  --process-run-id <uuid>
+```
+
 Migration:
 
 ```powershell
@@ -233,6 +287,8 @@ Cutoff 검증:
 
 `logs/<서울 실행일>.log`에 단계별 JSON 한 줄을 기록합니다.
 
+일일·backfill process는 별도로 `logs/processes/<process_run_id>.jsonl` 한 파일을 사용합니다. 파일은 실행 중에도 flush되므로 완료된 날짜와 현재 DB heartbeat를 확인할 수 있습니다.
+
 필드:
 
 - `pipeline_started_at`
@@ -242,6 +298,21 @@ Cutoff 검증:
 - `duration_ms`
 - `failure_reason`
 - `details`
+
+Process 로그의 날짜별 줄:
+
+- process start time
+- collection date
+- duration
+- collected count와 dataset별 count
+- success/failure
+- failure reason
+- retry required
+- retry status
+- completed
+- completed/success/failed progress
+
+모든 초기 날짜 처리가 끝난 뒤 `RETRY_CHECK` 줄을 기록하고, 실패 날짜를 재처리할 때 같은 파일에 날짜별 `RETRY` 줄을 추가합니다.
 
 로그와 raw payload는 Git에 올리지 않습니다.
 
@@ -273,21 +344,48 @@ Cutoff 검증:
 │   └── database.py
 ├── sql/
 ├── tests/
+├── CHANGELOG.md
+├── AGENTS.md
 ├── .github/modernize/assessment/engines/facts/
 └── us_stock_pipeline_agent_brief.md
 ```
 
+모든 사용자 요청 변경은 [CHANGELOG.md](CHANGELOG.md)에 항목별 한 줄로 누적한다.
+
 ## 아직 남은 작업
 
-- SEC bulk ZIP의 filing·fact 정규화와 DB 적재
 - 공식 NYSE/Nasdaq calendar collector
 - Nasdaq halt collector
-- checkpoint cursor 실제 전진
+- dataset checkpoint cursor 실제 전진
+- staging COPY·set-based merge 성능 최적화
 - Massive Basic 2년보다 오래된 가격 backfill
 - 공식 point-in-time S&P constituent·GICS
 - Qlib Alpha158·LightGBM
 - 5~10개 후보 selection
 - TradingAgents downstream integration
+
+## Azure Backfill VM
+
+배포 계획은 [.azure/deployment-plan.md](.azure/deployment-plan.md)에 있습니다.
+
+선택 구성:
+
+- Korea Central
+- Existing resource group `rg-ai-project`
+- Ubuntu 24.04
+- Standard_B4ms
+- 64 GB Standard SSD
+- Password SSH
+- System-assigned managed identity
+- Auto-shutdown schedule 없음
+
+배포 스크립트:
+
+- [deploy-vm.ps1](scripts/azure/deploy-vm.ps1)
+- [upload_and_bootstrap.py](scripts/azure/upload_and_bootstrap.py)
+- [bootstrap-vm.sh](scripts/azure/bootstrap-vm.sh)
+
+VM password와 배포 출력은 `.azure/*.tmp`에 저장하며 Git에서 제외합니다.
 
 ## 라이선스 주의
 

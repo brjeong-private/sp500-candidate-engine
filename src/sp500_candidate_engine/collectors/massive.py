@@ -3,9 +3,18 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 from sp500_candidate_engine.http import IntervalRateLimiter, RetryingHttpClient
-from sp500_candidate_engine.models import NEW_YORK, UTC, DailyBar, RunSpec, UniverseMember
+from sp500_candidate_engine.models import (
+    NEW_YORK,
+    UTC,
+    DailyBar,
+    KnowledgeMode,
+    MarketCollection,
+    RunSpec,
+    UniverseMember,
+)
 from sp500_candidate_engine.production_models import (
     CorporateAction,
+    MassiveBackfillRange,
     MassiveCollection,
     NewsItem,
 )
@@ -68,10 +77,7 @@ class MassiveCollector:
             for member in members
             for provider_symbol in {member.symbol, member.provider_symbol}
         }
-        grouped = await self._get_json(
-            f"/v2/aggs/grouped/locale/us/market/stocks/{run_spec.target_date.isoformat()}",
-            params={"adjusted": "false", "include_otc": "false"},
-        )
+        market = await self.collect_grouped_daily(run_spec, members)
         dividends = await self._collect_pages(
             "/v3/reference/dividends",
             params={
@@ -105,23 +111,155 @@ class MassiveCollector:
             time(hour=16, minute=15),
             tzinfo=NEW_YORK,
         ).astimezone(UTC)
-        bars = self._parse_grouped(grouped, run_spec, symbols)
         actions = self._parse_actions(dividends, splits, run_spec, symbols)
         news_items = self._parse_news(news, run_spec, symbols)
         return MassiveCollection(
             observed_at=observed_at,
             source_available_at=source_available_at,
-            bars=bars,
+            bars=market.bars,
             actions=actions,
             news=news_items,
             payloads={
                 "massive_grouped_daily": {
                     "target_date": run_spec.target_date.isoformat(),
-                    "results": grouped.get("results", []),
+                    "results": market.sanitized_payload["results"],
                 },
                 "massive_dividends": {"results": dividends},
                 "massive_splits": {"results": splits},
                 "massive_news": {"results": news},
+            },
+        )
+
+    async def collect_grouped_daily(
+        self,
+        run_spec: RunSpec,
+        members: tuple[UniverseMember, ...],
+    ) -> MarketCollection:
+        symbols = {
+            provider_symbol: member.symbol
+            for member in members
+            for provider_symbol in {member.symbol, member.provider_symbol}
+        }
+        grouped = await self._get_json(
+            f"/v2/aggs/grouped/locale/us/market/stocks/{run_spec.target_date.isoformat()}",
+            params={"adjusted": "false", "include_otc": "false"},
+        )
+        observed_at = datetime.now(UTC)
+        source_available_at = datetime.combine(
+            run_spec.target_date,
+            time(hour=16, minute=15),
+            tzinfo=NEW_YORK,
+        ).astimezone(UTC)
+        bars = self._parse_grouped(grouped, run_spec, symbols)
+        returned = {bar.symbol for bar in bars}
+        failures = {
+            member.symbol: "No Massive grouped daily bar returned"
+            for member in members
+            if member.symbol not in returned
+        }
+        return MarketCollection(
+            observed_at=observed_at,
+            source_available_at=source_available_at,
+            bars=bars,
+            failures=failures,
+            sanitized_payload={
+                "target_date": run_spec.target_date.isoformat(),
+                "results": grouped.get("results", []),
+            },
+        )
+
+    async def collect_backfill_range(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        members: tuple[UniverseMember, ...],
+        news_chunk_days: int = 7,
+    ) -> MassiveBackfillRange:
+        if start_date > end_date:
+            raise ValueError("start_date must be on or before end_date")
+        if news_chunk_days <= 0:
+            raise ValueError("news_chunk_days must be positive")
+        symbols = {
+            provider_symbol: member.symbol
+            for member in members
+            for provider_symbol in {member.symbol, member.provider_symbol}
+        }
+        dividends = await self._collect_pages(
+            "/v3/reference/dividends",
+            params={
+                "ex_dividend_date.gte": start_date.isoformat(),
+                "ex_dividend_date.lte": (end_date + timedelta(days=90)).isoformat(),
+                "limit": 1000,
+                "sort": "ex_dividend_date",
+            },
+        )
+        splits = await self._collect_pages(
+            "/v3/reference/splits",
+            params={
+                "execution_date.gte": start_date.isoformat(),
+                "execution_date.lte": end_date.isoformat(),
+                "limit": 1000,
+                "sort": "execution_date",
+            },
+        )
+        news_rows: list[dict[str, object]] = []
+        news_chunks: list[dict[str, object]] = []
+        start_at = datetime.combine(start_date, time.min, tzinfo=NEW_YORK).astimezone(UTC)
+        range_end_at = datetime.combine(
+            end_date + timedelta(days=1),
+            time(hour=5, minute=30),
+            tzinfo=NEW_YORK,
+        ).astimezone(UTC)
+        while start_at < range_end_at:
+            end_at = min(range_end_at, start_at + timedelta(days=news_chunk_days))
+            rows = await self._collect_pages(
+                "/v2/reference/news",
+                params={
+                    "published_utc.gte": start_at.isoformat(),
+                    "published_utc.lt": end_at.isoformat(),
+                    "limit": 1000,
+                    "sort": "published_utc",
+                    "order": "asc",
+                },
+            )
+            news_rows.extend(rows)
+            news_chunks.append(
+                {
+                    "start_at": start_at.isoformat(),
+                    "end_at": end_at.isoformat(),
+                    "results": rows,
+                }
+            )
+            start_at = end_at
+        cutoff_at = datetime.combine(
+            end_date + timedelta(days=1),
+            time(hour=5, minute=30),
+            tzinfo=NEW_YORK,
+        ).astimezone(UTC)
+        range_spec = RunSpec(
+            target_date=end_date,
+            cutoff_at=cutoff_at,
+            knowledge_mode=KnowledgeMode.HISTORICAL_RECONSTRUCTION,
+        )
+        actions = self._parse_actions(
+            dividends,
+            splits,
+            range_spec,
+            symbols,
+            effective_start=start_date,
+            effective_end=end_date,
+            knowledge_date=end_date,
+        )
+        news = self._parse_news(news_rows, range_spec, symbols)
+        return MassiveBackfillRange(
+            observed_at=datetime.now(UTC),
+            actions=actions,
+            news=news,
+            payloads={
+                "massive_dividends_backfill": {"results": dividends},
+                "massive_splits_backfill": {"results": splits},
+                "massive_news_backfill": {"chunks": news_chunks},
             },
         )
 
@@ -221,7 +359,14 @@ class MassiveCollector:
         splits: list[dict[str, object]],
         run_spec: RunSpec,
         symbols: dict[str, str],
+        *,
+        effective_start: date | None = None,
+        effective_end: date | None = None,
+        knowledge_date: date | None = None,
     ) -> tuple[CorporateAction, ...]:
+        start_date = effective_start or run_spec.target_date
+        end_date = effective_end or run_spec.target_date
+        known_by = knowledge_date or run_spec.target_date
         actions: list[CorporateAction] = []
         for item in dividends:
             provider_symbol = str(item.get("ticker", ""))
@@ -230,7 +375,9 @@ class MassiveCollector:
             declaration_date = _date_or_none(item.get("declaration_date"))
             if symbol is None or ex_date is None:
                 continue
-            if declaration_date is None or declaration_date > run_spec.target_date:
+            if declaration_date is None or declaration_date > known_by:
+                continue
+            if not start_date <= ex_date <= end_date + timedelta(days=90):
                 continue
             actions.append(
                 CorporateAction(
@@ -257,7 +404,11 @@ class MassiveCollector:
             provider_symbol = str(item.get("ticker", ""))
             symbol = symbols.get(provider_symbol)
             execution_date = _date_or_none(item.get("execution_date"))
-            if symbol is None or execution_date != run_spec.target_date:
+            if (
+                symbol is None
+                or execution_date is None
+                or not start_date <= execution_date <= end_date
+            ):
                 continue
             actions.append(
                 CorporateAction(
@@ -274,7 +425,11 @@ class MassiveCollector:
                     currency=None,
                     split_from=_float_or_none(item.get("split_from")),
                     split_to=_float_or_none(item.get("split_to")),
-                    source_available_at=run_spec.cutoff_at,
+                    source_available_at=datetime.combine(
+                        execution_date,
+                        time.min,
+                        tzinfo=NEW_YORK,
+                    ).astimezone(UTC),
                     metadata=item,
                 )
             )

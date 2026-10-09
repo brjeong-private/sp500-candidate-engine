@@ -1,6 +1,8 @@
 # Local design-review notes
 /architecture-design-review-summary.md
 /data-collection-review.md
+/.azure/*.tmp
+/.azure/*.tmp.json
 
 # Local environment and Python artifacts
 /.env
@@ -14,4 +16,5 @@
 /data/raw/
 /data/output/
 /logs/*.log
+/logs/**/*.log
 !/logs/.gitkeep

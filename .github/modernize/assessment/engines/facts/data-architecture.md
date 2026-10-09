@@ -54,7 +54,7 @@
 | `ops` | `schema_migration`, `data_source`, `ingestion_run`, `source_snapshot`, `input_manifest`, `input_manifest_member`, `execution_context`, `data_quality_issue` | 구현 |
 | `ref` | `issuer`, `instrument`, `instrument_identifier`, `instrument_state`, `universe`, `universe_version`, `universe_member` | production reference 포함 |
 | `market` | `daily_bar`, `daily_bar_observation`, `corporate_action`, `corporate_action_observation` | production price/action 포함 |
-| `fundamental` | `sec_filing`, `fact` | 테이블만 구현, 현재 0행 |
+| `fundamental` | `sec_filing`, `sec_filing_observation`, `fact`, `fact_observation` | Backfill parser·persistence 구현, 실제 backfill 실행 전 |
 | `event` | `market_event`, `event_revision`, `event_revision_observation`, `event_instrument` | Massive news와 Alpha earnings 적재 |
 | `analytics` | 없음 | 목표 설계만 존재 |
 | `selection` | 없음 | 목표 설계만 존재 |
@@ -89,7 +89,7 @@
 | analytics | `analytics.feature_definition_version`, `analytics.processor_version`, `analytics.feature_run`, `analytics.feature_value`, `analytics.label_definition_version`, `analytics.label_run`, `analytics.daily_label`, `analytics.model_version`, `analytics.scoring_run`, `analytics.daily_score` | 실행 단위 벌크 쓰기 | 실행 중 특징 프레임 캐시 | 입력·정의·processor·코드가 같을 때만 같은 실행으로 취급 |
 | selection | `selection.selection_run`, `selection.candidate`, `selection.candidate_reason` | 한 실행을 단일 트랜잭션으로 저장 | 캐시 불필요 | scoring run·정책·trial을 고정 |
 | analysis | `analysis.trial`, `analysis.agent_config_version`, `analysis.prompt_version`, `analysis.analysis_run`, `analysis.agent_step`, `analysis.report`, `analysis.llm_usage`, `analysis.reevaluation_state` | 분석 실행 단위 트랜잭션과 append 로그 | 캐시 불필요 | 후보 선정과 분석 성공을 구분 |
-| operations | `ops.ingestion_run`, `ops.ingestion_checkpoint`, `ops.source_snapshot`, `ops.input_manifest`, `ops.input_manifest_member`, `ops.execution_context`, `ops.data_quality_issue` | append 중심 | 없음 | 데이터 묶음과 실행 설정의 식별자를 분리 |
+| operations | `ops.ingestion_run`, `ops.ingestion_checkpoint`, `ops.source_snapshot`, `ops.input_manifest`, `ops.input_manifest_member`, `ops.execution_context`, `ops.data_quality_issue`, `ops.process_run`, `ops.process_date_status` | append 중심 | 없음 | 데이터 묶음, 실행 설정, process 진행·재처리 상태를 분리 |
 
 ## 수집 출처
 
@@ -167,7 +167,9 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | `market` | `daily_bar_observation` | `source_snapshot_id`, `instrument_id`, `session_date`, `source_id`, `revision_no`, `observed_at` | PK `(source_snapshot_id, instrument_id, session_date, source_id, revision_no)`, FK logical bar | `(source_snapshot_id, session_date)` |
 | `market` | `corporate_action` | `action_id`, `instrument_id`, `source_id`, `source_action_id`, `action_type`, `announced_at`, `ex_date`, `record_date`, `pay_date`, `cash_amount`, `currency`, `split_from`, `split_to`, `source_available_at`, `observed_at`, `source_snapshot_id`, `revision_no`, `metadata` | PK `action_id`, UK `(source_id, source_action_id, revision_no)` | 비파티션, `(instrument_id, ex_date desc)` |
 | `fundamental` | `sec_filing` | `filing_id`, `issuer_id`, `accession_no`, `form_type`, `period_end`, `filed_date`, `accepted_at`, `primary_document_url`, `is_amendment`, `source_snapshot_id` | PK `filing_id`, UK `accession_no` | `(issuer_id, accepted_at desc)`, `form_type` |
+| `fundamental` | `sec_filing_observation` | `source_snapshot_id`, `filing_id`, `observed_at` | PK `(source_snapshot_id, filing_id)` | snapshot별 filing 관찰 |
 | `fundamental` | `fact` | `fact_id`, `filing_id`, `issuer_id`, `taxonomy`, `concept`, `unit`, `period_start`, `period_end`, `value_numeric`, `decimals`, `fiscal_year`, `fiscal_period`, `frame`, `context_hash`, `source_snapshot_id`, `source_available_at`, `observed_at` | PK `fact_id`, UK `context_hash` 또는 `NULLS NOT DISTINCT` 계약 | 비파티션으로 시작; `(issuer_id, concept, period_end desc, source_available_at desc)` |
+| `fundamental` | `fact_observation` | `source_snapshot_id`, `fact_id`, `observed_at` | PK `(source_snapshot_id, fact_id)` | snapshot별 fact 관찰 |
 | `event` | `market_event` | `event_id`, `source_id`, `source_event_id`, `event_type`, `canonical_key`, `created_at` | PK `event_id`, UK `(source_id, source_event_id)` | `(event_type, created_at desc)` |
 | `event` | `event_revision` | `event_revision_id`, `event_id`, `revision_no`, `title`, `source_url`, `status`, `scheduled_at`, `published_at`, `source_available_at`, `observed_at`, `source_snapshot_id`, `payload_hash`, `metadata` | PK `event_revision_id`, UK `(event_id, revision_no)` | 비파티션으로 시작; `(source_available_at desc)`, `(event_id, source_available_at desc)` |
 | `event` | `event_instrument` | `event_id`, `instrument_id`, `relation_type`, `confidence` | PK `(event_id, instrument_id)` | `(instrument_id, event_id)` |
@@ -199,6 +201,8 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | `ops` | `input_manifest_member` | `input_manifest_id`, `source_snapshot_id`, `dataset_code`, `precedence`, `lineage_role` | PK `(input_manifest_id, source_snapshot_id)` | `(source_snapshot_id, input_manifest_id)` |
 | `ops` | `execution_context` | `execution_context_id`, `input_manifest_id`, `cutoff_at`, `knowledge_mode`, `code_version`, `config_version`, `context_hash`, `created_at` | PK `execution_context_id`, UK `context_hash` | `(cutoff_at desc, knowledge_mode)` |
 | `ops` | `data_quality_issue` | `issue_id`, `ingestion_run_id`, `dataset_code`, `entity_type`, `entity_key`, `session_date`, `rule_code`, `severity`, `status`, `details`, `detected_at`, `resolved_at` | PK `issue_id` | `(status, severity, detected_at desc)`, `(entity_type, entity_key)` |
+| `ops` | `process_run` | `process_run_id`, `process_type`, `status`, `range_start`, `range_end`, 날짜 집계, `heartbeat_at`, `log_uri`, `metadata` | PK `process_run_id` | `(status, heartbeat_at)` |
+| `ops` | `process_date_status` | `process_run_id`, `collection_date`, `attempt_no`, `event_type`, `status`, 수집량, 실패·retry·완료 상태 | PK `(process_run_id, collection_date, attempt_no)` | retry partial index |
 
 `fundamental.fact`는 `filing_id`를 통해 accession을 참조한다. dedupe는 `(filing_id, taxonomy, concept, unit, normalized_context_hash)`를 기준으로 하며 `normalized_context_hash`는 NULL을 만들지 않는다. 대안으로 자연키를 사용한다면 PostgreSQL 16의 `UNIQUE NULLS NOT DISTINCT`를 명시한다.
 
@@ -717,3 +721,106 @@ CQRS를 별도 인프라로 도입할 필요는 없다. 원천·revision 테이�
 | 실행 로그 | 오류 메시지에 URL/query가 포함될 수 있음 | 운영 민감정보 | API key 제거, 구조화 로그, 제한된 보존 |
 
 PII, PHI, PCI 데이터는 목표 엔터티 모델에서 발견되지 않는다. 다만 시장 데이터와 뉴스는 공개 여부와 별개로 계약상 재배포 제한이 있을 수 있으므로 `license_class`를 데이터 접근 통제에 사용한다.
+
+## Backfill 데이터 구조
+
+### 저장 계층
+
+| 계층 | 엔터티 | 역할 |
+|---|---|---|
+| process | `ops.process_run` | 일일·backfill·수동 retry 실행 1건 |
+| process date | `ops.process_date_status` | 날짜별 attempt, 수집량, 실패, retry, 완료 |
+| parent raw | `ops.source_snapshot` | 전체 기간 actions·news·SEC bulk 원문 |
+| daily derived | `ops.source_snapshot` | 해당 날짜 cutoff 이하 항목만 포함한 재구성 snapshot |
+| logical data | `market.daily_bar`, `market.corporate_action`, `event.event_revision`, `fundamental.fact` | 자연키·revision 단위 중복 없는 데이터 |
+| observation | bar/action/event observation tables | 어떤 snapshot에서 해당 revision을 관찰했는지 기록 |
+| daily manifest | `ops.input_manifest` | 날짜별 universe·price·derived event·fact snapshot 묶음 |
+| context | `ops.execution_context` | cutoff, reconstruction mode, code/config version |
+
+### 구조도
+
+<!-- mermaid-checked: every attribute is `<type> <name> [<key>] ["<description>"]` with at most one of PK/FK/UK, no \n in descriptions, no {} in descriptions, every relationship label is double-quoted -->
+```mermaid
+erDiagram
+    ProcessRun ||--o{ ProcessDateStatus : "tracks"
+    ProcessRun ||--o{ ParentRawSnapshot : "downloads"
+    ParentRawSnapshot ||--o{ DailyDerivedSnapshot : "filters by cutoff"
+    ProcessDateStatus ||--o{ DailyDerivedSnapshot : "produces"
+    DailyDerivedSnapshot }o--o{ LogicalRevision : "observes"
+    ProcessDateStatus ||--|| DailyManifest : "finalizes"
+    DailyManifest ||--o{ DailyDerivedSnapshot : "contains"
+    DailyManifest ||--|| ExecutionContext : "reproduces"
+
+    ProcessRun {
+        uuid processRunId PK
+        string processType
+        date rangeStart
+        date rangeEnd
+        string status
+        timestamptz heartbeatAt
+        string logUri
+    }
+    ProcessDateStatus {
+        uuid processRunId PK "composite PK"
+        date collectionDate PK "composite PK"
+        int attemptNo PK "composite PK"
+        string eventType
+        string status
+        int collectedItemCount
+        boolean retryRequired
+        string retryStatus
+        boolean completed
+    }
+    ParentRawSnapshot {
+        uuid sourceSnapshotId PK
+        string datasetCode
+        date coverageStart
+        date coverageEnd
+        string contentHash
+        boolean isReconstruction
+    }
+    DailyDerivedSnapshot {
+        uuid sourceSnapshotId PK
+        date coverageDate
+        timestamptz cutoffAt
+        string availabilityBasis
+        string contentHash
+    }
+    LogicalRevision {
+        uuid logicalId PK
+        int revisionNo
+        timestamptz sourceAvailableAt
+        string payloadHash
+    }
+    DailyManifest {
+        uuid inputManifestId PK
+        string manifestHash UK
+    }
+    ExecutionContext {
+        uuid executionContextId PK
+        uuid inputManifestId FK
+        timestamptz cutoffAt
+        string knowledgeMode
+        string contextHash UK
+    }
+```
+
+### 중복 방지 불변식
+
+1. 동일 provider 자연키와 동일 payload hash는 기존 logical revision을 재사용한다.
+2. payload가 바뀐 경우에만 `revision_no + 1`을 생성한다.
+3. 동일 raw payload와 coverage는 같은 `source_snapshot`을 재사용한다.
+4. 동일 snapshot과 logical revision 연결은 observation PK로 한 번만 저장한다.
+5. 동일 ticker·exchange state는 날짜별로 복제하지 않고 validity interval을 유지한다.
+6. process retry는 새 attempt를 만들지만 동일 논리 데이터의 중복 revision을 만들지 않는다.
+
+### 미래 누수 방지 불변식
+
+1. 거래 세션 D의 cutoff는 D 다음 날 05:30 America/New_York다.
+2. 뉴스는 `published_at <= cutoff`만 derived snapshot에 포함한다.
+3. 배당은 `declaration_date <= cutoff`만 포함한다.
+4. 분할은 보수적으로 `execution_date <= cutoff date`부터 포함한다.
+5. SEC filing과 fact는 연결 filing의 `accepted_at <= cutoff`를 요구한다.
+6. Alpha historical earnings schedule은 당시 revision을 증명할 수 없어 제외한다.
+7. parent raw snapshot은 분석 query에서 직접 읽지 않고 daily derived snapshot을 통해서만 사용한다.
+8. backfill context는 항상 `HISTORICAL_RECONSTRUCTION`이다.

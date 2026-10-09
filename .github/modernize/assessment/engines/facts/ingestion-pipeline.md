@@ -260,6 +260,64 @@ Massive의 네 endpoint를 동시에 호출하는 것처럼 보이더라도 실�
 8. fundamental/event schema
 9. Qlib feature·score·selection
 
+## Backfill 사전 계획
+
+현재 구현된 `plan-backfill`은 네트워크와 DB를 변경하지 않고 XNYS session과 API 예산을 계산한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env plan-backfill `
+  --start 2026-07-09 `
+  --end 2026-10-08
+```
+
+이 범위는 XNYS 65세션, Massive 기본 요청 81회, 최소 quota 시간 17분으로 계산된다. pagination은 별도이므로 실제 요청 수는 더 많을 수 있다. Alpha historical 요청은 0회다.
+
+현재 `run-backfill`은 Massive grouped daily 가격, 기간 범위 dividend·split·news, SEC submissions·companyfacts를 수집하고 날짜별 05:30 ET cutoff delta snapshot과 reconstruction manifest를 생성한다. Alpha historical earnings는 제외한다.
+
+최대 데이터 backfill의 일별 cutoff는 거래 세션 다음 날 `05:30 America/New_York`로 고정한다. range raw snapshot은 parent run에만 연결하고, 뉴스 `published_at`, 배당 `declaration_date`, split `execution_date`, SEC `accepted_at`이 cutoff 이하인 항목만 날짜별 derived snapshot과 manifest에 포함한다. Alpha historical earnings는 당시 revision을 증명할 수 없어 제외한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env run-backfill `
+  --start 2026-07-09 `
+  --end 2026-10-08
+```
+
+실행 순서:
+
+1. 모든 초기 날짜 순차 수집
+2. DB에서 실패 날짜 조회
+3. `RETRY_CHECK` 로그
+4. 실패 날짜 자동 재처리
+5. 최종 process 상태 확정
+
+수동 범위 재처리:
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env retry-backfill `
+  --process-run-id <uuid> `
+  --start 2026-07-09 `
+  --end 2026-10-08
+```
+
+진행 상태:
+
+```powershell
+.\.venv\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env show-process `
+  --process-run-id <uuid>
+```
+
+실행별 로그:
+
+```text
+logs/processes/<process_run_id>.jsonl
+```
+
+날짜별 collection 완료가 1줄이며 retry는 별도 1줄이다. 각 줄은 시작 시간, 수집 날짜, 소요 시간, 수집량, 성공·실패, 실패 원인, 재처리 필요, 재처리 상태, 완료 여부와 전체 progress를 포함한다.
+
 ## 현재 구현된 prototype
 
 - Wikipedia cutoff revision collector

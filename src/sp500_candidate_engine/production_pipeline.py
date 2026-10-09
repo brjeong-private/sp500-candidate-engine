@@ -73,6 +73,7 @@ async def collect_production_inputs(
     settings: Settings,
     *,
     target_date: date,
+    knowledge_mode: KnowledgeMode = KnowledgeMode.OPERATIONAL_REPLAY,
 ) -> ProductionPersistedRun:
     if settings.massive_api_key is None:
         raise ValueError("MASSIVE_API_KEY is not configured")
@@ -163,7 +164,7 @@ async def collect_production_inputs(
     run_spec = RunSpec(
         target_date=target_date,
         cutoff_at=final_cutoff,
-        knowledge_mode=KnowledgeMode.OPERATIONAL_REPLAY,
+        knowledge_mode=knowledge_mode,
     )
     writer = RawSnapshotWriter(settings.raw_data_dir)
     payloads = {

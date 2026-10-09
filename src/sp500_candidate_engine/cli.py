@@ -3,12 +3,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import uuid
 from datetime import date, timedelta
 
+from sp500_candidate_engine.backfill import build_backfill_plan
+from sp500_candidate_engine.batch_pipeline import (
+    run_backfill_process,
+    run_daily_process,
+    run_retry_process,
+)
 from sp500_candidate_engine.config import Settings
 from sp500_candidate_engine.database import Database
 from sp500_candidate_engine.models import KnowledgeMode, RunSpec
 from sp500_candidate_engine.pipeline import collect_daily_inputs, result_as_dict
+from sp500_candidate_engine.process_tracking import ProcessTracker
 from sp500_candidate_engine.production_pipeline import (
     collect_production_inputs,
     probe_providers,
@@ -67,6 +75,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Probe Massive, SEC, and Alpha Vantage without exposing keys",
     )
     probe.add_argument("--date", type=_date, required=True)
+
+    plan_backfill = commands.add_parser(
+        "plan-backfill",
+        help="Create a no-network three-month backfill plan",
+    )
+    plan_backfill.add_argument("--start", type=_date, required=True)
+    plan_backfill.add_argument("--end", type=_date, required=True)
+
+    run_daily = commands.add_parser(
+        "run-daily",
+        help="Run one production date with process tracking and a per-run log",
+    )
+    run_daily.add_argument("--date", type=_date, required=True)
+
+    run_backfill = commands.add_parser(
+        "run-backfill",
+        help="Run a Massive price backfill and automatically retry failed dates",
+    )
+    run_backfill.add_argument("--start", type=_date, required=True)
+    run_backfill.add_argument("--end", type=_date, required=True)
+    run_backfill.add_argument(
+        "--no-auto-retry",
+        action="store_true",
+        help="Finish after the initial pass without automatic retries",
+    )
+
+    retry_backfill = commands.add_parser(
+        "retry-backfill",
+        help="Retry failed dates from an earlier process within a date range",
+    )
+    retry_backfill.add_argument("--process-run-id", type=uuid.UUID, required=True)
+    retry_backfill.add_argument("--start", type=_date, required=True)
+    retry_backfill.add_argument("--end", type=_date, required=True)
+
+    show_process = commands.add_parser(
+        "show-process",
+        help="Show current progress for a daily or backfill process",
+    )
+    show_process.add_argument("--process-run-id", type=uuid.UUID, required=True)
 
     verify = commands.add_parser("verify-cutoff", help="Run app and database temporal fences")
     verify.add_argument("--date", type=_date, required=True)
@@ -136,6 +183,52 @@ def main() -> None:
     if args.command == "probe-providers":
         result = asyncio.run(probe_providers(settings, target_date=args.date))
         print(json.dumps(result, indent=2, sort_keys=True))
+        return
+
+    if args.command == "plan-backfill":
+        plan = build_backfill_plan(
+            start_date=args.start,
+            end_date=args.end,
+            evaluated_on=date.today(),
+            policies=settings.source_policies(),
+        )
+        print(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
+        return
+
+    if args.command == "run-daily":
+        result = asyncio.run(run_daily_process(settings, target_date=args.date))
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return
+
+    if args.command == "run-backfill":
+        result = asyncio.run(
+            run_backfill_process(
+                settings,
+                start_date=args.start,
+                end_date=args.end,
+                auto_retry=not args.no_auto_retry,
+            )
+        )
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return
+
+    if args.command == "retry-backfill":
+        result = asyncio.run(
+            run_retry_process(
+                settings,
+                parent_process_run_id=args.process_run_id,
+                start_date=args.start,
+                end_date=args.end,
+            )
+        )
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return
+
+    if args.command == "show-process":
+        database.migrate()
+        with ProcessTracker(database) as tracker:
+            result = tracker.get_status(args.process_run_id)
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
         return
 
     if args.command == "verify-cutoff":
