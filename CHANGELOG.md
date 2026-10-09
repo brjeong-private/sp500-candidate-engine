@@ -69,6 +69,15 @@
 - 2026-10-09 | Azure | Ubuntu VM 배포와 3개월 backfill 실행을 위한 필수 deployment plan skeleton을 추가했다.
 - 2026-10-09 | Azure | 로컬 backfill 구현 승인과 Azure 배포 대기 상태를 deployment plan에 분리해 기록했다.
 - 2026-10-09 | Azure | Ubuntu VM·VNet subnet·NSG·public IP를 idempotent하게 생성하고 auto-shutdown schedule 부재를 검증하는 스크립트를 추가했다.
+- 2026-10-09 | Azure | AVM 기반 NSG·subnet·Ubuntu B4ms VM·NIC·public IP Bicep 템플릿을 추가했다.
+- 2026-10-09 | Azure | VM AVM output contract에 맞춰 managed identity 출력 타입과 public IP 조회 방식을 수정했다.
+- 2026-10-09 | Security | VM 비밀번호와 validation parameter를 ignored 임시 파일로 생성하고 현재 사용자 전용 ACL을 적용했다.
+- 2026-10-09 | Azure | Azure validation recipe의 core·Docker N/A·policy 체크리스트를 deployment plan에 추가했다.
+- 2026-10-09 | Azure | Bicep build·resource-group validate·what-if와 policy 검증을 통과하고 proof를 기록했다.
+- 2026-10-09 | Build | Python wheel build와 전체 35개 테스트를 배포 전 최종 검증했다.
+- 2026-10-09 | Security | VM managed identity의 Azure RBAC 불필요와 PostgreSQL least-privilege role 후속 생성을 검증 계획에 기록했다.
+- 2026-10-09 | Azure | 배포 전 실행한 테스트·lint·Bicep build·validate·what-if·wheel build 명령과 결과를 validation proof에 기록했다.
+- 2026-10-09 | Azure | 공식 azure-validate workflow 완료 후 deployment plan 상태를 Validated로 변경했다.
 - 2026-10-09 | Azure | 비밀번호 SFTP로 앱·환경설정을 전송하고 systemd backfill service를 준비하는 bootstrap 도구를 추가했다.
 - 2026-10-09 | Dependency | Azure VM password SFTP 배포를 위해 Paramiko와 잠금 의존성을 추가했다.
 - 2026-10-09 | Azure | 구독·Korea Central·B4ms·VNet·quota·비용·정책·인터넷 SSH 승인 내용을 반영해 deployment plan을 Ready for Validation으로 확정했다.

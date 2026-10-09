@@ -1,6 +1,6 @@
 # Azure Deployment Plan
 
-Status: Ready for Validation
+Status: Validated
 
 ## Objective
 
@@ -156,6 +156,48 @@ Current resource-group check returned zero `Microsoft.DevTestLab/schedules`.
 - Mermaid validation: passed.
 - No backfill API or DB execution was performed during local implementation.
 
+## Role Assignment Verification
+
+- Status: Verified with one post-deployment database action.
+- Identity checked: system-assigned identity of `vm-sp500-backfill`.
+- Azure RBAC roles: none required because the VM does not read Blob Storage or Key Vault and only requests an Entra token.
+- PostgreSQL data-plane role: must be created after the VM principal ID exists, with least-privilege grants on `ops`, `ref`, `market`, `event`, and `fundamental`.
+- Management-plane Contributor/Owner roles are not assigned to the VM.
+
+### All validation checks pass
+
+- [x] 1. Core Validation: Azure CLI, authentication, Bicep build, group validation, and what-if
+- [x] 2. Docker Build: not applicable because the VM runs the Python project directly
+- [x] 3. Azure Policy Validation: policy assignments reviewed and group validate/what-if passed
+
+## Validation Proof
+
+- Command: `python -m pytest`
+  - Result: PASS, 35 tests.
+- Command: `python -m ruff check src tests scripts/azure/upload_and_bootstrap.py`
+  - Result: PASS.
+- Command: `python -m ruff format --check src tests scripts/azure/upload_and_bootstrap.py`
+  - Result: PASS.
+- Command: `az bicep build --file infra/main.bicep`
+  - Result: PASS.
+- Command: `validate-deployment.ps1 -Scope group -ResourceGroup rg-ai-project -Template infra/main.bicep -Parameters .azure/validate.parameters.tmp.json`
+  - Result: OVERALL PASS.
+- Command: `az deployment group what-if`
+  - Result: PASS, Create 2, Modify 0, Delete 0.
+- Command: `pip wheel . --no-deps`
+  - Result: PASS.
+- Azure CLI installed: PASS
+- Azure authentication: PASS
+- Bicep compilation: PASS
+- Resource-group deployment validation: PASS
+- What-if: PASS, Create 2, Modify 0, Delete 0
+- Policy validation: PASS through deployment validate/what-if; no deny surfaced
+- Local tests: 35 passed
+- Python wheel build: PASS, `sp500_candidate_engine-0.1.0-py3-none-any.whl`
+- Ruff lint/format: PASS
+- Pylance/editor diagnostics: PASS
+- Mermaid validation: PASS
+
 ## Open Decisions
 
 - No blocking user decisions remain.
@@ -179,7 +221,7 @@ Current resource-group check returned zero `Microsoft.DevTestLab/schedules`.
 - [x] Local implementation complete
 - [x] Local validation complete
 - [x] Status updated to Ready for Validation
-- [ ] Azure validation complete
+- [x] Azure validation complete
 - [ ] Azure deployment complete
 - [ ] Three-month backfill complete
 - [ ] Post-run verification complete
