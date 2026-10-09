@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sp500-candidate-engine"
+version = "0.1.0"
+description = "Point-in-time S&P 500 candidate data collection engine"
+requires-python = ">=3.11"
+dependencies = [
+  "azure-identity>=1.19,<2",
+  "beautifulsoup4>=4.12,<5",
+  "httpx>=0.27,<1",
+  "psycopg[binary]>=3.2,<4",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.8,<1",
+]
+
+[project.scripts]
+candidate-engine = "sp500_candidate_engine.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sp500_candidate_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

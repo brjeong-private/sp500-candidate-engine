@@ -1,0 +1,17 @@
+# Local design-review notes
+/architecture-design-review-summary.md
+/data-collection-review.md
+
+# Local environment and Python artifacts
+/.env
+/.venv/
+/.pytest_cache/
+/.ruff_cache/
+**/__pycache__/
+*.py[cod]
+
+# Collected raw payloads and local output
+/data/raw/
+/data/output/
+/logs/*.log
+!/logs/.gitkeep
