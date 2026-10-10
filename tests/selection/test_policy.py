@@ -59,3 +59,32 @@ def test_selection_fails_closed_when_hard_gate_pool_is_too_small() -> None:
             metadata={item[1].instrument_id: item[1] for item in items},
             policy=SelectionPolicy(),
         )
+
+
+def test_selection_keeps_eligible_candidates_when_all_predictions_are_negative() -> None:
+    items = [_score(index, f"Sector-{index}") for index in range(1, 11)]
+    negative_scores = tuple(
+        DailyScore(
+            instrument_id=score.instrument_id,
+            session_date=score.session_date,
+            score=-float(score.rank_overall) / 100,
+            rank_overall=score.rank_overall,
+            score_percentile=score.score_percentile,
+            rank_sector=score.rank_sector,
+            quality_status=score.quality_status,
+        )
+        for score, _ in items
+    )
+
+    result = select_candidates(
+        scores=negative_scores,
+        metadata={item[1].instrument_id: item[1] for item in items},
+        policy=SelectionPolicy(),
+    )
+
+    assert len(result.candidates) == 10
+    assert all(candidate.score < 0 for candidate in result.candidates)
+    assert all(
+        "NON_POSITIVE_PREDICTION" in candidate.reason_codes
+        for candidate in result.candidates
+    )

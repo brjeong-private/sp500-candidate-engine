@@ -41,11 +41,12 @@ def test_prediction_metrics_include_rank_ic_and_top_k_return() -> None:
     predictions = pd.Series([2.0, 1.0, 1.0, 2.0], index=index)
     labels = pd.Series([0.2, -0.1, -0.2, 0.3], index=index)
 
-    metrics = evaluate_predictions(predictions, labels, top_k=1, min_cross_section=2)
+    metrics = evaluate_predictions(predictions, labels, top_k=10, min_cross_section=2)
 
     assert metrics.rank_ic_mean == pytest.approx(1.0)
-    assert metrics.top_k_excess_return == pytest.approx(0.25)
-    assert metrics.positive_top_k_ratio == pytest.approx(1.0)
+    assert metrics.top_5_return == pytest.approx(0.05)
+    assert metrics.top_10_return == pytest.approx(0.05)
+    assert metrics.positive_return_ratio_top_5 == pytest.approx(0.5)
 
 
 def test_overlapping_predictions_keep_earliest_fold_for_each_date_instrument() -> None:

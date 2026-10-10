@@ -41,5 +41,7 @@ def test_candidate_result_contract_includes_temporal_identity() -> None:
     assert payload["selection_type"] == "QUANTITATIVE"
     assert payload["model_status"] == "SHADOW"
     assert payload["promotion_gate_passed"] is False
+    assert payload["candidates"][0]["predicted_return"] == 0.5
+    assert payload["candidates"][0]["predicted_return_positive"] is True
     assert payload["price_session_date"] == "2026-10-08"
     assert payload["candidates"][0]["symbol"] == "TEST"

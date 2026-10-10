@@ -33,8 +33,14 @@ class PredictionMetrics:
     ic_mean: float
     rank_ic_mean: float
     rank_ic_ir: float
-    top_k_excess_return: float
-    positive_top_k_ratio: float
+    top_5_return: float
+    top_10_return: float
+    positive_return_ratio_top_5: float
+    positive_return_ratio_top_10: float
+    net_top_5_return: float
+    net_top_10_return: float
+    max_drawdown_top_5: float
+    max_drawdown_top_10: float
     coverage: float
 
 
@@ -79,6 +85,8 @@ def evaluate_predictions(
     *,
     top_k: int,
     min_cross_section: int,
+    round_trip_cost_bps: float = 10,
+    holding_period_sessions: int = 5,
 ) -> PredictionMetrics:
     joined = pd.concat(
         [predictions.rename("score"), labels.rename("label")],
@@ -89,7 +97,10 @@ def evaluate_predictions(
         raise ValueError("No overlapping prediction and label rows")
     daily_ic: list[float] = []
     daily_rank_ic: list[float] = []
-    top_returns: list[float] = []
+    top_5_returns: list[float] = []
+    top_10_returns: list[float] = []
+    top_5_values: list[float] = []
+    top_10_values: list[float] = []
     for _, frame in joined.groupby(level="datetime", sort=True):
         if len(frame) >= min_cross_section:
             daily_ic.append(float(frame["score"].corr(frame["label"], method="pearson")))
@@ -101,26 +112,53 @@ def evaluate_predictions(
                     )
                 )
             )
-        top = frame.sort_values(
+        ordered = frame.sort_values(
             ["score"],
             ascending=False,
             kind="mergesort",
-        ).head(top_k)
-        if not top.empty:
-            top_returns.append(float(top["label"].mean()))
+        )
+        top_5 = ordered.head(min(5, top_k))
+        top_10 = ordered.head(min(10, top_k))
+        if not top_5.empty:
+            top_5_returns.append(float(top_5["label"].mean()))
+            top_5_values.extend(float(value) for value in top_5["label"])
+        if not top_10.empty:
+            top_10_returns.append(float(top_10["label"].mean()))
+            top_10_values.extend(float(value) for value in top_10["label"])
     rank_values = np.asarray(daily_rank_ic, dtype=float)
     rank_std = float(np.nanstd(rank_values, ddof=1)) if len(rank_values) > 1 else np.nan
     rank_mean = float(np.nanmean(rank_values)) if len(rank_values) else np.nan
+    cost = round_trip_cost_bps / 10_000
+
+    def net_mean(values: list[float]) -> float:
+        return float(np.mean(np.asarray(values) - cost)) if values else np.nan
+
+    def overlapping_max_drawdown(values: list[float]) -> float:
+        if not values:
+            return np.nan
+        cohort_contribution = (np.asarray(values) - cost) / holding_period_sessions
+        equity = np.cumprod(1 + cohort_contribution)
+        drawdown = equity / np.maximum.accumulate(equity) - 1
+        return float(drawdown.min())
+
     return PredictionMetrics(
         observations=len(joined),
         dates=joined.index.get_level_values("datetime").nunique(),
         ic_mean=float(np.nanmean(daily_ic)) if daily_ic else np.nan,
         rank_ic_mean=rank_mean,
         rank_ic_ir=rank_mean / rank_std if rank_std and np.isfinite(rank_std) else np.nan,
-        top_k_excess_return=float(np.mean(top_returns)) if top_returns else np.nan,
-        positive_top_k_ratio=(
-            float(np.mean(np.asarray(top_returns) > 0)) if top_returns else np.nan
+        top_5_return=float(np.mean(top_5_returns)) if top_5_returns else np.nan,
+        top_10_return=float(np.mean(top_10_returns)) if top_10_returns else np.nan,
+        positive_return_ratio_top_5=(
+            float(np.mean(np.asarray(top_5_values) > 0)) if top_5_values else np.nan
         ),
+        positive_return_ratio_top_10=(
+            float(np.mean(np.asarray(top_10_values) > 0)) if top_10_values else np.nan
+        ),
+        net_top_5_return=net_mean(top_5_returns),
+        net_top_10_return=net_mean(top_10_returns),
+        max_drawdown_top_5=overlapping_max_drawdown(top_5_returns),
+        max_drawdown_top_10=overlapping_max_drawdown(top_10_returns),
         coverage=len(joined) / len(labels),
     )
 

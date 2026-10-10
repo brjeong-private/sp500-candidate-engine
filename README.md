@@ -6,6 +6,8 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 
 프로젝트의 전체 범위는 `수집 -> 전처리 -> 모델 점수 -> 후보 선정`까지입니다. TradingAgents를 포함한 후보 이후 분석은 별도 프로젝트에서 구현합니다. 공통 무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
 
+현재 model v2는 개별 종목의 `D+1 adjusted open -> D+5 adjusted close` raw 수익률을 예측합니다. SPY는 optional 비교 지표이며 학습 label에서 차감하지 않습니다. 모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)에 기록합니다.
+
 ## 현재 상태
 
 2026-10-09 세션을 대상으로 실제 provider key와 Azure PostgreSQL을 사용해 production 수집과 명시적 shadow 후보 실행을 완료했습니다.
@@ -25,6 +27,7 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 | Alpha158 | 158 features |
 | 일일 score | 503개 |
 | 후보 | 10개, SHADOW model |
+| score 의미 | 향후 5거래일 예측 수익률 |
 
 Production identifiers:
 

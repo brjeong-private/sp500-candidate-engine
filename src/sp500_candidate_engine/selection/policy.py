@@ -118,6 +118,7 @@ def select_candidates(
             reason_codes=(
                 "MODEL_TOP_RANK",
                 "MODEL_TOP_PERCENTILE",
+                *(("NON_POSITIVE_PREDICTION",) if score.score <= 0 else ()),
                 *(("SECTOR_CAP_RELAXED",) if relaxed else ()),
             ),
         )

@@ -520,13 +520,15 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 
 ## Qlib 특징·전처리·라벨 계약
 
-현재 판정은 **Alpha158·processor·5-session 초과수익 label 계약 구현 완료**다. 설정은 `config/analytics`의 versioned YAML과 config hash로 고정한다.
+현재 판정은 **Alpha158·processor·개별 종목 raw 5-session return label 계약 구현 완료**다. 설정은 `config/analytics`의 versioned YAML과 config hash로 고정하며 SPY는 optional 평가 series다.
 
 - `feature_run.stage=RAW`는 조정 정책이 적용된 원시 Alpha158 계산 결과를 저장한다.
 - `processor_version.processor_kind=LEARN`은 학습 구간에서만 fit한 processor artifact를 저장한다. 검증·테스트·운영 추론은 같은 artifact를 사용한다.
 - `feature_run.stage=PROCESSED`는 `parent_feature_run_id`로 RAW run을, `processor_version_id`로 fit artifact를 참조한다.
 - processor config에는 handler class, learn/infer processor 순서와 파라미터, fit 기간, Qlib 버전, exporter 버전, 코드 hash를 포함한다.
 - `label_run`은 label 정의, execution context, 가격·기업행위 snapshot, 진입·청산 거래일, 경계에 걸친 label 제거 정책을 고정한다.
+- v2 label은 `D+5 adjusted close / D+1 adjusted open - 1`이며 SPY 결측과 독립적으로 생성한다.
+- `scoring_run.score_semantics='PREDICTED_5D_RETURN'`인 run만 `daily_score.predicted_return`과 `selection.candidate.predicted_return`을 채운다. v1 초과수익 score는 `LEGACY_SCORE`로 보존한다.
 - `model_version.split_spec`은 train/validation/test 기간과 purge/embargo 규칙을 기록한다. 경계를 넘는 label은 학습·검증 표본에서 제거한다.
 - RAW 특징의 NaN은 feature별 정책 범위에서 허용한다. 필수 입력 누락, infinity, 배열 차원 불일치는 차단한다. PROCESSED 특징은 선택한 모델의 허용 결측 정책을 적용하며 NaN 하나만으로 종목 전체를 자동 차단하지 않는다.
 - 배열 차원은 행 내부 CHECK, 적재 코드, deferred constraint trigger의 3단계로 검증한다.

@@ -10,6 +10,10 @@
 
 ## 2026-10-11
 
+- 2026-10-11 | Model v2 | 학습 label을 SPY 초과수익에서 개별 종목 D+1 조정 시가~D+5 조정 종가 raw 수익률로 변경하고 v1 artifact를 보존했다.
+- 2026-10-11 | Evaluation | Top-5/10 raw·cost-adjusted return, 양의 수익률 비율과 5개 중첩 cohort max drawdown metric을 추가했다.
+- 2026-10-11 | Selection | Score를 `PREDICTED_5D_RETURN`으로 저장하고 음수 예측 후보 허용 및 `NON_POSITIVE_PREDICTION` reason을 추가했다.
+- 2026-10-11 | Notebook | Label·model·selection config를 수정하며 재실행할 수 있는 v2 학습 notebook과 model change log를 갱신했다.
 - 2026-10-11 | Phase 6 | 명시적 date 기반 candidate pipeline과 CLI, daily opt-in 연결, backfill 분리, challenger gate와 drift metric을 구현했다.
 - 2026-10-11 | Shadow Replay | 최근 out-of-sample 20 sessions에서 매일 후보 10개, shortfall 0, sector cap 완화 0을 검증했다.
 - 2026-10-11 | Documentation | README와 아키텍처·수집·데이터 문서를 현재 Qlib·scoring·selection 구현 상태로 갱신했다.

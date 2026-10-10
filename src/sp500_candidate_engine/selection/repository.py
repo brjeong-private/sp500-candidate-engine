@@ -79,9 +79,9 @@ class SelectionRepository:
             INSERT INTO selection.candidate(
                 selection_run_id, instrument_id, position, score,
                 rank_overall, score_percentile, rank_sector,
-                quality_status, latest_data_at
+                quality_status, latest_data_at, predicted_return
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'OK', %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'OK', %s, %s)
             ON CONFLICT DO NOTHING
             """,
             [
@@ -94,6 +94,7 @@ class SelectionRepository:
                     candidate.score_percentile,
                     candidate.rank_sector,
                     cutoff_at,
+                    candidate.score,
                 )
                 for candidate in result.candidates
             ],

@@ -19,6 +19,7 @@ class ModelRegistration:
     artifact_uri: str
     artifact_hash: str
     metrics: dict[str, object]
+    label_semantics: str = "RAW_STOCK_5D_RETURN"
     promotion_status: str = "SHADOW"
     training_feature_run_id: uuid.UUID | None = None
     processor_version_id: uuid.UUID | None = None
@@ -51,14 +52,16 @@ class ModelRegistry:
                 training_feature_run_id, processor_version_id, label_run_id,
                 config_hash, split_spec, parameters, artifact_uri,
                 artifact_hash, metrics, promotion_status
+                , label_semantics
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (model_name, version, config_hash, export_run_id)
             DO UPDATE SET
                 artifact_uri = EXCLUDED.artifact_uri,
                 artifact_hash = EXCLUDED.artifact_hash,
                 metrics = EXCLUDED.metrics,
                 promotion_status = EXCLUDED.promotion_status
+                , label_semantics = EXCLUDED.label_semantics
             """,
             (
                 version_id,
@@ -75,6 +78,7 @@ class ModelRegistry:
                 registration.artifact_hash,
                 Jsonb(registration.metrics),
                 registration.promotion_status,
+                registration.label_semantics,
             ),
         )
         return version_id

@@ -1,6 +1,8 @@
 name: daily-quantitative-selection
 version: "1"
 selection_type: QUANTITATIVE
+score_semantics: PREDICTED_5D_RETURN
+positive_prediction_required: false
 minimum_candidates: 5
 maximum_candidates: 10
 sector_cap: 2

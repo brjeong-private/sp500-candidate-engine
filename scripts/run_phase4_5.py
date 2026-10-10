@@ -36,7 +36,11 @@ def main() -> None:
     parser.add_argument("--export-run-id")
     parser.add_argument(
         "--model-config",
-        default="config/analytics/model_lightgbm_v1.yaml",
+        default="config/analytics/model_lightgbm_v2.yaml",
+    )
+    parser.add_argument(
+        "--label-config",
+        default="config/analytics/label_forward_return_5d_v2.yaml",
     )
     parser.add_argument(
         "--selection-config",
@@ -59,10 +63,15 @@ def main() -> None:
             "relaxed_sector_cap",
         ),
     )
+    label_config = load_versioned_config(
+        root / args.label_config,
+        required_keys=("horizon_sessions", "entry_rule", "exit_rule"),
+    )
     summary = run_phase45_workflow(
         settings=Settings.from_env(root / args.env_file),
         export_dir=discover_export(root, args.export_run_id),
         model_config=model_config,
+        label_config=label_config,
         selection_config=selection_config,
         output_root=root / args.output_root,
     )

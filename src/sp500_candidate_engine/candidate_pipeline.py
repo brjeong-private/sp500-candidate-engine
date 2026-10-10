@@ -34,8 +34,12 @@ def run_candidate_date(
 ) -> Phase45Summary:
     root = Path(repository_root)
     model_config = load_versioned_config(
-        root / "config" / "analytics" / "model_lightgbm_v1.yaml",
+        root / "config" / "analytics" / "model_lightgbm_v2.yaml",
         required_keys=("seed", "model", "walk_forward", "baselines"),
+    )
+    label_config = load_versioned_config(
+        root / "config" / "analytics" / "label_forward_return_5d_v2.yaml",
+        required_keys=("horizon_sessions", "entry_rule", "exit_rule"),
     )
     selection_config = load_versioned_config(
         root / "config" / "analytics" / "selection_v1.yaml",
@@ -53,6 +57,7 @@ def run_candidate_date(
             target_date,
         ),
         model_config=model_config,
+        label_config=label_config,
         selection_config=selection_config,
         output_root=root / "data" / "output" / "phase45",
     )

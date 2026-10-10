@@ -34,7 +34,8 @@ az postgres flexible-server start `
 ## 재현성 입력
 
 - Qlib export run ID와 `manifest.json` content hash
-- `config/analytics/model_lightgbm_v1.yaml`
+- `config/analytics/model_lightgbm_v2.yaml`
+- `config/analytics/label_forward_return_5d_v2.yaml`
 - `config/analytics/selection_v1.yaml`
 - seed 42
 - 날짜 기반 walk-forward split

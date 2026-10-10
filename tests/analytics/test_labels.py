@@ -6,6 +6,7 @@ import pytest
 from sp500_candidate_engine.analytics.labels import (
     LabelPrice,
     generate_excess_return_labels,
+    generate_forward_return_labels,
 )
 
 
@@ -79,3 +80,56 @@ def test_missing_exit_price_is_preserved_as_quality_state() -> None:
 
     assert labels[0].label_value is None
     assert labels[0].quality_status == "MISSING_STOCK_PRICE"
+
+
+@pytest.mark.parametrize(
+    ("stock_exit", "benchmark_exit", "expected"),
+    [
+        (104.0, 106.0, 0.04),
+        (98.0, 95.0, -0.02),
+    ],
+)
+def test_raw_return_label_does_not_subtract_spy(
+    stock_exit: float,
+    benchmark_exit: float,
+    expected: float,
+) -> None:
+    calendar = tuple(date(2026, 1, day) for day in range(1, 8))
+    stock = {session: _price(session, 100, 100) for session in calendar}
+    benchmark = {session: _price(session, 100, 100) for session in calendar}
+    stock[calendar[5]] = _price(calendar[5], stock_exit, stock_exit)
+    benchmark[calendar[5]] = _price(
+        calendar[5],
+        benchmark_exit,
+        benchmark_exit,
+    )
+
+    label = generate_forward_return_labels(
+        instrument_id=uuid.uuid4(),
+        calendar=calendar,
+        stock_prices=stock,
+        benchmark_prices=benchmark,
+        horizon_sessions=5,
+    )[0]
+
+    assert label.label_value == pytest.approx(expected)
+    assert label.raw_return == pytest.approx(expected)
+
+
+def test_raw_return_label_does_not_require_spy() -> None:
+    calendar = tuple(date(2026, 1, day) for day in range(1, 8))
+    stock = {session: _price(session, 100, 100) for session in calendar}
+    stock[calendar[5]] = _price(calendar[5], 103, 103)
+
+    label = generate_forward_return_labels(
+        instrument_id=uuid.uuid4(),
+        calendar=calendar,
+        stock_prices=stock,
+        benchmark_prices=None,
+        horizon_sessions=5,
+    )[0]
+
+    assert label.label_value == pytest.approx(0.03)
+    assert label.benchmark_return is None
+    assert label.entry_session_date == calendar[1]
+    assert label.exit_session_date == calendar[5]

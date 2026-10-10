@@ -42,7 +42,7 @@
 - total-return label과 split 전후 수익률 학습
 - 생존편향 없는 S&P 500 historical model training
 - 신뢰 가능한 train/validation/test 분할을 요구하는 LightGBM 성능 평가
-- benchmark 대비 초과수익 label
+- benchmark 필수 차감 label. 현재 v2는 개별 종목 raw 5-session return을 사용하고 SPY는 optional 평가 series로 분리함
 
 ### Required gates before model training
 

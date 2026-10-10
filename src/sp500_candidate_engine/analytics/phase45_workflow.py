@@ -170,10 +170,17 @@ class TrainingDataRepository:
         prices = prices.set_index(["datetime", "instrument"]).sort_index()
 
         benchmark = pd.DataFrame(benchmark_rows)
-        benchmark["datetime"] = pd.to_datetime(benchmark.pop("session_date"))
-        benchmark[["open", "close"]] = benchmark[["open", "close"]].astype(float)
-        benchmark = benchmark.set_index("datetime").sort_index()
-        benchmark = benchmark.reindex(pd.DatetimeIndex(calendar))
+        if benchmark.empty:
+            benchmark = pd.DataFrame(
+                index=pd.DatetimeIndex(calendar),
+                columns=["open", "close"],
+                dtype=float,
+            )
+        else:
+            benchmark["datetime"] = pd.to_datetime(benchmark.pop("session_date"))
+            benchmark[["open", "close"]] = benchmark[["open", "close"]].astype(float)
+            benchmark = benchmark.set_index("datetime").sort_index()
+            benchmark = benchmark.reindex(pd.DatetimeIndex(calendar))
 
         versions: dict[pd.Timestamp, list[dict[str, object]]] = {}
         for row in universe_rows:
@@ -234,7 +241,7 @@ def _build_labels(
             [instrument in membership[session] for session in calendar_index],
             index=calendar_index,
         )
-        label = (raw_return - benchmark_return).where(eligible)
+        label = raw_return.where(eligible)
         labels.append(
             pd.DataFrame(
                 {
@@ -379,6 +386,7 @@ def run_phase45_workflow(
     settings: Settings,
     export_dir: Path,
     model_config: VersionedConfig,
+    label_config: VersionedConfig,
     selection_config: VersionedConfig,
     output_root: Path,
 ) -> Phase45Summary:
@@ -390,12 +398,16 @@ def run_phase45_workflow(
         {
             "export_hash": export_manifest["content_hash"],
             "model_config_hash": model_config.config_hash,
+            "label_config_hash": label_config.config_hash,
             "selection_config_hash": selection_config.config_hash,
         }
     )
     experiment_dir = Path(output_root) / experiment_key[:24]
     experiment_dir.mkdir(parents=True, exist_ok=True)
     model_payload = model_config.payload
+    label_payload = label_config.payload
+    if int(label_payload["horizon_sessions"]) != 5:
+        raise ValueError("Phase 4-5 workflow requires a 5-session label")
     baseline_config = model_payload["baselines"]
     if not isinstance(baseline_config, dict):
         raise ValueError("baselines config must be a mapping")
@@ -427,6 +439,13 @@ def run_phase45_workflow(
     lgb_parameters = model_payload["model"]
     if not isinstance(lgb_parameters, dict):
         raise ValueError("model config must be a mapping")
+    evaluation_config = model_payload.get("evaluation", {})
+    if not isinstance(evaluation_config, dict):
+        raise ValueError("evaluation config must be a mapping")
+    top_k_values = evaluation_config.get("top_k", [5, 10])
+    if not isinstance(top_k_values, list) or not top_k_values:
+        raise ValueError("evaluation.top_k must be a non-empty list")
+    maximum_top_k = max(int(value) for value in top_k_values)
     prediction_rows: list[pd.DataFrame] = []
     for fold in folds:
         train_index = _segment_index(
@@ -485,8 +504,14 @@ def run_phase45_workflow(
         metric = evaluate_predictions(
             indexed["score"],
             indexed["label"],
-            top_k=10,
+            top_k=maximum_top_k,
             min_cross_section=30,
+            round_trip_cost_bps=float(
+                evaluation_config.get("round_trip_cost_bps", 10)
+            ),
+            holding_period_sessions=int(
+                evaluation_config.get("holding_period_sessions", 5)
+            ),
         )
         metrics[str(model_name)] = asdict(metric)
 
@@ -560,6 +585,12 @@ def run_phase45_workflow(
         if export_row is None:
             raise RuntimeError("Export run disappeared during training")
         registry = ModelRegistry(connection)
+        effective_model_hash = _canonical_hash(
+            {
+                "model_config_hash": model_config.config_hash,
+                "label_config_hash": label_config.config_hash,
+            }
+        )
         model_ids: dict[str, uuid.UUID] = {}
         for model_name, artifact_path in artifact_paths.items():
             model_ids[model_name] = registry.register(
@@ -567,7 +598,7 @@ def run_phase45_workflow(
                     model_name=model_name,
                     version=str(model_payload["version"]),
                     export_run_id=export_run_id,
-                    config_hash=model_config.config_hash,
+                    config_hash=effective_model_hash,
                     split_spec={
                         "folds": [
                             {
@@ -589,6 +620,7 @@ def run_phase45_workflow(
                     artifact_hash=_hash_file(artifact_path),
                     metrics=metrics[model_name],
                     promotion_status="SHADOW",
+                    label_semantics="RAW_STOCK_5D_RETURN",
                 )
             )
 
@@ -625,7 +657,8 @@ def run_phase45_workflow(
             export_run_id=export_run_id,
             model_version_id=model_ids[selected_shadow_model],
             universe_version_id=export_row["universe_version_id"],
-            config_hash=model_config.config_hash,
+            config_hash=effective_model_hash,
+            score_semantics="PREDICTED_5D_RETURN",
         )
         score_repository.write_scores(
             scoring_run_id=scoring_run_id,
@@ -692,6 +725,9 @@ def run_phase45_workflow(
                 "experiment_key": experiment_key,
                 "selected_shadow_model": selected_shadow_model,
                 "promotion_gate_passed": False,
+                "label_name": label_config.name,
+                "label_version": label_config.version,
+                "label_config_hash": label_config.config_hash,
                 "metrics": metrics,
                 "model_version_ids": {
                     name: str(value) for name, value in model_ids.items()

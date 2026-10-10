@@ -41,6 +41,8 @@ def candidate_result_payload(
                 "symbol": candidate.symbol,
                 "sector": candidate.sector,
                 "score": candidate.score,
+                "predicted_return": candidate.score,
+                "predicted_return_positive": candidate.score > 0,
                 "rank_overall": candidate.rank_overall,
                 "score_percentile": candidate.score_percentile,
                 "rank_sector": candidate.rank_sector,

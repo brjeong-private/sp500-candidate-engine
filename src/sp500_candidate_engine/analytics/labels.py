@@ -99,3 +99,71 @@ def generate_excess_return_labels(
             )
         )
     return tuple(labels)
+
+
+def generate_forward_return_labels(
+    *,
+    instrument_id: uuid.UUID,
+    calendar: tuple[date, ...],
+    stock_prices: dict[date, LabelPrice],
+    benchmark_prices: dict[date, LabelPrice] | None,
+    horizon_sessions: int,
+    segment_end: date | None = None,
+) -> tuple[DailyLabelValue, ...]:
+    if horizon_sessions < 1:
+        raise ValueError("horizon_sessions must be positive")
+    if tuple(sorted(set(calendar))) != calendar:
+        raise ValueError("calendar must be sorted and unique")
+    labels: list[DailyLabelValue] = []
+    for anchor_index in range(max(0, len(calendar) - horizon_sessions)):
+        anchor = calendar[anchor_index]
+        entry = calendar[anchor_index + 1]
+        exit_session = calendar[anchor_index + horizon_sessions]
+        if segment_end is not None and exit_session > segment_end:
+            labels.append(
+                DailyLabelValue(
+                    instrument_id=instrument_id,
+                    anchor_session_date=anchor,
+                    entry_session_date=entry,
+                    exit_session_date=exit_session,
+                    raw_return=None,
+                    benchmark_return=None,
+                    label_value=None,
+                    quality_status="PURGED_BOUNDARY",
+                )
+            )
+            continue
+        stock_entry = stock_prices.get(entry)
+        stock_exit = stock_prices.get(exit_session)
+        if not _valid_price(stock_entry) or not _valid_price(stock_exit):
+            raw_return = benchmark_return = label_value = None
+            quality_status = "MISSING_STOCK_PRICE"
+        else:
+            assert stock_entry is not None
+            assert stock_exit is not None
+            raw_return = stock_exit.close / stock_entry.open - 1
+            benchmark_return = None
+            if benchmark_prices is not None:
+                benchmark_entry = benchmark_prices.get(entry)
+                benchmark_exit = benchmark_prices.get(exit_session)
+                if _valid_price(benchmark_entry) and _valid_price(benchmark_exit):
+                    assert benchmark_entry is not None
+                    assert benchmark_exit is not None
+                    benchmark_return = (
+                        benchmark_exit.close / benchmark_entry.open - 1
+                    )
+            label_value = raw_return
+            quality_status = "OK"
+        labels.append(
+            DailyLabelValue(
+                instrument_id=instrument_id,
+                anchor_session_date=anchor,
+                entry_session_date=entry,
+                exit_session_date=exit_session,
+                raw_return=raw_return,
+                benchmark_return=benchmark_return,
+                label_value=label_value,
+                quality_status=quality_status,
+            )
+        )
+    return tuple(labels)

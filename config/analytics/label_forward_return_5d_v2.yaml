@@ -1,0 +1,15 @@
+name: forward-return-next-open-5d-close
+version: "2"
+horizon_sessions: 5
+entry_rule: NEXT_SESSION_ADJUSTED_OPEN
+exit_rule: ANCHOR_PLUS_5_SESSION_ADJUSTED_CLOSE
+training_label: RAW_STOCK_RETURN
+benchmark:
+  code: SPY
+  required: false
+  usage: OPTIONAL_EVALUATION_ONLY
+label_transform: NONE
+corporate_action_policy: SPLIT_ONLY
+boundary_policy:
+  purge: LABEL_EXIT_MUST_REMAIN_IN_SEGMENT
+  embargo_sessions: null

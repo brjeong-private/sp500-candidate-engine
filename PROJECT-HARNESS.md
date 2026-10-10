@@ -113,16 +113,16 @@
 - 편입 전 이력이 합법적으로 확보되어 있으면 warm-up 계산에 사용하되, 편입 전 날짜에는 후보 자격을 부여하지 않는다.
 - warm-up 길이는 고정 60일이 아니라 활성 feature definition의 최대 lookback으로 계산한다.
 - 초기 Qlib 모델은 Alpha158 단독으로 검증한다. 추가 특징은 별도 feature definition/version으로 관리한다.
-- 학습용 label 변환과 평가용 raw label을 분리하여 저장한다.
-- label normalization을 적용한 모델 score를 확률, confidence 또는 예상 수익률로 표현하지 않는다.
-- SPY 초과수익을 횡단면 표준화하면 같은 날짜의 공통 benchmark 차감 효과가 사라질 수 있음을 평가 문서에 명시한다.
+- 기본 label은 `D+5 adjusted close / D+1 adjusted open - 1`의 개별 종목 raw 5거래일 수익률이다.
+- SPY는 optional 비교 series이며 label 생성·학습·선정의 필수 입력이 아니다.
+- label normalization·횡단면 표준화·rank 변환을 적용하지 않는다. 다른 변환을 실험하면 추론값을 원래 수익률 단위로 복원하고 별도 version으로 기록한다.
 
 ## 6. 모델 점수 하네스
 
-- score는 모델이 정의한 ranking signal이며 기본적으로 확률이나 신뢰도가 아니다.
+- v2 score는 `PREDICTED_5D_RETURN` 회귀값이며 상승 확률이나 신뢰도가 아니다.
 - 모델별 raw score, rank, percentile, model version, processor version, feature run을 함께 저장한다.
 - 모델 버전 간 raw score 차이를 직접 비교하지 않는다. 필요하면 rank percentile 변화나 별도 calibration을 사용한다.
-- calibration 없이 `confidence`, `probability`, `expected_return`이라는 이름을 사용하지 않는다.
+- calibration 없이 `confidence`나 `probability`라는 이름을 사용하지 않는다.
 - 동일 scoring run 안에서 rank는 유일하고 결정적이어야 한다.
 - 동점 정렬 기준은 설정에 고정한다. 기본값은 `score DESC, instrument_id ASC`다.
 
@@ -169,7 +169,8 @@
 ### 8.1 모델·후보 평가
 
 - 일별 IC, Rank IC, coverage, score dispersion을 기록한다.
-- 최종 선정 후보의 horizon별 raw return, benchmark excess return, 양의 초과수익 비율을 평가한다.
+- 최종 선정 후보의 Top-5/10 raw return, 양의 raw return 비율, 비용 차감 return과 중첩 cohort drawdown을 주요 지표로 평가한다.
+- benchmark excess return은 optional 비교 지표로만 유지한다.
 - 후보 정책 비교는 같은 날짜, universe, cutoff, label, 거래비용 가정으로 수행한다.
 - reconstruction 결과와 operational replay 결과를 합쳐 하나의 실운영 성과로 표현하지 않는다.
 
@@ -204,7 +205,7 @@ Qlib `TopkDropoutStrategy` 결과를 본 프로젝트의 일일 후보 정책과
 - split 전후 가격·거래량 연속성과 factor lineage
 - 거래일·결측·instrument span
 - processor train-only fit과 feature dimension
-- label entry/exit session, purge, benchmark alignment
+- label entry/exit session, purge, benchmark optionality
 - scoring rank·percentile 결정성
 - 후보 5~10개, hard/soft constraint, `SHORTFALL`, transaction rollback
 - 재실행 idempotency와 artifact hash

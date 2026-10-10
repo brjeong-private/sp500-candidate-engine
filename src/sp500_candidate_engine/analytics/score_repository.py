@@ -21,6 +21,7 @@ class ScoreRepository:
         model_version_id: uuid.UUID,
         universe_version_id: uuid.UUID,
         config_hash: str,
+        score_semantics: str = "PREDICTED_5D_RETURN",
     ) -> uuid.UUID:
         key = _canonical_hash(
             {
@@ -39,8 +40,9 @@ class ScoreRepository:
                 scoring_run_id, session_date, execution_context_id,
                 export_run_id, model_version_id, universe_version_id,
                 config_hash, status, idempotency_key
+                , score_semantics
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'RUNNING', %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'RUNNING', %s, %s)
             ON CONFLICT (idempotency_key) DO NOTHING
             """,
             (
@@ -52,6 +54,7 @@ class ScoreRepository:
                 universe_version_id,
                 config_hash,
                 key,
+                score_semantics,
             ),
         )
         return run_id
@@ -68,9 +71,10 @@ class ScoreRepository:
             """
             INSERT INTO analytics.daily_score(
                 scoring_run_id, instrument_id, score, rank_overall,
-                score_percentile, rank_sector, prediction_horizon, quality_status
+                score_percentile, rank_sector, prediction_horizon, quality_status,
+                predicted_return
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (scoring_run_id, instrument_id) DO NOTHING
             """,
             [
@@ -83,6 +87,7 @@ class ScoreRepository:
                     score.rank_sector,
                     prediction_horizon,
                     score.quality_status,
+                    score.score,
                 )
                 for score in scores
             ],
