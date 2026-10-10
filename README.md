@@ -23,7 +23,7 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 | SEC instrument states | 503개 |
 | Production source snapshots | 7개 |
 | ACTIVE production 품질 이슈 | 0개 |
-| Qlib historical export | 252 sessions, 126,736 rows |
+| Qlib historical export | 500 sessions, 251,471 rows |
 | Alpha158 | 158 features |
 | 일일 score | 503개 |
 | 후보 | 10개, SHADOW model |
@@ -35,9 +35,9 @@ Production identifiers:
 ingestion_run_id     8496d161-8f00-4ff5-ad3f-e1ae9cd92b20
 input_manifest_id    5cefeecc-2651-5e15-a89e-3d68302ce217
 execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
-latest_export_run_id de126b50-f254-5235-8c4f-f97a70ba0017
-latest_scoring_run_id d3aa7fc9-db71-5875-aa67-7cd99771197e
-latest_selection_run_id 1e5c0aa7-f8e0-57ae-88aa-1417a573d0c1
+latest_export_run_id b47ef1cc-fd0b-5c75-a0c4-e38e89c0a889
+latest_scoring_run_id fa74d683-2c11-521b-a791-5e6496920834
+latest_selection_run_id b87800b5-8cd3-5634-91bb-b91b74a47690
 ```
 
 ## 데이터 원천
@@ -358,7 +358,7 @@ Historical Qlib export와 Alpha158 검증:
 
 ```powershell
 .\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env export-qlib --start 2025-10-09 --end 2026-10-09
+  --env-file .env export-qlib --start 2024-10-11 --end 2026-10-09
 
 .\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
   --env-file .env build-features `
@@ -477,17 +477,17 @@ Process 로그의 날짜별 줄:
 
 ## Backfill 실행 결과
 
-2026-10-10에 로컬 backfill과 manual retry를 통해 `2025-10-09`~`2026-10-08` 251거래일을 적재했고, 2026-10-11에 2026-10-09 production session을 추가했습니다. 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했습니다.
+2026-10-11까지 `2024-10-11`~`2026-10-09` 500거래일을 적재했습니다. 추가 1년 backfill은 248/248 sessions 성공, 실패·재처리 0건이며 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했습니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 기간 | `2025-10-09`~`2026-10-09` |
-| XNYS 거래일 | 252 |
-| Qlib export rows | 126,736 |
+| 기간 | `2024-10-11`~`2026-10-09` |
+| XNYS 거래일 | 500 |
+| Qlib export rows | 251,471 |
 | 날짜별 universe 기준 예상 bars | 126,237 |
 | 평균 일별 coverage | 99.9968% |
 | VWAP·조정 상태 반영 | 125,730/126,233 |
-| SPY `PRICE_RETURN` benchmark | 252/252 |
+| SPY `PRICE_RETURN` benchmark | 500/500 |
 | Corporate actions | 1,537 |
 | News events | 31,252 |
 | SEC filings | 8,452 |

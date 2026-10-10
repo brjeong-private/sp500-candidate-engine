@@ -30,7 +30,7 @@
 | 기업·증권 마스터 | 부분 수집 | issuer 500, instrument 503, ticker identifier 503 | 거래소, 상장 상태, FIGI, ticker 변경 이력, 복수 시점 state 없음 |
 | S&P 500 구성 | 부분 수집 | Wikipedia revision `1376729338` 기반 version 1개, member 503 | S&P DJI 공식·라이선스 구성 이력, 편입/편출 history, weight 없음 |
 | 업종 | 부분 수집 | Wikipedia의 현재 GICS sector·sub-industry | industry group, industry code, 역사적 GICS revision 없음 |
-| 일봉 OHLCV | 수집 | 2025-10-09~2026-10-09, 252 sessions, Qlib export 126,736행 | 3~5년 bootstrap 없음; Massive Basic은 과거 2년 |
+| 일봉 OHLCV | 수집 | 2024-10-11~2026-10-09, 500 sessions, Qlib export 251,471행 | 3~5년 bootstrap 없음; Massive Basic은 과거 2년 |
 | adjusted close | 수집 | Yahoo adjusted close를 별도 컬럼에 저장 | 공식 corporate action lineage로 재계산한 값 아님 |
 | 분할·배당 | 수집 시작 | Massive corporate-action revision 99 | 무료 플랜 과거 범위 제한, 장기 backfill 미완료 |
 | 거래 달력 | 부분 구현 | Qlib XNYS calendar 252 sessions | 공식 NYSE/Nasdaq snapshot collector 없음 |

@@ -1,5 +1,6 @@
 import pandas as pd
 
+from sp500_candidate_engine.analytics.phase45_workflow import Phase45Summary
 from sp500_candidate_engine.analytics.training import FrameDataset
 
 
@@ -27,3 +28,8 @@ def test_frame_dataset_exposes_qlib_feature_label_shape() -> None:
 
     assert list(prepared["feature"].columns) == ["F1", "F2"]
     assert list(prepared["label"].columns) == ["LABEL0"]
+
+
+def test_phase45_summary_identifies_shadow_model_semantics() -> None:
+    assert "selected_shadow_model" in Phase45Summary.__dataclass_fields__
+    assert "promotion_gate_passed" in Phase45Summary.__dataclass_fields__

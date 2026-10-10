@@ -10,6 +10,10 @@
 
 ## 2026-10-11
 
+- 2026-10-11 | Backfill | Massive Basic 허용 범위 내 추가 1년 248 sessions를 실패·재처리 없이 적재해 전체 500 sessions를 확보했다.
+- 2026-10-11 | Data Quality | 2년 범위 미래 데이터 위반 0, semantic duplicate 0, SPY 500/500, blocking issue 0을 검증했다.
+- 2026-10-11 | Model Retraining | 2년 Qlib export 251,471행으로 Model v2를 재학습하고 LightGBM SHADOW 후보 10개를 갱신했다.
+- 2026-10-11 | Fix | Momentum·Ridge는 평가 baseline으로만 유지하고 `PREDICTED_5D_RETURN` 후보 scoring은 Qlib LightGBM artifact로 고정했다.
 - 2026-10-11 | Architecture | 전처리·Alpha158·raw-return label·walk-forward·평가·scoring·selection 계약과 다이어그램을 모델 아키텍처 문서 및 README에 추가했다.
 - 2026-10-11 | Model v2 | 학습 label을 SPY 초과수익에서 개별 종목 D+1 조정 시가~D+5 조정 종가 raw 수익률로 변경하고 v1 artifact를 보존했다.
 - 2026-10-11 | Evaluation | Top-5/10 raw·cost-adjusted return, 양의 수익률 비율과 5개 중첩 cohort max drawdown metric을 추가했다.

@@ -259,4 +259,3 @@ soft_constraints_relaxed
 - `MODEL_CHANGELOG.md`
 
 Notebook은 공용 Python service를 호출하는 얇은 실행 계층이며 동일 export/config hash에서 동일 model·scoring·selection identity를 생성한다.
-

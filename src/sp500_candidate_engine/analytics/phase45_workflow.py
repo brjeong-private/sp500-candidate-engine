@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from sp500_candidate_engine.analytics.baselines import (
@@ -515,14 +514,9 @@ def run_phase45_workflow(
         )
         metrics[str(model_name)] = asdict(metric)
 
-    selected_shadow_model = max(
-        metrics,
-        key=lambda name: (
-            float(metrics[name]["rank_ic_mean"])
-            if np.isfinite(float(metrics[name]["rank_ic_mean"]))
-            else float("-inf")
-        ),
-    )
+    selected_shadow_model = "lightgbm"
+    if selected_shadow_model not in metrics:
+        raise RuntimeError("LightGBM metrics are required for candidate scoring")
     all_index = data.labels.index[
         data.labels["label"].notna() & data.features.notna().any(axis=1)
     ]
