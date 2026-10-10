@@ -10,6 +10,7 @@
 
 ## 2026-10-11
 
+- 2026-10-11 | Architecture | 전처리·Alpha158·raw-return label·walk-forward·평가·scoring·selection 계약과 다이어그램을 모델 아키텍처 문서 및 README에 추가했다.
 - 2026-10-11 | Model v2 | 학습 label을 SPY 초과수익에서 개별 종목 D+1 조정 시가~D+5 조정 종가 raw 수익률로 변경하고 v1 artifact를 보존했다.
 - 2026-10-11 | Evaluation | Top-5/10 raw·cost-adjusted return, 양의 수익률 비율과 5개 중첩 cohort max drawdown metric을 추가했다.
 - 2026-10-11 | Selection | Score를 `PREDICTED_5D_RETURN`으로 저장하고 음수 예측 후보 허용 및 `NON_POSITIVE_PREDICTION` reason을 추가했다.

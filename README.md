@@ -104,6 +104,7 @@ flowchart LR
 - [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
 - [일 1회 수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)
 - [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)
+- [모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md)
 - [프로젝트 공통 하네스](PROJECT-HARNESS.md)
 
 ## 일일 파이프라인
@@ -156,6 +157,37 @@ flowchart TD
 기간 backfill은 9단계에서 종료하며 후보를 자동 생성하지 않습니다.
 
 Massive grouped daily endpoint를 우선 사용합니다. 사용할 수 없으면 ticker별 503회 fallback이며 최소 약 101분이 걸립니다.
+
+## 모델 설계
+
+```mermaid
+flowchart LR
+    Context["Manifest and Cutoff"] --> Adjust["Split Adjusted OHLCV"]
+    Adjust --> Qlib["Qlib Binary Export"]
+    Qlib --> Features["Alpha158 RAW<br/>158 Features"]
+    Adjust --> Label["Raw 5D Return<br/>D plus 1 Open to D plus 5 Close"]
+    Features --> Split["Purged Walk Forward"]
+    Label --> Split
+    Split --> Models["Momentum Ridge LightGBM"]
+    Models --> Eval["IC Rank IC<br/>Top 5 and 10<br/>Cost Drawdown"]
+    Eval --> Registry["Model Registry<br/>SHADOW or CHAMPION"]
+    Registry --> Score["Predicted 5D Return<br/>Rank Percentile"]
+    Score --> Select["Hard Gates<br/>Issuer and Sector Limits"]
+    Select --> Candidates["Five to Ten Candidates"]
+```
+
+핵심 계약:
+
+- 특징: Qlib Alpha158 RAW 158차원, 최대 lookback 60 sessions
+- Label v2: `D+5 adjusted close / D+1 adjusted open - 1`
+- SPY: optional 평가 series, label 생성과 선정의 필수 입력이 아님
+- 학습: expanding train, validation/test 시간 분할, label-exit purge
+- 모델: Momentum·Ridge baseline과 Qlib LightGBM
+- 평가: IC·Rank IC, Top-5/10 raw·net return, 양의 비율, 5개 중첩 cohort MDD
+- Score: `PREDICTED_5D_RETURN`; 확률이나 confidence가 아님
+- 후보: 양수 threshold 없이 전체 적격 universe를 순회하고 issuer·sector 제약 적용
+
+상세 설계는 [후보 선정 모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md), 모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)를 참고하세요.
 
 ## Point-in-Time 원칙
 
