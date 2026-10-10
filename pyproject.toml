@@ -17,9 +17,27 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+analytics = [
+  "joblib>=1.4,<2",
+  "lightgbm>=4,<5",
+  "numpy>=1.26,<3",
+  "pandas>=2.0,<4",
+  "pyarrow>=18,<24",
+  "pyqlib>=0.9.7,<1; python_version < '3.13'",
+  "pyyaml>=6,<7",
+  "scikit-learn>=1.5,<2",
+]
+notebook = [
+  "ipykernel>=6,<8",
+  "jupyterlab>=4,<5",
+  "matplotlib>=3.8,<4",
+  "nbclient>=0.10,<1",
+  "nbformat>=5.10,<6",
+]
 dev = [
   "paramiko>=4,<5",
   "pytest>=8,<10",
+  "pyyaml>=6,<7",
   "ruff>=0.8,<1",
 ]
 

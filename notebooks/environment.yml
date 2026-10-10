@@ -1,0 +1,8 @@
+name: sp500-alpha158
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.9
+  - pip
+  - pip:
+      - -e ..[analytics,notebook,dev]

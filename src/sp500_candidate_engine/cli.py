@@ -5,6 +5,8 @@ import asyncio
 import json
 import uuid
 from datetime import date, timedelta
+from importlib.metadata import version
+from pathlib import Path
 
 from sp500_candidate_engine.backfill import build_backfill_plan
 from sp500_candidate_engine.batch_pipeline import (
@@ -88,6 +90,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run one production date with process tracking and a per-run log",
     )
     run_daily.add_argument("--date", type=_date, required=True)
+    run_daily.add_argument(
+        "--with-candidates",
+        action="store_true",
+        help="After successful daily collection, score and select this explicit date",
+    )
+
+    export_qlib = commands.add_parser(
+        "export-qlib",
+        help="Create a manifest-constrained Qlib export for an explicit date range",
+    )
+    export_qlib.add_argument("--start", type=_date, required=True)
+    export_qlib.add_argument("--end", type=_date, required=True)
+
+    build_features = commands.add_parser(
+        "build-features",
+        help="Validate Alpha158 for an existing Qlib export",
+    )
+    build_features.add_argument("--export-run-id", type=uuid.UUID, required=True)
+
+    for command_name in ("train-model", "score-date", "select-date", "run-candidates"):
+        candidate_command = commands.add_parser(
+            command_name,
+            help="Run the idempotent model, scoring, and selection workflow for a date",
+        )
+        candidate_command.add_argument("--date", type=_date, required=True)
 
     run_backfill = commands.add_parser(
         "run-backfill",
@@ -196,8 +223,63 @@ def main() -> None:
         return
 
     if args.command == "run-daily":
-        result = asyncio.run(run_daily_process(settings, target_date=args.date))
+        result = asyncio.run(
+            run_daily_process(
+                settings,
+                target_date=args.date,
+                run_candidates=args.with_candidates,
+            )
+        )
         print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return
+
+    if args.command == "export-qlib":
+        from sp500_candidate_engine.analytics.historical_export import (
+            HistoricalQlibExportService,
+        )
+
+        summary = HistoricalQlibExportService(database).export(
+            start_date=args.start,
+            end_date=args.end,
+            output_root=Path("data/output/qlib"),
+            qlib_version=version("pyqlib"),
+        )
+        print(json.dumps(summary.__dict__, indent=2, sort_keys=True, default=str))
+        return
+
+    if args.command == "build-features":
+        from sp500_candidate_engine.analytics.features import Alpha158FeatureService
+
+        export_dir = Path("data/output/qlib") / str(args.export_run_id)
+        manifest = json.loads((export_dir / "manifest.json").read_text(encoding="utf-8"))
+        result = Alpha158FeatureService().compute_raw(
+            provider_uri=export_dir / "qlib_data",
+            instruments="all",
+            start_date=_date(manifest["calendar_start"]),
+            end_date=_date(manifest["calendar_end"]),
+        )
+        print(
+            json.dumps(
+                {
+                    "export_run_id": str(args.export_run_id),
+                    "rows": len(result.frame),
+                    "features": result.expected_dimension,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+
+    if args.command in {"train-model", "score-date", "select-date", "run-candidates"}:
+        from sp500_candidate_engine.candidate_pipeline import run_candidate_date
+
+        summary = run_candidate_date(
+            settings,
+            target_date=args.date,
+            repository_root=Path(__file__).parents[2],
+        )
+        print(json.dumps(summary.__dict__, indent=2, sort_keys=True, default=str))
         return
 
     if args.command == "run-backfill":

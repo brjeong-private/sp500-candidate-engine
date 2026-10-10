@@ -4,12 +4,23 @@
 /backfill-execution-result.tmp.md
 /historical-data-sample-review.tmp.md
 /develop-plan.md
+/candidate-analysis-plan.md
+/plan_feedback.md
+/model_update_plan.md
+/batch-report.yaml
+/checkpoints/
+/*-plan.md
+/*_plan.md
+/*.tmp.md
+/candidate-*.md
+/sample-candidate-*.md
 /.azure/*.tmp
 /.azure/*.tmp.json
 
 # Local environment and Python artifacts
 /.env
 /.venv/
+/.venv-alpha158/
 /.pytest_cache/
 /.ruff_cache/
 **/__pycache__/
@@ -18,8 +29,9 @@
 # Collected raw payloads and local output
 /data/raw/
 /data/output/
-/logs/*.log
-/logs/**/*.log
-/logs/processes/
-!/logs/.gitkeep
+/files/
+/phase-result/
+/notebooks/.ipynb_checkpoints/
+/notebooks/output/
+/logs/
 /infra/

@@ -1,0 +1,16 @@
+name: alpha158
+version: "1"
+expected_dimension: 158
+lookback_sessions: 60
+handler:
+  class: Alpha158
+  module_path: qlib.contrib.data.handler
+  infer_processors: []
+  learn_processors:
+    - class: DropnaLabel
+    - class: CSZScoreNorm
+      kwargs:
+        fields_group: label
+raw_feature_run:
+  infer_processors: []
+  learn_processors: []

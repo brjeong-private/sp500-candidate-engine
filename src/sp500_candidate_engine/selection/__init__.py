@@ -1,0 +1,1 @@
+"""Daily quantitative candidate selection."""

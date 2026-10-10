@@ -1,10 +1,10 @@
 # 데이터 아키텍처 및 PostgreSQL 수집 설계
 
-이 문서는 S&P 500 전체 가격을 매일 적재하고 우선 감시 종목에서 5~10개 후보를 선정한 뒤 TradingAgents 분석·리포트·재평가까지 추적하기 위한 목표 데이터 모델이다. 현재 저장소에는 구현 코드나 기존 데이터 접근 계층이 없으므로 아래 내용은 PostgreSQL 16 이상을 기준으로 한 설계안이며, ORM과 마이그레이션 도구는 구현 시 확정한다.
+이 문서는 S&P 500 전체 가격을 매일 적재하고 전처리·모델 점수를 거쳐 5~10개 후보를 선정·저장하기 위한 목표 데이터 모델이다. 현재 저장소에는 구현 코드나 기존 데이터 접근 계층이 없으므로 아래 내용은 PostgreSQL 16 이상을 기준으로 한 설계안이며, ORM과 마이그레이션 도구는 구현 시 확정한다.
 
 > 설계 상태: 문서 검토 반영본이다. 실제 DDL·조회 하네스·수집기 검증 전에는 아래 기능을 구현 완료 또는 분석 적합으로 간주하지 않는다.
 
-후보 선정 엔진의 쓰기 책임은 `selection` 스키마까지다. `analysis` 스키마는 별도 TradingAgents 실행기가 기록하는 통합 경계이며, 후보 선정 코드가 TradingAgents를 직접 호출해야 한다는 의미는 아니다.
+후보 선정 엔진의 쓰기 책임은 `selection` 스키마까지다. 후보 이후 분석·agent 실행·report·비용·재평가는 별도 프로젝트의 책임이며 이 데이터 모델에 포함하지 않는다. 공통 불변식은 루트 `PROJECT-HARNESS.md`를 따른다.
 
 ### 설계 검토 반영 요약
 
@@ -13,15 +13,15 @@
 | 특징·점수 재계산 키 충돌 | `feature_run`·`scoring_run`과 `(run_id, instrument_id)` 결과 키로 변경 |
 | snapshot과 실제 조회 불일치 | `input_manifest` membership을 모든 조회의 필수 범위로 지정하고 FULL/DELTA lineage 정의 |
 | 시점 정의 부족 | 유효 시점, 원천 공개 시점, 시스템 관찰 시점과 두 재현 mode를 분리 |
-| TradingAgents 이력 누락 | trial, config/prompt, analysis attempt, step, report, usage, 성공 기반 재평가 상태 추가 |
-| 후보·사유 고유키 충돌 | scoring run·trial 기반 idempotency와 event revision 기반 reason fingerprint 추가 |
+| 프로젝트 경계 불명확 | 수집·전처리·모델 점수·후보 선정까지만 포함하고 이후 분석 schema 제거 |
+| 후보·사유 고유키 충돌 | scoring run·정책 기반 idempotency와 event revision 기반 reason fingerprint 추가 |
 | SEC 정규화 과대 판정 | 계약 미확정으로 변경하고 MVP concept·기간·수정 규칙 초안 추가 |
 | Qlib 전처리·라벨 누락 | RAW/PROCESSED run, processor artifact, label run, split·경계·결측 정책 추가 |
 | 유료 데이터·용량 과대 선행 | MVP 운영, 연구, 이벤트 고도화를 분리하고 run 배수 기반 용량식으로 변경 |
 
 ## 현재 구현 및 적재 상태
 
-기준 시각은 2026-10-09이며, 아래는 목표 설계가 아니라 Azure PostgreSQL과 코드에서 확인한 실제 상태다.
+기준 시각은 2026-10-11이며, 아래는 목표 설계가 아니라 Azure PostgreSQL과 코드에서 확인한 실제 상태다.
 
 ### 실제 데이터 보유 현황
 
@@ -30,22 +30,21 @@
 | 기업·증권 마스터 | 부분 수집 | issuer 500, instrument 503, ticker identifier 503 | 거래소, 상장 상태, FIGI, ticker 변경 이력, 복수 시점 state 없음 |
 | S&P 500 구성 | 부분 수집 | Wikipedia revision `1376729338` 기반 version 1개, member 503 | S&P DJI 공식·라이선스 구성 이력, 편입/편출 history, weight 없음 |
 | 업종 | 부분 수집 | Wikipedia의 현재 GICS sector·sub-industry | industry group, industry code, 역사적 GICS revision 없음 |
-| 일봉 OHLCV | 수집 시작 | Yahoo 2026-10-01 prototype 502, Massive 2026-10-08 production 503 | 3~5년 bootstrap 없음; Massive Basic은 과거 2년 |
+| 일봉 OHLCV | 수집 | 2025-10-09~2026-10-09, 252 sessions, Qlib export 126,736행 | 3~5년 bootstrap 없음; Massive Basic은 과거 2년 |
 | adjusted close | 수집 | Yahoo adjusted close를 별도 컬럼에 저장 | 공식 corporate action lineage로 재계산한 값 아님 |
 | 분할·배당 | 수집 시작 | Massive corporate-action revision 99 | 무료 플랜 과거 범위 제한, 장기 backfill 미완료 |
-| 거래 달력 | 미수집 | 0 | 공식 NYSE/Nasdaq session·조기 폐장 테이블 없음 |
+| 거래 달력 | 부분 구현 | Qlib XNYS calendar 252 sessions | 공식 NYSE/Nasdaq snapshot collector 없음 |
 | SEC 공시 | 수집 | bulk submissions parser와 filing observation 적재 | 1년 backfill 기준 filing 8,452건 |
-| SEC 재무 fact | 미수집 | 0 | Company Facts/XBRL parser와 concept allowlist 미구현 |
+| SEC 재무 fact | 수집 | allowlist fact 50,582건 | custom taxonomy와 원문 XBRL 확장 필요 |
 | 실적 일정 | 수집 시작 | Alpha Vantage earnings 467 events | 오늘 이후 snapshot 축적만 가능, 과거 revision 없음 |
-| 뉴스·거래정지 | 부분 수집 | Massive news 291 events | Nasdaq halt 미구현, 뉴스 무료 과거 범위 제한 |
-| 특징·라벨·점수 | 미수집 | 0 | Qlib handler, feature/label/scoring run 미구현 |
-| 후보 선정 | 미수집 | 0 | selection schema와 5~10개 후보 batch 미구현 |
-| TradingAgents 분석·리포트 | 미수집 | 0 | analysis schema와 downstream 실행 미구현 |
+| 뉴스·거래정지 | 부분 수집 | Massive news 31,252 events | Nasdaq halt 미구현, 뉴스 무료 과거 범위 제한 |
+| 특징·라벨·점수 | 구현 | Alpha158 158차원, 3개 모델 walk-forward, 503개 일일 score | Rank IC 음수로 model은 SHADOW |
+| 후보 선정 | 구현 | 2026-10-09 후보 10개와 reason 저장 | 20-session live shadow 관찰 필요 |
 | 운영 provenance | 수집 | production run 1, source snapshot 7, manifest/context 생성 | checkpoint 테이블은 있으나 cursor 전진 로직 미연결 |
 | 품질 이슈 | 수집 | ACTIVE 2건, PSKY·WBD | 재실행 시 동일 이슈 중복 방지와 ACTIVE/RESOLVED 상태 구현 |
 | 실행 로그 | 수집 | `logs/2026-10-09.log` | 파일 로그이며 중앙 로그 수집은 미구현 |
 
-현재 데이터는 2026-10-09에 과거 자료를 받은 `HISTORICAL_RECONSTRUCTION`이다. 2026-10-01 당시 실제 관찰 데이터인 `OPERATIONAL_REPLAY`가 아니다.
+장기 데이터는 과거 자료를 현재 원천으로 재구성한 `HISTORICAL_RECONSTRUCTION`이며 당시 실제 관찰 입력인 `OPERATIONAL_REPLAY`가 아니다. 2026-10-09 production session은 별도 일일 수집으로 추가됐다.
 
 ### 실제 구현 스키마
 
@@ -56,9 +55,8 @@
 | `market` | `daily_bar`, `daily_bar_observation`, `benchmark_daily_bar`, `corporate_action`, `corporate_action_observation` | production price/action과 SPY benchmark 포함 |
 | `fundamental` | `sec_filing`, `sec_filing_observation`, `fact`, `fact_observation` | 1년 backfill 적재 완료, filing 8,452건·fact 50,582건 |
 | `event` | `market_event`, `event_revision`, `event_revision_observation`, `event_instrument` | Massive news와 Alpha earnings 적재 |
-| `analytics` | 없음 | 목표 설계만 존재 |
-| `selection` | 없음 | 목표 설계만 존재 |
-| `analysis` | 없음 | 목표 설계만 존재 |
+| `analytics` | Qlib export, feature·label, model, scoring tables | 구현·실제 run 적재 |
+| `selection` | selection run, candidate, candidate reason | 구현·2026-10-09 후보 10개 적재 |
 
 따라서 아래 Entity Model은 **목표 모델**이며 현재 DB에 모두 생성된 DDL로 읽으면 안 된다.
 
@@ -72,7 +70,7 @@
 
 운영 원칙:
 
-- PostgreSQL을 종목 마스터, 시점 이력, 일봉, 이벤트 메타데이터, 특징 실행, 점수 실행, 후보 결과, TradingAgents 실행 이력의 기준 저장소로 사용한다.
+- PostgreSQL을 종목 마스터, 시점 이력, 일봉, 이벤트 메타데이터, 특징 실행, 점수 실행과 후보 결과의 기준 저장소로 사용한다.
 - API 원문과 기사 본문을 매일 PostgreSQL JSONB로 복제하지 않는다. 재현에 필요한 원문은 라이선스가 허용할 때 압축 객체로 저장하고 `source_snapshot`에서 참조한다.
 - 500여 종목의 일봉은 TimescaleDB나 초기 파티셔닝이 필수일 정도의 규모가 아니다. 단순 테이블과 인덱스로 시작하고 실측 행 수·vacuum·쿼리 지연을 기준으로 네이티브 `RANGE` 파티셔닝을 도입한다.
 - 운영 SQL은 UTC `timestamptz`를 사용하고 거래일은 거래소 현지 달력의 `date`로 저장한다.
@@ -87,8 +85,7 @@
 | fundamentals | `fundamental.sec_filing`, `fundamental.fact` | accession 단위 트랜잭션 | SEC ETag 및 원문 해시 | 원문 XBRL과 정규화 fact를 분리 |
 | events | `event.market_event`, `event.event_revision`, `event.event_instrument` | 공급자 event ID 기반 멱등 적재 | HTTP 조건부 요청 | 뉴스 본문은 기본 저장하지 않음 |
 | analytics | `analytics.feature_definition_version`, `analytics.processor_version`, `analytics.feature_run`, `analytics.feature_value`, `analytics.label_definition_version`, `analytics.label_run`, `analytics.daily_label`, `analytics.model_version`, `analytics.scoring_run`, `analytics.daily_score` | 실행 단위 벌크 쓰기 | 실행 중 특징 프레임 캐시 | 입력·정의·processor·코드가 같을 때만 같은 실행으로 취급 |
-| selection | `selection.selection_run`, `selection.candidate`, `selection.candidate_reason` | 한 실행을 단일 트랜잭션으로 저장 | 캐시 불필요 | scoring run·정책·trial을 고정 |
-| analysis | `analysis.trial`, `analysis.agent_config_version`, `analysis.prompt_version`, `analysis.analysis_run`, `analysis.agent_step`, `analysis.report`, `analysis.llm_usage`, `analysis.reevaluation_state` | 분석 실행 단위 트랜잭션과 append 로그 | 캐시 불필요 | 후보 선정과 분석 성공을 구분 |
+| selection | `selection.selection_run`, `selection.candidate`, `selection.candidate_reason` | 한 실행을 단일 트랜잭션으로 저장 | 캐시 불필요 | scoring run·정책·selection type을 고정 |
 | operations | `ops.ingestion_run`, `ops.ingestion_checkpoint`, `ops.source_snapshot`, `ops.input_manifest`, `ops.input_manifest_member`, `ops.execution_context`, `ops.data_quality_issue`, `ops.process_run`, `ops.process_date_status` | append 중심 | 없음 | 데이터 묶음, 실행 설정, process 진행·재처리 상태를 분리 |
 
 ## 수집 출처
@@ -143,7 +140,6 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | 6 | dataset transaction과 checkpoint | dataset별 | commit 성공 후에만 checkpoint 전진 |
 | 7 | final manifest와 execution context | 실행당 각 1개 | core snapshot 집합과 optional 상태 고정 |
 | 8 | feature·score·candidate | 미구현 | 5~10개 후보 batch commit |
-| 9 | TradingAgents 분석·리포트·비용·재평가 상태 | 후보당 1개 이상 실행 | 성공/실패를 분리하고 성공 분석만 재평가 상태 갱신 |
 
 각 수집기는 `(source_id, dataset_code, partition_key)`별 `ingestion_checkpoint`를 성공한 트랜잭션 이후에만 전진시킨다. 실패한 실행은 checkpoint를 움직이지 않고 같은 구간을 멱등 재시도한다.
 
@@ -182,19 +178,11 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | `analytics` | `label_run` | `label_run_id`, `execution_context_id`, `universe_version_id`, `label_definition_version_id`, `code_version`, `status`, `idempotency_key` | PK `label_run_id`, UK `idempotency_key` | `(label_definition_version_id, label_run_id)` |
 | `analytics` | `daily_label` | `label_run_id`, `instrument_id`, `anchor_session_date`, `label_value`, `entry_session_date`, `exit_session_date`, `quality_status` | PK `(label_run_id, instrument_id, anchor_session_date)` | `(instrument_id, anchor_session_date)` |
 | `analytics` | `model_version` | `model_version_id`, `model_name`, `version`, `training_feature_run_id`, `processor_version_id`, `label_run_id`, `split_spec`, `artifact_uri`, `artifact_hash`, `metrics`, `created_at` | PK `model_version_id`, UK `(model_name, version)` | 소형 dimension |
-| `analytics` | `scoring_run` | `scoring_run_id`, `session_date`, `execution_context_id`, `feature_run_id`, `model_version_id`, `universe_version_id`, `trial_id`, `config_hash`, `status`, `idempotency_key`, `computed_at` | PK `scoring_run_id`, UK `idempotency_key` | `(session_date desc, model_version_id, universe_version_id)` |
-| `analytics` | `daily_score` | `scoring_run_id`, `instrument_id`, `score`, `rank_overall`, `rank_sector`, `prediction_horizon`, `quality_status` | PK `(scoring_run_id, instrument_id)` | `(scoring_run_id, rank_overall)`, `(instrument_id, scoring_run_id)` |
-| `selection` | `selection_run` | `selection_run_id`, `trade_date`, `scoring_run_id`, `policy_version`, `trial_id`, `requested_count`, `selected_count`, `status`, `shortfall_reason`, `idempotency_key`, `created_at` | PK `selection_run_id`, UK `idempotency_key` | `(trade_date desc)`, `status` |
-| `selection` | `candidate` | `selection_run_id`, `instrument_id`, `position`, `score`, `rank_overall`, `rank_sector`, `quality_status`, `latest_data_at` | PK `(selection_run_id, instrument_id)`, UK `(selection_run_id, position)` | `(instrument_id, selection_run_id)` |
+| `analytics` | `scoring_run` | `scoring_run_id`, `session_date`, `execution_context_id`, `feature_run_id`, `model_version_id`, `universe_version_id`, `config_hash`, `status`, `idempotency_key`, `computed_at` | PK `scoring_run_id`, UK `idempotency_key` | `(session_date desc, model_version_id, universe_version_id)` |
+| `analytics` | `daily_score` | `scoring_run_id`, `instrument_id`, `score`, `rank_overall`, `score_percentile`, `rank_sector`, `prediction_horizon`, `quality_status` | PK `(scoring_run_id, instrument_id)` | `(scoring_run_id, rank_overall)`, `(instrument_id, scoring_run_id)` |
+| `selection` | `selection_run` | `selection_run_id`, `selection_type`, `price_session_date`, `cutoff_at`, `generated_at`, `valid_until`, `scoring_run_id`, `policy_version`, `requested_count`, `selected_count`, `status`, `shortfall_reason`, `idempotency_key` | PK `selection_run_id`, UK `idempotency_key` | `(price_session_date desc)`, `status` |
+| `selection` | `candidate` | `selection_run_id`, `instrument_id`, `position`, `score`, `rank_overall`, `score_percentile`, `rank_sector`, `quality_status`, `latest_data_at` | PK `(selection_run_id, instrument_id)`, UK `(selection_run_id, position)` | `(instrument_id, selection_run_id)` |
 | `selection` | `candidate_reason` | `candidate_reason_id`, `selection_run_id`, `instrument_id`, `reason_code`, `priority`, `event_revision_id`, `reason_fingerprint`, `reason_detail` | PK `candidate_reason_id`, UK `(selection_run_id, instrument_id, reason_fingerprint)` | `(reason_code, selection_run_id)` |
-| `analysis` | `trial` | `trial_id`, `experiment_key`, `variant`, `agent_mode`, `memory_policy`, `budget_policy`, `created_at` | PK `trial_id`, UK `(experiment_key, variant)` | 소형 dimension |
-| `analysis` | `agent_config_version` | `agent_config_version_id`, `name`, `version`, `agent_graph_hash`, `tool_policy`, `created_at` | PK `agent_config_version_id`, UK `(name, version)` | 소형 dimension |
-| `analysis` | `prompt_version` | `prompt_version_id`, `name`, `version`, `content_uri`, `content_hash`, `created_at` | PK `prompt_version_id`, UK `(name, version)` | 소형 dimension |
-| `analysis` | `analysis_run` | `analysis_run_id`, `selection_run_id`, `instrument_id`, `execution_context_id`, `trial_id`, `agent_config_version_id`, `status`, `attempt_no`, `started_at`, `finished_at`, `error_code`, `idempotency_key` | PK `analysis_run_id`, UK `idempotency_key` | `(instrument_id, finished_at desc)`, `status` |
-| `analysis` | `agent_step` | `agent_step_id`, `analysis_run_id`, `agent_role`, `step_order`, `model_provider`, `model_deployment`, `prompt_version_id`, `status`, `started_at`, `finished_at` | PK `agent_step_id`, UK `(analysis_run_id, step_order)` | `(analysis_run_id, step_order)` |
-| `analysis` | `report` | `report_id`, `analysis_run_id`, `body_uri`, `body_hash`, `schema_version`, `structured_judgement`, `generated_at` | PK `report_id`, UK `analysis_run_id` | `(generated_at desc)` |
-| `analysis` | `llm_usage` | `usage_id`, `agent_step_id`, `input_tokens`, `output_tokens`, `cached_tokens`, `estimated_cost`, `currency`, `latency_ms`, `retry_no` | PK `usage_id` | `(agent_step_id, retry_no)` |
-| `analysis` | `reevaluation_state` | `instrument_id`, `last_success_analysis_run_id`, `next_due_session_date`, `reevaluation_reason`, `updated_at` | PK `instrument_id` | `(next_due_session_date)` |
 | `ops` | `ingestion_run` | `ingestion_run_id`, `source_id`, `dataset_code`, `started_at`, `finished_at`, `status`, `requested_count`, `received_count`, `inserted_count`, `updated_count`, `error_count` | PK `ingestion_run_id` | `(dataset_code, started_at desc)`, `status` |
 | `ops` | `ingestion_checkpoint` | `source_id`, `dataset_code`, `partition_key`, `cursor_value`, `last_source_at`, `last_success_at`, `updated_by_run_id` | PK `(source_id, dataset_code, partition_key)` | 소형 운영 상태 |
 | `ops` | `source_snapshot` | `source_snapshot_id`, `ingestion_run_id`, `source_id`, `dataset_code`, `snapshot_kind`, `parent_snapshot_id`, `coverage_start`, `coverage_end`, `sequence_no`, `as_of_at`, `fetched_at`, `source_available_at`, `availability_basis`, `storage_uri`, `content_hash`, `byte_size`, `license_class`, `is_reconstruction`, `retain_until`, `object_deleted_at` | PK `source_snapshot_id`, UK `(source_id, dataset_code, coverage_start, coverage_end, content_hash)` | 비파티션, `(dataset_code, as_of_at desc)` |
@@ -220,7 +208,7 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 - `knowledge_mode=HISTORICAL_RECONSTRUCTION`은 manifest에 명시된 reconstruction snapshot에서 `source_available_at <= cutoff_at`을 적용한다. `observed_at`은 cutoff 이후일 수 있으며 결과를 실운영 재현이라고 표시할 수 없다.
 - `feature_value.values_real`의 순서는 `feature_definition_version.feature_names`와 일치한다. 같은 행의 `value_count = array_length(values_real, 1)`은 CHECK로 검증하고, run의 `expected_dimension`과 일치는 적재 애플리케이션 및 deferred constraint trigger로 검증한다. 다른 테이블을 조회하는 일반 CHECK를 가정하지 않는다.
 - `reason_detail`과 `metadata`는 변경 가능성이 큰 부가 필드에만 JSONB를 사용한다. 검색·조인에 필요한 필드는 정규 컬럼으로 둔다.
-- `selection_run.idempotency_key`는 `trade_date`, `scoring_run_id`, `policy_version`, `trial_id`, 정책 설정 hash를 포함한다.
+- `selection_run.idempotency_key`는 `price_session_date`, `scoring_run_id`, `policy_version`, `selection_type`, 정책 설정 hash를 포함한다.
 - `candidate_reason.reason_fingerprint`는 `reason_code`, `event_revision_id`, source row key, 정책 버전을 포함한다. 동일 reason code의 복수 이벤트를 별도 행으로 저장한다.
 
 ### 원본 및 재현 보존 정책
@@ -276,13 +264,6 @@ erDiagram
     SelectionRun ||--o{ SelectionCandidate : "selects"
     SelectionCandidate ||--o{ CandidateReason : "explained by"
     EventRevision |o--o{ CandidateReason : "supports"
-    SelectionCandidate ||--o{ AnalysisRun : "analyzed by"
-    Trial ||--o{ AnalysisRun : "groups"
-    ExecutionContext ||--o{ AnalysisRun : "reproduces"
-    AnalysisRun ||--o{ AgentStep : "contains"
-    AgentStep ||--o{ LlmUsage : "incurs"
-    AnalysisRun ||--o| Report : "produces"
-    AnalysisRun |o--o{ ReevaluationState : "updates on success"
 
     SourceSnapshot {
         uuid sourceSnapshotId PK
@@ -455,7 +436,7 @@ erDiagram
     SelectionRun {
         uuid selectionRunId PK
         uuid scoringRunId FK
-        uuid trialId FK
+        string selectionType
         string policyVersion
         string idempotencyKey UK
     }
@@ -469,43 +450,6 @@ erDiagram
         uuid eventRevisionId FK
         string reasonCode
         string reasonFingerprint
-    }
-    Trial {
-        uuid trialId PK
-        string experimentKey
-        string agentMode
-        string memoryPolicy
-    }
-    AnalysisRun {
-        uuid analysisRunId PK
-        uuid executionContextId FK
-        uuid trialId FK
-        string status
-        int attemptNo
-    }
-    AgentStep {
-        uuid agentStepId PK
-        uuid analysisRunId FK
-        string agentRole
-        uuid promptVersionId FK
-    }
-    LlmUsage {
-        uuid usageId PK
-        uuid agentStepId FK
-        bigint inputTokens
-        bigint outputTokens
-        decimal estimatedCost
-    }
-    Report {
-        uuid reportId PK
-        uuid analysisRunId FK
-        string bodyUri
-        string bodyHash
-    }
-    ReevaluationState {
-        uuid instrumentId PK
-        uuid lastSuccessAnalysisRunId FK
-        date nextDueSessionDate
     }
 ```
 
@@ -525,9 +469,7 @@ erDiagram
 | analytics | `FeatureRepository` | `create_run(run_spec)`, `write_values(feature_run_id, rows)`, `load_training_matrix(...)` | 입력·정의·processor별 특징 실행 보존 |
 | analytics | `LabelRepository` | `create_run(label_spec)`, `write_labels(label_run_id, rows)` | 가격·기업행위 manifest와 경계 정책이 고정된 라벨 생성 |
 | analytics | `ScoreRepository` | `create_run(run_spec)`, `write_scores(scoring_run_id, rows)`, `top_ranked(scoring_run_id)` | 종목군별 순위를 scoring run에 귀속 |
-| selection | `SelectionRepository` | `create_run_with_candidates(run, candidates, reasons)`, `recent_successful_analyses(...)` | 후보 배치 저장; 최근 후보와 최근 성공 분석을 구분 |
-| analysis | `AnalysisRepository` | `start_attempt(candidate, trial, context)`, `finish_success(...)`, `finish_failure(...)` | 후보 선정과 분석 성공/실패를 분리 |
-| analysis | `ReevaluationRepository` | `advance_from_success(analysis_run_id, next_due, reason)` | 성공한 분석만 마지막 분석과 다음 재평가를 갱신 |
+| selection | `SelectionRepository` | `create_run_with_candidates(run, candidates, reasons)`, `get_result(selection_run_id)` | 후보 배치 저장과 외부 소비자 독립적인 결과 조회 |
 | operations | `QualityRepository` | `record_issues(run_id, issues)`, `blocking_issues(dataset, entity_keys)` | 품질 실패 종목의 격리 |
 | operations | `SnapshotRepository` | `create_manifest(source_snapshot_ids)`, `validate_lineage(input_manifest_id)`, `create_execution_context(...)` | 데이터 묶음과 cutoff·모드·코드·설정을 분리해 고정 |
 | operations | `CheckpointRepository` | `lock_for_update(source, dataset, partition)`, `advance_after_success(...)` | 증분 cursor의 동시 실행과 실패 시 유실 방지 |
@@ -542,7 +484,7 @@ erDiagram
 | 현재 universe와 식별자 | 프로세스 메모리 cache-aside | 새 `universe_version` 또는 identifier 변경 시 무효화 | 일일 실행 동안 불변 |
 | 공급자 응답 | ETag, Last-Modified, content hash | 공급자 정책에 따름 | 중복 다운로드와 동일 payload 적재 방지 |
 | 최근 60거래일 일봉 | 실행 단위 DataFrame 캐시 | 실행 종료 시 폐기 | 특징 계산 중 반복 SQL 방지 |
-| 영구 분석 결과 | 캐시가 아니라 run-keyed table | 새 execution context, feature/scoring run, 정책, trial이면 새 행 | 재현성과 감사 가능성 확보 |
+| 영구 분석 결과 | 캐시가 아니라 run-keyed table | 새 execution context, feature/scoring run 또는 정책이면 새 행 | 재현성과 감사 가능성 확보 |
 
 PostgreSQL의 shared buffers와 적절한 인덱스로 500종목 일봉 조회는 충분하다. Redis는 다수의 동시 API 소비자가 생기거나 동일 결과를 고빈도로 제공할 때만 추가한다.
 
@@ -578,7 +520,7 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 
 ## Qlib 특징·전처리·라벨 계약
 
-현재 판정은 **handler·processor·label 설정 미확정**이다. 구현 전에 실제 Qlib handler 설정을 고정한다.
+현재 판정은 **Alpha158·processor·5-session 초과수익 label 계약 구현 완료**다. 설정은 `config/analytics`의 versioned YAML과 config hash로 고정한다.
 
 - `feature_run.stage=RAW`는 조정 정책이 적용된 원시 Alpha158 계산 결과를 저장한다.
 - `processor_version.processor_kind=LEARN`은 학습 구간에서만 fit한 processor artifact를 저장한다. 검증·테스트·운영 추론은 같은 artifact를 사용한다.
@@ -597,7 +539,7 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 - 연간 **252 거래일**, 최초 **5년 bootstrap**, 이후 매일 증분 적재한다.
 - Alpha158 특징은 158개 `float4` 값을 한 배열에 저장한다.
 - 점수는 기준 모멘텀과 Qlib 두 모델을 매일 보관한다.
-- 기본 표는 거래일별 RAW feature run 1회, scoring run 2회를 가정한다. 가격 정정, 재계산, trial이 늘면 run 배수만큼 증가한다.
+- 기본 표는 거래일별 RAW feature run 1회, scoring run 2회를 가정한다. 가격 정정, 재계산, 실험이 늘면 run 배수만큼 증가한다.
 - 이벤트는 종목당 거래일 평균 3건의 메타데이터를 가정한다. 기사 본문과 SEC 원문은 제외한다.
 - 이벤트 용량은 최종 단계의 503종목 전체 감시를 가정한다. 우선 감시 100종목만 수집하는 단계는 약 20%다.
 - 아래 용량은 테이블과 일반 B-tree 인덱스를 포함한 계획치이며 WAL, 백업, 임시 작업 공간은 별도다.
@@ -614,10 +556,9 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 | `feature_value` | 503 × 252 × feature runs | 126,756 × Rf | 633,780 × Rf | Rf=1일 때 0.5~0.8 GB |
 | `daily_score` | 503 × 252 × scoring runs | 126,756 × Rs | 633,780 × Rs | Rs=2일 때 0.2~0.4 GB |
 | 후보와 사유 | 10 × 252, 사유 평균 2개 | 7,560 내외 | 37,800 내외 | 0.02 GB 미만 |
-| 분석·step·usage·report 메타데이터 | 10 candidates × 252 × attempts/steps | 정책 의존 | 정책 의존 | 본문 제외 수십~수백 MB |
 | 운영·품질·snapshot 메타데이터 | 실행 방식 의존 | 20,000~100,000 | 0.1~0.5 million | 0.2~0.8 GB |
 
-**5년 구조화 데이터 기준 가정:** Rf=1, Rs=2, event 가정이 맞을 때 약 **4~8 GB**다. 이는 예산 기준값이지 상한이 아니다. 정정·재계산·trial·TradingAgents step 보존에 따라 증가한다. PostgreSQL 운영 여유, WAL, PITR, 백업과 인덱스 재구성 공간을 포함한 초기 계획치는 **30~50 GB**로 두되, 최초 90일의 `pg_total_relation_size` 실측으로 재산정한다.
+**5년 구조화 데이터 기준 가정:** Rf=1, Rs=2, event 가정이 맞을 때 약 **4~8 GB**다. 이는 예산 기준값이지 상한이 아니다. 정정·재계산·실험 run 보존에 따라 증가한다. PostgreSQL 운영 여유, WAL, PITR, 백업과 인덱스 재구성 공간을 포함한 초기 계획치는 **30~50 GB**로 두되, 최초 90일의 `pg_total_relation_size` 실측으로 재산정한다.
 
 ### 범위를 바꿀 때의 계산식
 
@@ -653,16 +594,14 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 
 | 요구 단계 | 필요한 데이터 | 스키마 충족 여부 | 검토 결과와 보완 |
 |---|---|---|---|
-| 현재 종목군 기반 MVP 선정 | 현재 구성, 60일 가격·거래량, share-class 식별 | 설계 가능, 구현 미검증 | 사용 권리가 확인된 데이터로 시작 가능. 과거 생존편향 통제와 분리 |
+| 현재 종목군 기반 MVP 선정 | 현재 구성, 60일 가격·거래량, share-class 식별 | 구현·shadow 검증 | 과거 생존편향 통제와 분리 |
 | point-in-time 우선 감시 100개 | 당시 구성·GICS·식별자·상태의 이중 시점 | 계약 의존 | `instrument_state`, identifier/classification history와 source snapshot 필요 |
-| MVP 모멘텀 | 조정 전 OHLCV, corporate action, 거래 달력, 품질 상태 | 설계 가능, 구현 미검증 | manifest-constrained query와 조정 하네스 검증 필요 |
+| MVP 모멘텀 | 조정 전 OHLCV, corporate action, 거래 달력, 품질 상태 | 구현·검증 | manifest-constrained split-adjusted export 사용 |
 | Qlib Alpha158 | RAW/PROCESSED 특징, processor artifact, benchmark, label, split | 계약 미확정 | handler·processor·missingness·label 설정 확정 후 검증 |
-| 월간 재학습·일일 추론 | feature/label/model/scoring run, artifact, 종목군 순위 | 설계 보완 완료, 구현 미검증 | run key 충돌은 해소했으나 DDL·재계산 테스트 필요 |
+| 월간 재학습·일일 추론 | feature/label/model/scoring run, artifact, 종목군 순위 | 기본 구현 | 28일 challenger gate와 명시적 date scoring, live 운영 검증 필요 |
 | SEC 재무 | accession, 표준/custom concept, context, 기간, 수정공시 | 정규화 계약 미확정 | MVP allowlist 표본 coverage와 원본 XBRL 경계 확정 필요 |
 | 이벤트 후보 | SEC 공시, 일정 revision, 거래정지, 뉴스 메타데이터 | 공급자 범위 의존 | event revision과 snapshot provenance는 설계됨 |
-| 후보 배치 | scoring run, 정책, trial, 복수 이벤트 사유 | 설계 보완 완료, 구현 미검증 | idempotency canonicalization과 트랜잭션 테스트 필요 |
-| TradingAgents 분석·리포트 | candidate, context, config/prompt/model, step, 비용, report | 설계 보완 완료, 구현 미검증 | 실제 agent graph와 memory 정책 버전 연결 필요 |
-| 재평가 | 마지막 성공 분석, 다음 시점, 사유 | 설계 보완 완료, 구현 미검증 | 실패 run이 상태를 갱신하지 않는 테스트 필요 |
+| 후보 배치 | scoring run, 정책, selection type, 복수 이벤트 사유 | 구현·실제 적재 | 2026-10-09 10개 후보, model status SHADOW |
 | 실운영 재현 | 당시 실제 관찰한 snapshot과 코드·설정 | 원본 보존 정책 의존 | OPERATIONAL_REPLAY 조건과 raw 보존을 충족해야 함 |
 | 과거 재구성 연구 | 역사적 공개 시각과 reconstruction snapshot | 데이터 계약 의존 | 운영 재현과 별도 표기·평가 |
 | 운영 복구 | checkpoint, lineage, 원문 hash, 품질 문제, 재시도 | 설계 가능, 구현 미검증 | FULL/DELTA gap과 멱등 재시도 테스트 필요 |
@@ -694,19 +633,18 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 
 ### 최종 적합성 판정
 
-**구현 전 설계 보완 완료, 분석 적합성은 아직 미검증.** 실행 키 충돌, manifest 범위 조회, 이중 시점, 분석 성공 이력의 구조적 빈틈은 문서상 보완했다. 그러나 실제 적합 판정은 DDL 제약, manifest 조회 하네스, 정정 재계산, 실패 분석 재평가, SEC 표본 정규화, Qlib handler 실험이 통과한 뒤 내린다.
+**구현 전 설계 보완 완료, 분석 적합성은 아직 미검증.** 실행 키 충돌, manifest 범위 조회와 이중 시점의 구조적 빈틈은 문서상 보완했다. 그러나 실제 적합 판정은 DDL 제약, manifest 조회 하네스, 정정 재계산, SEC 표본 정규화와 Qlib handler 실험이 통과한 뒤 내린다.
 
 - **MVP 운영 선행 조건:** 현재 종목군, 사용 권리가 확인된 일봉·기업행위, 거래 달력, manifest 조회 및 cutoff 하네스.
 - **Qlib 선행 조건:** handler·processor·label 계약, feature/scoring run DDL, 정정 재계산 테스트.
 - **생존편향 통제 연구 선행 조건:** 역사적 S&P 구성·GICS와 과거 source availability.
 - **이벤트 고도화 선행 조건:** 필요한 범위의 일정·뉴스 revision과 저장 권리.
-- **TradingAgents 연구 선행 조건:** agent/prompt/model/memory policy 버전과 토큰·비용 측정 계약.
 
 현재 종목군 MVP 결과를 생존편향 없는 과거 성능 또는 당시 실운영 재현으로 표현하지 않는다.
 
 ## Data Ownership Boundaries
 
-모든 모듈은 하나의 PostgreSQL 인스턴스를 공유하되 `ref`, `market`, `fundamental`, `event`, `analytics`, `selection`, `analysis`, `ops` 스키마로 쓰기 권한을 분리한다. 각 수집기는 자신이 소유한 스키마와 `ops` 기록만 쓰며, analytics·selection·analysis는 원천 스키마를 읽기 전용으로 사용한다.
+모든 모듈은 하나의 PostgreSQL 인스턴스를 공유하되 `ref`, `market`, `fundamental`, `event`, `analytics`, `selection`, `ops` 스키마로 쓰기 권한을 분리한다. 각 수집기는 자신이 소유한 스키마와 `ops` 기록만 쓰며, analytics·selection은 원천 스키마를 읽기 전용으로 사용한다.
 
 교차 모듈 조회는 직접 테이블을 임의 조인하기보다 `execution_context_id`를 필수로 받는 repository 또는 SQL function을 통해 수행한다. current row만 반환하는 운영 편의 view는 재현·연구 조회에 사용할 수 없다. 후보 선정 쓰기는 단일 writer가 담당하며 분석 소비자는 `selection`과 승인된 context 조회 API만 사용한다.
 

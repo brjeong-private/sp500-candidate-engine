@@ -1,0 +1,19 @@
+name: daily-quantitative-selection
+version: "1"
+selection_type: QUANTITATIVE
+minimum_candidates: 5
+maximum_candidates: 10
+sector_cap: 2
+relaxed_sector_cap: 3
+tie_break:
+  - score_desc
+  - instrument_id_asc
+hard_gates:
+  - manifest_and_cutoff
+  - current_membership
+  - model_artifact_match
+  - finite_score
+  - no_blocking_quality_issue
+soft_constraints:
+  - issuer_deduplication
+  - sector_cap

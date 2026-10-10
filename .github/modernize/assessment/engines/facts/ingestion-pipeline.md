@@ -171,13 +171,14 @@ optional dataset 실패는 해당 signal을 비활성화하고 stale/failed 상�
 
 ### Phase 6: 후보 생성
 
-아직 미구현이다.
+구현 완료다. 다만 기간 backfill에서는 실행하지 않고, 사용자가 `--date`를 명시하거나 일일 수집에 `--with-candidates`를 지정한 경우에만 실행한다.
 
 1. raw/proccessed feature run
 2. label·processor·model version 고정
 3. universe-scoped scoring run
 4. quantitative·event·history 정책으로 5~10개 후보
-5. TradingAgents downstream 전달
+
+후보 저장이 이 프로젝트의 마지막 단계다. 후보 이후 분석·에이전트 실행은 별도 시스템의 책임이다.
 
 ## API 호출 예산
 
@@ -209,8 +210,8 @@ Massive의 네 endpoint를 동시에 호출하는 것처럼 보이더라도 실�
 | 뉴스 | 없음 | Massive metadata | forward 가능, 과거 범위·권리 제한 |
 | 거래 달력 | 없음 | 공식 일정 + library | 가능 |
 | 거래정지 | 없음 | Nasdaq halt snapshot | 일 1회 기준 가능 |
-| 특징·점수 | 없음 | 수집 후 Qlib | 미구현 |
-| 후보 5~10개 | 없음 | scoring 후 selection | 미구현 |
+| 특징·점수 | Alpha158·momentum·Ridge·LightGBM | 명시적 date의 Qlib export 후 | 구현, 현재 모델 SHADOW |
+| 후보 5~10개 | scoring run 기반 | 전체 적격 universe 순회 | 구현 |
 
 ## 실패·재시도·멱등성
 
@@ -351,7 +352,7 @@ run identifiers:
 - latest input manifest: `5cefeecc-2651-5e15-a89e-3d68302ce217`
 - latest execution context: `7f56908c-23bb-596c-926f-211d136207aa`
 
-SEC `submissions.zip`·`companyfacts.zip`은 historical backfill orchestrator에 연결됐다. 2025-10-09~2026-10-08 실행에서 filing 8,452건과 allowlist fact 50,582건을 적재했고, CIK와 accession의 복합 identity 및 날짜별 cutoff observation을 사용한다. 공식 calendar·halt collector와 Qlib·selection은 아직 미구현이다.
+SEC `submissions.zip`·`companyfacts.zip`은 historical backfill orchestrator에 연결됐다. 2025-10-09~2026-10-08 실행에서 filing 8,452건과 allowlist fact 50,582건을 적재했고, CIK와 accession의 복합 identity 및 날짜별 cutoff observation을 사용한다. Qlib·selection은 구현됐으며 공식 calendar·halt collector와 champion model 승격은 아직 남아 있다.
 
 ## 실행 명령
 

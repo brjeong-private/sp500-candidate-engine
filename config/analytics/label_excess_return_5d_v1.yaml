@@ -1,0 +1,11 @@
+name: excess-return-next-open-5d-close
+version: "1"
+horizon_sessions: 5
+entry_rule: NEXT_SESSION_ADJUSTED_OPEN
+exit_rule: ANCHOR_PLUS_5_SESSION_ADJUSTED_CLOSE
+benchmark: SPY
+evaluation_label: RAW_EXCESS_RETURN
+training_label_transform: CONFIGURED_SEPARATELY
+boundary_policy:
+  purge: LABEL_EXIT_MUST_REMAIN_IN_SEGMENT
+  embargo_sessions: null

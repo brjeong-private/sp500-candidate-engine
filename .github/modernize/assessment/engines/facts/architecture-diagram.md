@@ -1,6 +1,6 @@
 # 프로젝트 전체 아키텍처
 
-갱신일: 2026-10-09
+갱신일: 2026-10-11
 
 이 문서는 개발과 함께 갱신하는 후보 선정 엔진의 기준 아키텍처다. 실선은 현재 구현 또는 이번 재설계에서 선택한 경로, 점선은 아직 구현하지 않은 경로다.
 
@@ -64,21 +64,16 @@ flowchart TD
         Ops[("ops")]
         Ref[("ref")]
         Market[("market")]
-        Fundamental[("fundamental Planned")]
-        Event[("event Planned")]
-        Analytics[("analytics Planned")]
-        Selection[("selection Planned")]
+        Fundamental[("fundamental")]
+        Event[("event")]
+        Analytics[("analytics")]
+        Selection[("selection")]
     end
 
     subgraph Candidate["Candidate Engine"]
         FeatureRun["Feature and Label Runs"]
         ScoreRun["Model Scoring and Universe Ranking"]
         Selector["Daily Five to Ten Candidates"]
-    end
-
-    subgraph Downstream["Downstream Boundary"]
-        TradingAgents["TradingAgents Runner"]
-        Reports["Reports Usage and Reevaluation"]
     end
 
     Scheduler -->|"daily"| SessionResolver
@@ -122,19 +117,17 @@ flowchart TD
     QualityGate --> Ops
     QualityGate --> Ref
     QualityGate --> Market
-    QualityGate -.-> Fundamental
-    QualityGate -.-> Event
+    QualityGate --> Fundamental
+    QualityGate --> Event
 
     Ref --> FeatureRun
     Market --> FeatureRun
-    Fundamental -.-> FeatureRun
-    Event -.-> Selector
-    FeatureRun -.-> Analytics
-    Analytics -.-> ScoreRun
-    ScoreRun -.-> Selection
-    Selection -.-> Selector
-    Selector -.-> TradingAgents
-    TradingAgents -.-> Reports
+    Fundamental --> FeatureRun
+    Event --> Selector
+    FeatureRun --> Analytics
+    Analytics --> ScoreRun
+    ScoreRun --> Selection
+    Selection --> Selector
 ```
 
 ## 파이프라인 실행 아키텍처
@@ -223,9 +216,9 @@ flowchart LR
     DataGate --> DatasetTx
     DatasetTx --> CoreDecision
     CoreDecision --> Manifest
-    Manifest -.-> Features
-    Features -.-> Scores
-    Scores -.-> Candidates
+    Manifest --> Features
+    Features --> Scores
+    Scores --> Candidates
 
     P0B --> Log
     M4 --> Log
@@ -264,8 +257,7 @@ flowchart LR
 | 뉴스 metadata | 없음 | Massive News | 무료 플랜 과거 범위와 콘텐츠 권리 제한 |
 | 거래 달력·조기 폐장 | 없음 | 공식 일정 + exchange calendar baseline | 비정상 휴장 archive 필요 |
 | 거래정지 | 없음 | Nasdaq halt feed | 별도 collector 필요 |
-| 특징·점수·후보 | 없음 | Qlib·selection 단계 | core 수집 완료 후 구현 |
-| TradingAgents 결과 | 없음 | downstream boundary | 후보 엔진 범위 밖 |
+| 특징·점수·후보 | 구현 | Qlib Alpha158·LightGBM·selection | 현재 모델은 SHADOW, 승격 기준 미통과 |
 
 ## 기술 구성
 
@@ -296,9 +288,11 @@ flowchart LR
 - Yahoo/Wikipedia prototype, temporal fence, 변경분 upsert와 JSONL 로그
 - XNYS backfill, range action/news, SEC fact cutoff, 자동·수동 재처리와 process 진행 로그
 
-아직 미구현:
+아직 미구현 또는 운영 검증 대기:
 
 - 공식 calendar·halt collector
 - dataset checkpoint 실제 전진 로직
 - staging COPY·set-based merge 최적화
-- Qlib analytics·selection
+- 양의 Rank IC champion과 20-session live shadow
+
+후보 저장이 이 저장소의 마지막 단계다. 후보 이후 분석, agent 실행, report, 비용과 재평가는 별도 프로젝트에서 관리한다.

@@ -2,11 +2,13 @@
 
 미국 거래일마다 S&P 500에서 후속 분석할 5~10개 종목을 선정하기 위한 데이터 수집·후보 선정 엔진입니다.
 
-현재 구현 범위는 production 데이터 수집, point-in-time provenance, PostgreSQL 적재까지입니다. Qlib 특징·점수와 최종 후보 선정은 다음 단계입니다.
+production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, walk-forward 모델 평가, 일일 점수와 5~10개 후보 선정까지 구현했습니다.
+
+프로젝트의 전체 범위는 `수집 -> 전처리 -> 모델 점수 -> 후보 선정`까지입니다. TradingAgents를 포함한 후보 이후 분석은 별도 프로젝트에서 구현합니다. 공통 무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
 
 ## 현재 상태
 
-2026-10-08 세션을 대상으로 실제 provider key와 Azure PostgreSQL을 사용해 production pipeline을 실행했습니다.
+2026-10-09 세션을 대상으로 실제 provider key와 Azure PostgreSQL을 사용해 production 수집과 명시적 shadow 후보 실행을 완료했습니다.
 
 | 데이터 | 결과 |
 |---|---:|
@@ -19,6 +21,10 @@
 | SEC instrument states | 503개 |
 | Production source snapshots | 7개 |
 | ACTIVE production 품질 이슈 | 0개 |
+| Qlib historical export | 252 sessions, 126,736 rows |
+| Alpha158 | 158 features |
+| 일일 score | 503개 |
+| 후보 | 10개, SHADOW model |
 
 Production identifiers:
 
@@ -26,6 +32,9 @@ Production identifiers:
 ingestion_run_id     8496d161-8f00-4ff5-ad3f-e1ae9cd92b20
 input_manifest_id    5cefeecc-2651-5e15-a89e-3d68302ce217
 execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
+latest_export_run_id de126b50-f254-5235-8c4f-f97a70ba0017
+latest_scoring_run_id d3aa7fc9-db71-5875-aa67-7cd99771197e
+latest_selection_run_id 1e5c0aa7-f8e0-57ae-88aa-1417a573d0c1
 ```
 
 ## 데이터 원천
@@ -72,11 +81,10 @@ flowchart LR
         Database[("Azure PostgreSQL 16")]
     end
 
-    subgraph Planned["후속 단계 - 미구현"]
+    subgraph Analytics["Analytics - 구현"]
         Features["Qlib 특징"]
         Scores["모델 점수·순위"]
         Candidates["5~10개 후보"]
-        TradingAgents["TradingAgents"]
     end
 
     Massive --> Collectors
@@ -85,7 +93,7 @@ flowchart LR
     Reference --> Collectors
     Scheduler --> Collectors
     Collectors --> Raw --> Normalize --> Gates --> Database
-    Database -.-> Features -.-> Scores -.-> Candidates -.-> TradingAgents
+    Database --> Features --> Scores --> Candidates
 ```
 
 상세 설계:
@@ -93,6 +101,7 @@ flowchart LR
 - [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
 - [일 1회 수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)
 - [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)
+- [프로젝트 공통 하네스](PROJECT-HARNESS.md)
 
 ## 일일 파이프라인
 
@@ -127,7 +136,7 @@ flowchart TD
 
     Gate --> Transactions["Dataset별 transaction"]
     Transactions --> Manifest["Final input manifest"]
-    Manifest -.-> Candidate["Qlib·후보 생성<br/>미구현"]
+    Manifest --> Candidate["명시적 date 실행<br/>Qlib·점수·후보"]
 ```
 
 1. 마지막 완료 미국 거래 세션 결정
@@ -139,7 +148,9 @@ flowchart TD
 7. 조정 상태가 명시된 종목 bar와 `PRICE_RETURN` SPY benchmark revision 저장
 8. cutoff·manifest·품질 gate
 9. dataset transaction과 final manifest
-10. Qlib·후보 단계, 아직 미구현
+10. 명시적으로 선택한 date에 Qlib export·feature·score·candidate 실행
+
+기간 backfill은 9단계에서 종료하며 후보를 자동 생성하지 않습니다.
 
 Massive grouped daily endpoint를 우선 사용합니다. 사용할 수 없으면 ticker별 503회 fallback이며 최소 약 101분이 걸립니다.
 
@@ -172,8 +183,8 @@ authentication: Microsoft Entra
 | `market` | daily bar, observation, corporate action |
 | `event` | news, earnings, revision, instrument mapping |
 | `fundamental` | SEC filing·fact와 snapshot observation |
-| `analytics` | Qlib run, 미구현 |
-| `selection` | candidate batch, 미구현 |
+| `analytics` | Qlib export, feature·label, model, score |
+| `selection` | 5~10개 candidate batch와 reason |
 
 ### 데이터 스키마 ER 다이어그램
 
@@ -291,8 +302,35 @@ Provider connectivity probe:
 
 ```powershell
 .\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env run-daily --date 2026-10-08
+  --env-file .env run-daily --date 2026-10-09
 ```
+
+수집 성공 후 같은 명시적 date의 후보까지 실행:
+
+```powershell
+.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env run-daily --date 2026-10-09 --with-candidates
+```
+
+기존 export로 특정 date 후보만 멱등 실행:
+
+```powershell
+.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env run-candidates --date 2026-10-09
+```
+
+Historical Qlib export와 Alpha158 검증:
+
+```powershell
+.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env export-qlib --start 2025-10-09 --end 2026-10-09
+
+.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
+  --env-file .env build-features `
+  --export-run-id de126b50-f254-5235-8c4f-f97a70ba0017
+```
+
+재현 가능한 notebook 환경과 비대화형 실행은 [notebooks/README.md](notebooks/README.md)를 참고하세요.
 
 Backfill 실행, 1차 전체 완료 후 실패 날짜를 자동 재처리합니다.
 
@@ -404,17 +442,17 @@ Process 로그의 날짜별 줄:
 
 ## Backfill 실행 결과
 
-2026-10-10에 로컬 backfill과 manual retry를 통해 `2025-10-09`~`2026-10-08` 1년, 251거래일을 적재했습니다. 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했습니다.
+2026-10-10에 로컬 backfill과 manual retry를 통해 `2025-10-09`~`2026-10-08` 251거래일을 적재했고, 2026-10-11에 2026-10-09 production session을 추가했습니다. 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했습니다.
 
 | 항목 | 결과 |
 |---|---:|
-| 기간 | `2025-10-09`~`2026-10-08` |
-| XNYS 거래일 | 251 |
-| Massive logical bars | 126,233 |
+| 기간 | `2025-10-09`~`2026-10-09` |
+| XNYS 거래일 | 252 |
+| Qlib export rows | 126,736 |
 | 날짜별 universe 기준 예상 bars | 126,237 |
 | 평균 일별 coverage | 99.9968% |
 | VWAP·조정 상태 반영 | 125,730/126,233 |
-| SPY `PRICE_RETURN` benchmark | 250/251 |
+| SPY `PRICE_RETURN` benchmark | 252/252 |
 | Corporate actions | 1,537 |
 | News events | 31,252 |
 | SEC filings | 8,452 |
@@ -434,7 +472,7 @@ Process 로그의 날짜별 줄:
 .\.venv\Scripts\python.exe -m ruff format --check src tests
 ```
 
-현재 테스트는 provider limit, 미래 데이터 차단, parser, key 비노출, 일자별 로그, 가격 precision을 포함합니다.
+현재 테스트는 provider limit, 미래 데이터 차단, Qlib export·feature·label, walk-forward, scoring, selection, parser, key 비노출, 일자별 로그와 가격 precision을 포함합니다.
 
 ## 저장소 구조
 
@@ -449,10 +487,15 @@ Process 로그의 날짜별 줄:
 │   │   └── yahoo.py
 │   ├── production_pipeline.py
 │   ├── production_repository.py
+│   ├── analytics/
+│   ├── selection/
+│   ├── candidate_pipeline.py
 │   ├── source_harness.py
 │   ├── temporal.py
 │   └── database.py
 ├── sql/
+├── config/analytics/
+├── notebooks/
 ├── tests/
 ├── CHANGELOG.md
 ├── AGENTS.md
@@ -470,9 +513,9 @@ Process 로그의 날짜별 줄:
 - staging COPY·set-based merge 성능 최적화
 - Massive Basic 2년보다 오래된 가격 backfill
 - 공식 point-in-time S&P constituent·GICS
-- Qlib Alpha158·LightGBM
-- 5~10개 후보 selection
-- TradingAgents downstream integration
+- 3~5년 가격을 이용한 복수 regime 모델 검증
+- 양의 out-of-sample Rank IC를 만족하는 champion 모델
+- 약 4주의 20-session live shadow 관찰
 
 ## 라이선스 주의
 
@@ -484,7 +527,7 @@ Process 로그의 날짜별 줄:
 
 ## 현재 판정
 
-현재 데이터는 **일일 후보 선정의 시장·이벤트 입력을 시작할 수 있는 production MVP**입니다.
+현재 데이터는 **명시적 session에 대해 일일 정량 후보를 생성할 수 있는 SHADOW MVP**입니다.
 
 아직 충족하지 못한 핵심 연구 요구사항:
 
@@ -492,5 +535,6 @@ Process 로그의 날짜별 줄:
 - 생존편향 없는 과거 S&P 구성·GICS
 - SEC 전체 taxonomy·custom concept와 원문 XBRL 확장
 - 과거 earnings revision
-- Qlib 특징·점수
-- 최종 후보 5~10개
+- 양의 out-of-sample Rank IC
+- 운영 champion 승격
+- 20-session live shadow 완료

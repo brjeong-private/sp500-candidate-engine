@@ -8,8 +8,35 @@
 - YYYY-MM-DD | 영역 | 변경 요약
 ```
 
+## 2026-10-11
+
+- 2026-10-11 | Phase 6 | 명시적 date 기반 candidate pipeline과 CLI, daily opt-in 연결, backfill 분리, challenger gate와 drift metric을 구현했다.
+- 2026-10-11 | Shadow Replay | 최근 out-of-sample 20 sessions에서 매일 후보 10개, shortfall 0, sector cap 완화 0을 검증했다.
+- 2026-10-11 | Documentation | README와 아키텍처·수집·데이터 문서를 현재 Qlib·scoring·selection 구현 상태로 갱신했다.
+- 2026-10-11 | Maintenance | plan·phase result·candidate 임시 파일, notebook output, logs와 작업 환경을 Git 제외 대상으로 정리했다.
+- 2026-10-11 | Notebook | Python 3.11 `.venv-alpha158` 기반 재현 환경, versioned config, 비대화형 Phase 4~5 notebook과 실행 가이드를 추가했다.
+- 2026-10-11 | Schema | Model registry·scoring·daily score와 selection run·candidate·reason migration 014~015를 적용했다.
+- 2026-10-11 | Training | Momentum·Ridge·Qlib LightGBM과 purged walk-forward 평가를 구현하고 2026-10-09 데이터에서 shadow 모델을 등록했다.
+- 2026-10-11 | Selection | 503개 종목 점수와 rank·percentile을 저장하고 sector·issuer 제약을 적용한 10개 shadow 후보를 생성했다.
+- 2026-10-11 | Data | 2026-10-09 production 수집을 완료하고 252-session Qlib export를 생성했다.
+- 2026-10-11 | Documentation | Phase 4·5 결과를 ignored `phase-result/` 하위에 기록하고 계획의 완료 상태와 실제 metric을 갱신했다.
+- 2026-10-11 | Migration | Azure PostgreSQL에 analytics migration 011~013을 적용하고 schema ledger와 신규 테이블을 검증했다.
+- 2026-10-11 | Benchmark | 보존된 Massive raw snapshot에서 2025-11-24 SPY benchmark를 복구하고 재실행 변경 0건을 확인했다.
+- 2026-10-11 | Qlib Export | 251 sessions·540 instruments·126,233 rows의 split-adjusted historical export를 생성·영속화하고 동일 hash 재실행을 검증했다.
+- 2026-10-11 | Qlib Validation | 실제 1년 artifact에서 Alpha158 126,236행·158차원·Infinity 0을 검증했다.
+- 2026-10-11 | Fix | 다중 FULL partition과 cross-dataset DELTA lineage 및 psycopg cursor executemany를 실제 historical export에 맞게 수정했다.
+- 2026-10-11 | Documentation | Phase 3 뒤에 Phase 4 진입 전 migration·benchmark·historical export gate와 실행 결과를 추가했다.
+
 ## 2026-10-10
 
+- 2026-10-10 | Analytics Phase 1 | Versioned XNYS calendar, split·dividend adjustment, manifest-constrained daily-bar repository와 데이터 기초 테스트를 추가했다.
+- 2026-10-10 | Analytics Phase 2 | Qlib export schema, CSV staging, binary provider exporter, artifact hash와 export 품질 gate를 추가했다.
+- 2026-10-10 | Analytics Phase 3 | Alpha158 runtime adapter, train-only processor artifact, 5-session SPY 초과수익 label과 feature·label persistence를 추가했다.
+- 2026-10-10 | Dependency | Python 3.11/3.12 analytics 환경용 pyqlib·pyarrow·PyYAML optional dependencies를 추가했다.
+- 2026-10-10 | Testing | Analytics Phase 1~3 단위·회귀 테스트와 실제 Qlib Alpha158 integration smoke test를 추가했다.
+- 2026-10-10 | Documentation | Phase 1~3 진행 단계와 구현·검증 결과를 각각 별도 결과 문서로 기록했다.
+- 2026-10-10 | Harness | 프로젝트 범위를 수집·전처리·모델 점수·후보 선정으로 고정하고 데이터 무결성·미래 누수 방지·평가·실패 규칙을 공통 하네스로 추가했다.
+- 2026-10-10 | Planning | 후보 선정 계획에 점수 해석, 전체 universe 순회, 시점 재현, 학습 라벨, 후보 평가 관련 검토 의견을 반영하고 TradingAgents 구현 범위를 제거했다.
 - 2026-10-10 | Documentation | README의 전체 아키텍처와 수집 파이프라인을 정비하고 데이터 스키마 ER 다이어그램을 추가했으며 데이터 원천 미구현 사유·1년 backfill 통합 결과를 반영하고 Azure Backfill VM 내용을 제거했다.
 
 ## 2026-10-09

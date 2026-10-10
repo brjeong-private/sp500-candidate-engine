@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Awaitable
 from contextlib import suppress
 from datetime import date, datetime
+from pathlib import Path
 from typing import TypeVar
 
 from sp500_candidate_engine.backfill import (
@@ -130,6 +131,7 @@ async def run_daily_process(
     settings: Settings,
     *,
     target_date: date,
+    run_candidates: bool = False,
 ) -> dict[str, object]:
     database = Database(settings)
     await asyncio.to_thread(database.migrate)
@@ -194,11 +196,30 @@ async def run_daily_process(
                 **summary,
             }
         )
-        return {
+        response: dict[str, object] = {
             "process_run_id": str(process_run_id),
             "log_file": str(writer.path),
             **summary,
         }
+        if run_candidates and summary["status"] == "SUCCEEDED":
+            from sp500_candidate_engine.candidate_pipeline import run_candidate_date
+
+            candidate = await asyncio.to_thread(
+                run_candidate_date,
+                settings,
+                target_date=target_date,
+                repository_root=Path(__file__).parents[2],
+            )
+            response["candidate_run"] = {
+                "price_session_date": candidate.price_session_date,
+                "model_version_id": candidate.model_version_id,
+                "scoring_run_id": candidate.scoring_run_id,
+                "selection_run_id": candidate.selection_run_id,
+                "candidate_count": candidate.candidate_count,
+                "model_status": "SHADOW",
+                "promotion_gate_passed": candidate.promotion_gate_passed,
+            }
+        return response
 
 
 async def run_backfill_process(
