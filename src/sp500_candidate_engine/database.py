@@ -73,7 +73,7 @@ class Database:
         if settings.azure_credential_mode == "azure_cli":
             self.credential = AzureCliCredential(
                 tenant_id=settings.azure_tenant_id,
-                process_timeout=settings.pg_connect_timeout,
+                process_timeout=max(120, settings.pg_connect_timeout),
             )
         else:
             self.credential = DefaultAzureCredential()
@@ -219,6 +219,14 @@ class Database:
                 connection,
                 market.bars,
                 instrument_ids,
+                yahoo_source_id,
+                market_snapshot_id,
+                market.source_available_at,
+                market.observed_at,
+            )
+            self._persist_benchmark_bars(
+                connection,
+                market.benchmark_bars,
                 yahoo_source_id,
                 market_snapshot_id,
                 market.source_available_at,
@@ -753,7 +761,8 @@ class Database:
             instrument_id = instrument_ids[bar.symbol]
             current = connection.execute(
                 """
-                SELECT revision_no, open, high, low, close, adjusted_close, volume
+                SELECT revision_no, open, high, low, close, adjusted_close, volume,
+                       vwap, price_adjustment_status, volume_adjustment_status
                 FROM market.daily_bar
                 WHERE instrument_id = %s AND session_date = %s AND source_id = %s
                 ORDER BY revision_no DESC
@@ -768,6 +777,9 @@ class Database:
                 _price(bar.close),
                 _price(bar.adjusted_close),
                 bar.volume,
+                _price(bar.vwap),
+                bar.price_adjustment_status,
+                bar.volume_adjustment_status,
             )
             if current is not None:
                 current_values = (
@@ -777,6 +789,9 @@ class Database:
                     current["close"],
                     current["adjusted_close"],
                     current["volume"],
+                    current["vwap"],
+                    current["price_adjustment_status"],
+                    current["volume_adjustment_status"],
                 )
                 if current_values == values:
                     revision_no = int(current["revision_no"])
@@ -790,11 +805,12 @@ class Database:
                     INSERT INTO market.daily_bar(
                         instrument_id, session_date, source_id, revision_no,
                         open, high, low, close, adjusted_close, volume,
+                        vwap, price_adjustment_status, volume_adjustment_status,
                         source_timestamp, source_available_at, observed_at, source_snapshot_id
                     )
                     VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -828,6 +844,83 @@ class Database:
                     observed_at,
                 ),
             )
+        return inserted
+
+    @staticmethod
+    def _persist_benchmark_bars(
+        connection: Connection[dict[str, object]],
+        bars: tuple[DailyBar, ...],
+        source_id: int,
+        snapshot_id: uuid.UUID,
+        source_available_at: datetime,
+        observed_at: datetime,
+    ) -> int:
+        inserted = 0
+        for bar in bars:
+            current = connection.execute(
+                """
+                SELECT revision_no, open, high, low, close, volume, vwap,
+                       price_adjustment_status, volume_adjustment_status
+                  FROM market.benchmark_daily_bar
+                 WHERE benchmark_code = %s AND session_date = %s AND source_id = %s
+                 ORDER BY revision_no DESC
+                 LIMIT 1
+                """,
+                (bar.symbol, bar.session_date, source_id),
+            ).fetchone()
+            values = (
+                _price(bar.open),
+                _price(bar.high),
+                _price(bar.low),
+                _price(bar.close),
+                bar.volume,
+                _price(bar.vwap),
+                bar.price_adjustment_status,
+                bar.volume_adjustment_status,
+            )
+            current_values = (
+                (
+                    current["open"],
+                    current["high"],
+                    current["low"],
+                    current["close"],
+                    current["volume"],
+                    current["vwap"],
+                    current["price_adjustment_status"],
+                    current["volume_adjustment_status"],
+                )
+                if current
+                else None
+            )
+            if current_values == values:
+                continue
+            revision_no = int(current["revision_no"]) + 1 if current else 1
+            connection.execute(
+                """
+                INSERT INTO market.benchmark_daily_bar(
+                    benchmark_code, session_date, source_id, revision_no,
+                    open, high, low, close, volume, vwap, return_basis,
+                    price_adjustment_status, volume_adjustment_status,
+                    source_timestamp, source_available_at, observed_at, source_snapshot_id
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, 'PRICE_RETURN', %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    bar.symbol,
+                    bar.session_date,
+                    source_id,
+                    revision_no,
+                    *values,
+                    bar.source_timestamp,
+                    source_available_at,
+                    observed_at,
+                    snapshot_id,
+                ),
+            )
+            inserted += 1
         return inserted
 
     def verify_loaded_date(self, target_date: date) -> dict[str, object]:

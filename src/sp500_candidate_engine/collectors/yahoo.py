@@ -63,6 +63,9 @@ class YahooDailyBarCollector:
                     "close": bar.close,
                     "adjusted_close": bar.adjusted_close,
                     "volume": bar.volume,
+                    "vwap": bar.vwap,
+                    "price_adjustment_status": bar.price_adjustment_status,
+                    "volume_adjustment_status": bar.volume_adjustment_status,
                 }
             )
 
@@ -84,6 +87,7 @@ class YahooDailyBarCollector:
             observed_at=observed_at,
             source_available_at=source_available_at,
             bars=tuple(sorted(bars, key=lambda item: item.symbol)),
+            benchmark_bars=(),
             failures=failures,
             sanitized_payload={
                 "target_date": run_spec.target_date.isoformat(),
@@ -190,4 +194,7 @@ class YahooDailyBarCollector:
             close=close_value,
             adjusted_close=adjusted_value,
             volume=volume_value,
+            vwap=None,
+            price_adjustment_status="UNADJUSTED_WITH_ADJUSTED_CLOSE",
+            volume_adjustment_status="UNADJUSTED",
         )

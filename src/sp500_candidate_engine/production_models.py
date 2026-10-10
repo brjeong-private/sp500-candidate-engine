@@ -38,6 +38,7 @@ class MassiveCollection:
     observed_at: datetime
     source_available_at: datetime
     bars: tuple[DailyBar, ...]
+    benchmark_bars: tuple[DailyBar, ...]
     actions: tuple[CorporateAction, ...]
     news: tuple[NewsItem, ...]
     payloads: dict[str, dict[str, object]]

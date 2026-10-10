@@ -66,6 +66,9 @@ class DailyBar:
     close: float
     adjusted_close: float | None
     volume: int
+    vwap: float | None
+    price_adjustment_status: str
+    volume_adjustment_status: str
 
 
 @dataclass(frozen=True)
@@ -73,5 +76,6 @@ class MarketCollection:
     observed_at: datetime
     source_available_at: datetime
     bars: tuple[DailyBar, ...]
+    benchmark_bars: tuple[DailyBar, ...]
     failures: dict[str, str]
     sanitized_payload: dict[str, object]

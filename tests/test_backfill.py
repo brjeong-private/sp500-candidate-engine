@@ -28,10 +28,10 @@ def test_backfill_plan_avoids_alpha_historical_calls() -> None:
     )
     assert len(plan.sessions) == 65
     assert plan.massive_price_requests == 65
-    assert plan.massive_action_base_requests == 2
+    assert plan.massive_action_base_requests == 9
     assert plan.massive_news_chunk_requests == 14
-    assert plan.massive_base_requests == 81
-    assert plan.massive_minimum_minutes == 17
+    assert plan.massive_base_requests == 88
+    assert plan.massive_minimum_minutes == 18
     assert plan.alpha_vantage_requests == 0
     assert plan.knowledge_mode == "HISTORICAL_RECONSTRUCTION"
 

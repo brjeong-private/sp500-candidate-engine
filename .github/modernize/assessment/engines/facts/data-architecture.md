@@ -34,7 +34,7 @@
 | adjusted close | 수집 | Yahoo adjusted close를 별도 컬럼에 저장 | 공식 corporate action lineage로 재계산한 값 아님 |
 | 분할·배당 | 수집 시작 | Massive corporate-action revision 99 | 무료 플랜 과거 범위 제한, 장기 backfill 미완료 |
 | 거래 달력 | 미수집 | 0 | 공식 NYSE/Nasdaq session·조기 폐장 테이블 없음 |
-| SEC 공시 | 수집 | bulk submissions parser와 filing observation 적재 | 6개월 backfill 기준 filing 4,320건 |
+| SEC 공시 | 수집 | bulk submissions parser와 filing observation 적재 | 1년 backfill 기준 filing 8,452건 |
 | SEC 재무 fact | 미수집 | 0 | Company Facts/XBRL parser와 concept allowlist 미구현 |
 | 실적 일정 | 수집 시작 | Alpha Vantage earnings 467 events | 오늘 이후 snapshot 축적만 가능, 과거 revision 없음 |
 | 뉴스·거래정지 | 부분 수집 | Massive news 291 events | Nasdaq halt 미구현, 뉴스 무료 과거 범위 제한 |
@@ -53,8 +53,8 @@
 |---|---|---|
 | `ops` | `schema_migration`, `data_source`, `ingestion_run`, `source_snapshot`, `input_manifest`, `input_manifest_member`, `execution_context`, `data_quality_issue` | 구현 |
 | `ref` | `issuer`, `instrument`, `instrument_identifier`, `instrument_state`, `universe`, `universe_version`, `universe_member` | production reference 포함 |
-| `market` | `daily_bar`, `daily_bar_observation`, `corporate_action`, `corporate_action_observation` | production price/action 포함 |
-| `fundamental` | `sec_filing`, `sec_filing_observation`, `fact`, `fact_observation` | 6개월 backfill 적재 완료, filing 4,320건·fact 22,816건 |
+| `market` | `daily_bar`, `daily_bar_observation`, `benchmark_daily_bar`, `corporate_action`, `corporate_action_observation` | production price/action과 SPY benchmark 포함 |
+| `fundamental` | `sec_filing`, `sec_filing_observation`, `fact`, `fact_observation` | 1년 backfill 적재 완료, filing 8,452건·fact 50,582건 |
 | `event` | `market_event`, `event_revision`, `event_revision_observation`, `event_instrument` | Massive news와 Alpha earnings 적재 |
 | `analytics` | 없음 | 목표 설계만 존재 |
 | `selection` | 없음 | 목표 설계만 존재 |
@@ -163,8 +163,9 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | `ref` | `universe` | `universe_id`, `code`, `name`, `provider_source_id` | PK `universe_id`, UK `code` | 소형 dimension |
 | `ref` | `universe_version` | `universe_version_id`, `universe_id`, `as_of_date`, `announced_at`, `effective_at`, `source_snapshot_id`, `rule_version` | PK `universe_version_id`, UK `(universe_id, as_of_date, source_snapshot_id)` | `(universe_id, effective_at desc)` |
 | `ref` | `universe_member` | `universe_version_id`, `instrument_id`, `weight`, `member_action`, `selection_reason`, `effective_from`, `effective_to` | PK `(universe_version_id, instrument_id)` | `(instrument_id, effective_from, effective_to)` |
-| `market` | `daily_bar` | `instrument_id`, `session_date`, `source_id`, `revision_no`, raw OHLCV, `vwap`, `trade_count`, `currency`, `source_available_at`, `observed_at`, `source_snapshot_id` | PK `(instrument_id, session_date, source_id, revision_no)` | 초기 비파티션; `(instrument_id, session_date desc)` |
+| `market` | `daily_bar` | `instrument_id`, `session_date`, `source_id`, `revision_no`, raw OHLCV, `vwap`, `price_adjustment_status`, `volume_adjustment_status`, `currency`, `source_available_at`, `observed_at`, `source_snapshot_id` | PK `(instrument_id, session_date, source_id, revision_no)` | 초기 비파티션; `(instrument_id, session_date desc)` |
 | `market` | `daily_bar_observation` | `source_snapshot_id`, `instrument_id`, `session_date`, `source_id`, `revision_no`, `observed_at` | PK `(source_snapshot_id, instrument_id, session_date, source_id, revision_no)`, FK logical bar | `(source_snapshot_id, session_date)` |
+| `market` | `benchmark_daily_bar` | `benchmark_code`, `session_date`, `source_id`, `revision_no`, OHLCV, `vwap`, `return_basis`, adjustment status, `source_available_at`, `observed_at`, `source_snapshot_id` | PK `(benchmark_code, session_date, source_id, revision_no)` | `(benchmark_code, session_date desc)` |
 | `market` | `corporate_action` | `action_id`, `instrument_id`, `source_id`, `source_action_id`, `action_type`, `announced_at`, `ex_date`, `record_date`, `pay_date`, `cash_amount`, `currency`, `split_from`, `split_to`, `source_available_at`, `observed_at`, `source_snapshot_id`, `revision_no`, `metadata` | PK `action_id`, UK `(source_id, source_action_id, revision_no)` | 비파티션, `(instrument_id, ex_date desc)` |
 | `fundamental` | `sec_filing` | `filing_id`, `issuer_id`, `accession_no`, `form_type`, `period_end`, `filed_date`, `accepted_at`, `primary_document_url`, `is_amendment`, `source_snapshot_id` | PK `filing_id`, UK `(issuer_id, accession_no)` | `(issuer_id, accepted_at desc)`, `form_type` |
 | `fundamental` | `sec_filing_observation` | `source_snapshot_id`, `filing_id`, `observed_at` | PK `(source_snapshot_id, filing_id)` | snapshot별 filing 관찰 |

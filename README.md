@@ -32,7 +32,7 @@ execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
 
 | Provider | 용도 | 현재 구현 |
 |---|---|---|
-| Massive Stocks Basic | EOD OHLCV, dividends, splits, news | 구현·실제 적재 |
+| Massive Stocks Basic | EOD OHLCV·VWAP, SPY benchmark, dividends, splits, news | 구현·실제 적재 |
 | SEC EDGAR | ticker, CIK, exchange, submissions/companyfacts bulk | reference 구현·적재, bulk downloader 구현 |
 | Alpha Vantage | 전체 earnings calendar | 구현·실제 적재 |
 | Wikipedia revision | prototype S&P 500 universe | 구현·실제 적재 |
@@ -89,9 +89,10 @@ flowchart TD
 4. Massive 내부 요청을 하나의 5회/분 queue로 순차화
 5. raw snapshot atomic 저장과 SHA-256
 6. dataset별 병렬 정규화
-7. cutoff·manifest·품질 gate
-8. dataset transaction과 final manifest
-9. Qlib·후보 단계, 아직 미구현
+7. 조정 상태가 명시된 종목 bar와 `PRICE_RETURN` SPY benchmark revision 저장
+8. cutoff·manifest·품질 gate
+9. dataset transaction과 final manifest
+10. Qlib·후보 단계, 아직 미구현
 
 Massive grouped daily endpoint를 우선 사용합니다. 사용할 수 없으면 ticker별 503회 fallback이며 최소 약 101분이 걸립니다.
 
@@ -128,6 +129,8 @@ authentication: Microsoft Entra
 | `selection` | candidate batch, 미구현 |
 
 Migration은 [sql/](sql/)에 있으며 파일명 순서대로 적용됩니다.
+
+`market.daily_bar`는 OHLCV와 함께 provider VWAP, 가격 조정 상태, 거래량 조정 상태를 보존합니다. `market.benchmark_daily_bar`는 동일 거래일의 SPY를 별도 series로 저장하며 현재 수익률 기준은 배당 미포함 `PRICE_RETURN`입니다.
 
 ## 설치
 
@@ -335,6 +338,26 @@ Process 로그의 날짜별 줄:
 예상 63,881 bars와의 차이 3건은 기존 구간의 provider 원본 결측이다. VMRK(2026-08-17)와 PSKY(2026-10-06)는 해당 날짜 ticker reference도 없었고, WBD(2026-10-06)는 ticker reference는 유효하지만 aggregate가 0건이었다. 추가한 2026-04-09~2026-07-08 구간은 모든 날짜가 503 bars를 반환했다.
 
 로그와 raw payload는 Git에 올리지 않습니다.
+
+## 1년 Historical Data 결과
+
+2026-10-10에 추가 backfill과 manual retry로 `2025-10-09`~`2026-10-08` 251거래일을 적재했다. 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했다.
+
+| 항목 | 결과 |
+|---|---:|
+| Massive logical bars | 126,233 |
+| 날짜별 universe 기준 예상 bars | 126,237 |
+| 평균 일별 coverage | 99.9968% |
+| VWAP·조정 상태 반영 | 125,730/126,233 |
+| SPY `PRICE_RETURN` benchmark | 250/251 |
+| Corporate actions | 1,537 |
+| News events | 31,252 |
+| SEC filings | 8,452 |
+| SEC facts | 50,582 |
+| 미래 누수 | 0 |
+| semantic duplicate revisions | 0 |
+
+기존 OHLCV는 덮어쓰지 않고 enrichment revision을 추가했다. revision 1의 `UNKNOWN` 상태와 revision 2의 `UNADJUSTED`·VWAP 보강은 서로 다른 semantic payload이며 완전 동일 revision 중복은 0이다. provider 원본 결측은 HOLX(2026-04-07), VMRK(2026-08-17), PSKY·WBD(2026-10-06) 4건이다.
 
 ## 테스트
 

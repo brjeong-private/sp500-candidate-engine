@@ -151,6 +151,14 @@ class BackfillRepository:
                 market.source_available_at,
                 market.observed_at,
             )
+            Database._persist_benchmark_bars(
+                active_connection,
+                market.benchmark_bars,
+                massive_source_id,
+                market_snapshot_id,
+                market.source_available_at,
+                market.observed_at,
+            )
             missing_symbols = sorted(market.failures)
             ProductionRepository._persist_missing_bar_issues(
                 active_connection,

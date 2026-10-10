@@ -97,3 +97,11 @@
 - 2026-10-10 | Review | 3개월 실행 결과와 Yahoo prototype 대비 Massive historical sample의 분석 적합성을 ignored 임시 검토 파일로 작성했다.
 - 2026-10-10 | Data | 2026-04-09~2026-07-08의 62개 XNYS 세션을 추가 적재해 총 127거래일·63,878 bars의 6개월 데이터를 확보했다.
 - 2026-10-10 | Documentation | 6개월 통합 bar·action·news·SEC 적재량과 무결성 검증 결과를 README·아키텍처·임시 실행 결과에 반영했다.
+- 2026-10-10 | Architecture | Qlib 분석 적합성 지표·현재 historical schema·목표 export 계약·readiness gate를 별도 문서로 작성했다.
+- 2026-10-10 | Fix | 6개월 action 조회가 100페이지를 넘지 않도록 Massive dividends·splits를 비중첩 31일 chunk로 수집하게 수정했다.
+- 2026-10-10 | Fix | cutoff 직전 Wikipedia revision에 constituents 표가 없으면 더 오래된 유효 revision을 선택하도록 미래 누수 없는 fallback을 추가했다.
+- 2026-10-10 | Data | 1년 raw snapshot에서 Massive bar 125,730건의 VWAP·조정 상태와 SPY 250거래일 benchmark를 API 재호출 없이 revision 적재했다.
+- 2026-10-10 | Pipeline | 신규 일일·backfill이 VWAP, 가격·거래량 조정 상태, Massive 요청 옵션과 `PRICE_RETURN` benchmark를 보존하도록 확장했다.
+- 2026-10-10 | Documentation | 데이터 수집 보완 10개 항목의 반영 여부·제한과 1년 변경분 재처리·멱등 검증 결과를 기록했다.
+- 2026-10-10 | Data | 2025-10-09~2026-04-08 parent run 123일과 manual retry 1일을 완료해 총 251거래일·126,233 logical bars를 확보했다.
+- 2026-10-10 | Review | Qlib readiness 문서를 1년 실측 coverage·VWAP·adjustment·benchmark·outlier·temporal integrity 지표로 갱신했다.

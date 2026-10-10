@@ -138,6 +138,14 @@ class ProductionRepository:
                 massive.source_available_at,
                 massive.observed_at,
             )
+            Database._persist_benchmark_bars(
+                connection,
+                massive.benchmark_bars,
+                source_ids["massive"],
+                snapshots["massive_grouped_daily"],
+                massive.source_available_at,
+                massive.observed_at,
+            )
             missing_symbols = sorted(set(instrument_ids) - {bar.symbol for bar in massive.bars})
             self._persist_missing_bar_issues(
                 connection,

@@ -117,11 +117,16 @@ class MassiveCollector:
             observed_at=observed_at,
             source_available_at=source_available_at,
             bars=market.bars,
+            benchmark_bars=market.benchmark_bars,
             actions=actions,
             news=news_items,
             payloads={
                 "massive_grouped_daily": {
                     "target_date": run_spec.target_date.isoformat(),
+                    "request_options": {
+                        "adjusted": False,
+                        "include_otc": False,
+                    },
                     "results": market.sanitized_payload["results"],
                 },
                 "massive_dividends": {"results": dividends},
@@ -151,6 +156,7 @@ class MassiveCollector:
             tzinfo=NEW_YORK,
         ).astimezone(UTC)
         bars = self._parse_grouped(grouped, run_spec, symbols)
+        benchmark_bars = self._parse_grouped(grouped, run_spec, {"SPY": "SPY"})
         returned = {bar.symbol for bar in bars}
         failures = {
             member.symbol: "No Massive grouped daily bar returned"
@@ -161,9 +167,14 @@ class MassiveCollector:
             observed_at=observed_at,
             source_available_at=source_available_at,
             bars=bars,
+            benchmark_bars=benchmark_bars,
             failures=failures,
             sanitized_payload={
                 "target_date": run_spec.target_date.isoformat(),
+                "request_options": {
+                    "adjusted": False,
+                    "include_otc": False,
+                },
                 "results": grouped.get("results", []),
             },
         )
@@ -175,34 +186,53 @@ class MassiveCollector:
         end_date: date,
         members: tuple[UniverseMember, ...],
         news_chunk_days: int = 7,
+        action_chunk_days: int = 31,
     ) -> MassiveBackfillRange:
         if start_date > end_date:
             raise ValueError("start_date must be on or before end_date")
         if news_chunk_days <= 0:
             raise ValueError("news_chunk_days must be positive")
+        if action_chunk_days <= 0:
+            raise ValueError("action_chunk_days must be positive")
         symbols = {
             provider_symbol: member.symbol
             for member in members
             for provider_symbol in {member.symbol, member.provider_symbol}
         }
-        dividends = await self._collect_pages(
-            "/v3/reference/dividends",
-            params={
-                "ex_dividend_date.gte": start_date.isoformat(),
-                "ex_dividend_date.lte": (end_date + timedelta(days=90)).isoformat(),
-                "limit": 1000,
-                "sort": "ex_dividend_date",
-            },
-        )
-        splits = await self._collect_pages(
-            "/v3/reference/splits",
-            params={
-                "execution_date.gte": start_date.isoformat(),
-                "execution_date.lte": end_date.isoformat(),
-                "limit": 1000,
-                "sort": "execution_date",
-            },
-        )
+        dividends: list[dict[str, object]] = []
+        for chunk_start, chunk_end in _date_chunks(
+            start_date,
+            end_date + timedelta(days=90),
+            action_chunk_days,
+        ):
+            dividends.extend(
+                await self._collect_pages(
+                    "/v3/reference/dividends",
+                    params={
+                        "ex_dividend_date.gte": chunk_start.isoformat(),
+                        "ex_dividend_date.lte": chunk_end.isoformat(),
+                        "limit": 1000,
+                        "sort": "ex_dividend_date",
+                    },
+                )
+            )
+        splits: list[dict[str, object]] = []
+        for chunk_start, chunk_end in _date_chunks(
+            start_date,
+            end_date,
+            action_chunk_days,
+        ):
+            splits.extend(
+                await self._collect_pages(
+                    "/v3/reference/splits",
+                    params={
+                        "execution_date.gte": chunk_start.isoformat(),
+                        "execution_date.lte": chunk_end.isoformat(),
+                        "limit": 1000,
+                        "sort": "execution_date",
+                    },
+                )
+            )
         news_rows: list[dict[str, object]] = []
         news_chunks: list[dict[str, object]] = []
         start_at = datetime.combine(start_date, time.min, tzinfo=NEW_YORK).astimezone(UTC)
@@ -349,6 +379,9 @@ class MassiveCollector:
                     close=float(item["c"]),
                     adjusted_close=None,
                     volume=int(item["v"]),
+                    vwap=_float_or_none(item.get("vw")),
+                    price_adjustment_status="UNADJUSTED",
+                    volume_adjustment_status="UNADJUSTED",
                 )
             )
         return tuple(sorted(parsed, key=lambda bar: bar.symbol))
@@ -467,3 +500,17 @@ class MassiveCollector:
                 )
             )
         return tuple(sorted(parsed, key=lambda news: (news.published_at, news.provider_event_id)))
+
+
+def _date_chunks(
+    start_date: date,
+    end_date: date,
+    chunk_days: int,
+) -> tuple[tuple[date, date], ...]:
+    chunks: list[tuple[date, date]] = []
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(end_date, chunk_start + timedelta(days=chunk_days - 1))
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + timedelta(days=1)
+    return tuple(chunks)

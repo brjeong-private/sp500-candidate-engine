@@ -3,6 +3,7 @@
 /data-collection-review.md
 /backfill-execution-result.tmp.md
 /historical-data-sample-review.tmp.md
+/develop-plan.md
 /.azure/*.tmp
 /.azure/*.tmp.json
 

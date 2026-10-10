@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 import httpx
@@ -50,6 +50,31 @@ def test_massive_grouped_parser_rejects_future_session() -> None:
         MassiveCollector._parse_grouped(payload, spec, {"AAPL": "AAPL"})
 
 
+def test_massive_grouped_parser_preserves_vwap_and_adjustment_policy() -> None:
+    spec = RunSpec.for_date(date(2026, 10, 1), KnowledgeMode.HISTORICAL_RECONSTRUCTION)
+    payload = {
+        "results": [
+            {
+                "T": "AAPL",
+                "t": int(datetime(2026, 10, 1, 4, 0, tzinfo=UTC).timestamp() * 1000),
+                "o": 100,
+                "h": 110,
+                "l": 90,
+                "c": 105,
+                "v": 1_000,
+                "vw": 102.5,
+            }
+        ]
+    }
+
+    bars = MassiveCollector._parse_grouped(payload, spec, {"AAPL": "AAPL"})
+
+    assert len(bars) == 1
+    assert bars[0].vwap == 102.5
+    assert bars[0].price_adjustment_status == "UNADJUSTED"
+    assert bars[0].volume_adjustment_status == "UNADJUSTED"
+
+
 def test_massive_dividend_parser_excludes_future_declaration() -> None:
     spec = RunSpec.for_date(date(2026, 10, 1), KnowledgeMode.HISTORICAL_RECONSTRUCTION)
     actions = MassiveCollector._parse_actions(
@@ -67,6 +92,68 @@ def test_massive_dividend_parser_excludes_future_declaration() -> None:
         {"AAPL": "AAPL"},
     )
     assert actions == ()
+
+
+def test_massive_backfill_chunks_long_action_ranges_without_overlap() -> None:
+    async def run() -> list[tuple[str, dict[str, str | int]]]:
+        collector = MassiveCollector(
+            base_url="https://example.invalid",
+            api_key="secret",
+            timeout_seconds=1,
+            max_attempts=1,
+            user_agent="test",
+            requests_per_minute=5,
+        )
+        calls: list[tuple[str, dict[str, str | int]]] = []
+
+        async def collect_pages(
+            path: str,
+            *,
+            params: dict[str, str | int],
+            max_pages: int = 100,
+        ) -> list[dict[str, object]]:
+            assert max_pages == 100
+            calls.append((path, params))
+            return []
+
+        with patch.object(collector, "_collect_pages", side_effect=collect_pages):
+            async with collector:
+                await collector.collect_backfill_range(
+                    start_date=date(2025, 10, 9),
+                    end_date=date(2026, 4, 8),
+                    members=(),
+                    news_chunk_days=365,
+                    action_chunk_days=31,
+                )
+        return calls
+
+    calls = asyncio.run(run())
+    dividend_ranges = [
+        (
+            str(params["ex_dividend_date.gte"]),
+            str(params["ex_dividend_date.lte"]),
+        )
+        for path, params in calls
+        if path == "/v3/reference/dividends"
+    ]
+    split_ranges = [
+        (
+            str(params["execution_date.gte"]),
+            str(params["execution_date.lte"]),
+        )
+        for path, params in calls
+        if path == "/v3/reference/splits"
+    ]
+
+    assert dividend_ranges[0][0] == "2025-10-09"
+    assert dividend_ranges[-1][1] == "2026-07-07"
+    assert split_ranges[0][0] == "2025-10-09"
+    assert split_ranges[-1][1] == "2026-04-08"
+    for ranges in (dividend_ranges, split_ranges):
+        for previous, current in zip(ranges, ranges[1:], strict=False):
+            assert date.fromisoformat(previous[1]) + timedelta(days=1) == date.fromisoformat(
+                current[0]
+            )
 
 
 def test_alpha_earnings_uses_one_all_symbols_request() -> None:

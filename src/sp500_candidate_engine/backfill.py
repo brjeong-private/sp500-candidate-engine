@@ -92,16 +92,21 @@ def build_backfill_plan(
     evaluated_on: date,
     policies: SourcePolicies,
     news_chunk_days: int = 7,
+    action_chunk_days: int = 31,
 ) -> BackfillPlan:
     if news_chunk_days <= 0:
         raise ValueError("news_chunk_days must be positive")
+    if action_chunk_days <= 0:
+        raise ValueError("action_chunk_days must be positive")
     sessions = xnyse_sessions(start_date, end_date)
     if not sessions:
         raise ValueError("No XNYS sessions found in the requested range")
     calendar_days = (end_date - start_date).days + 1
     news_chunks = math.ceil(calendar_days / news_chunk_days)
     price_requests = len(sessions)
-    action_requests = 2
+    dividend_chunks = math.ceil((calendar_days + 90) / action_chunk_days)
+    split_chunks = math.ceil(calendar_days / action_chunk_days)
+    action_requests = dividend_chunks + split_chunks
     base_requests = price_requests + action_requests + news_chunks
     harness = validate_candidate_collection_plan(
         CandidateCollectionPlan(

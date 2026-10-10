@@ -40,7 +40,7 @@ class WikipediaUniverseCollector:
                 "prop": "revisions",
                 "titles": PAGE_TITLE,
                 "rvprop": "ids|timestamp",
-                "rvlimit": 1,
+                "rvlimit": 10,
                 "rvstart": run_spec.cutoff_at.isoformat().replace("+00:00", "Z"),
                 "rvdir": "older",
                 "format": "json",
@@ -52,24 +52,44 @@ class WikipediaUniverseCollector:
         revisions = pages[0].get("revisions", [])
         if not revisions:
             raise ValueError("Wikipedia returned no revision at or before the cutoff")
-        revision = revisions[0]
-        revision_id = int(revision["revid"])
-        revision_at = datetime.fromisoformat(revision["timestamp"].replace("Z", "+00:00"))
-        fence.require_source_available(revision_at, field="wikipedia_revision_at")
-
-        source_url = (
-            "https://en.wikipedia.org/w/index.php"
-            f"?title=List_of_S%26P_500_companies&oldid={revision_id}"
-        )
-        page_response = await self.client.get(source_url)
+        selected: tuple[int, datetime, str, bytes, tuple[UniverseMember, ...]] | None = None
+        rejected_revisions: list[int] = []
+        for revision in revisions:
+            revision_id = int(revision["revid"])
+            revision_at = datetime.fromisoformat(revision["timestamp"].replace("Z", "+00:00"))
+            fence.require_source_available(revision_at, field="wikipedia_revision_at")
+            source_url = (
+                "https://en.wikipedia.org/w/index.php"
+                f"?title=List_of_S%26P_500_companies&oldid={revision_id}"
+            )
+            page_response = await self.client.get(source_url)
+            try:
+                members = self._parse_members(page_response.text)
+            except ValueError:
+                rejected_revisions.append(revision_id)
+                continue
+            selected = (
+                revision_id,
+                revision_at,
+                source_url,
+                page_response.content,
+                members,
+            )
+            break
+        if selected is None:
+            raise ValueError(
+                "Could not find a valid S&P 500 constituents table "
+                f"in {len(revisions)} revisions at or before the cutoff"
+            )
+        revision_id, revision_at, source_url, page_content, members = selected
         observed_at = datetime.now(UTC)
         fence.require_observed(observed_at)
-        members = self._parse_members(page_response.text)
         sanitized_payload = {
             "revision_id": revision_id,
             "revision_at": revision_at.isoformat(),
             "source_url": source_url,
-            "html_sha256": hashlib.sha256(page_response.content).hexdigest(),
+            "html_sha256": hashlib.sha256(page_content).hexdigest(),
+            "rejected_revision_ids": rejected_revisions,
             "members": [
                 {
                     "symbol": item.symbol,

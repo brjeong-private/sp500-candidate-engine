@@ -186,8 +186,8 @@ optional dataset 실패는 해당 signal을 비활성화하고 stale/failed 상�
 | 공급자 | 정상 요청량 | 최악 경로 |
 |---|---:|---:|
 | Massive price | grouped 1회 | per-ticker 503회, 약 101분 |
-| Massive splits | 1회 + pagination | 반환량에 따른 page 수 |
-| Massive dividends | 1회 + pagination | 반환량에 따른 page 수 |
+| Massive splits | 31일 비중첩 chunk + pagination | chunk별 최대 100 page |
+| Massive dividends | 31일 비중첩 chunk + pagination | 요청 종료일 이후 90일 포함, chunk별 최대 100 page |
 | Massive news | 1회 + pagination | 무료 범위와 page cap 적용 |
 | SEC | ticker JSON 1 + bulk ZIP 2 | 변경 없으면 304 |
 | Alpha Vantage | earnings 전체 목록 1회 | retry 포함 최대 3회 |
@@ -273,7 +273,7 @@ Massive의 네 endpoint를 동시에 호출하는 것처럼 보이더라도 실�
 
 이 범위는 XNYS 65세션, Massive 기본 요청 81회, 최소 quota 시간 17분으로 계산된다. pagination은 별도이므로 실제 요청 수는 더 많을 수 있다. Alpha historical 요청은 0회다.
 
-현재 `run-backfill`은 Massive grouped daily 가격, 기간 범위 dividend·split·news, SEC submissions·companyfacts를 수집하고 날짜별 05:30 ET cutoff delta snapshot과 reconstruction manifest를 생성한다. Alpha historical earnings는 제외한다.
+현재 `run-backfill`은 Massive grouped daily 가격, 31일 chunk 범위 dividend·split, 주 단위 news, SEC submissions·companyfacts를 수집하고 날짜별 05:30 ET cutoff delta snapshot과 reconstruction manifest를 생성한다. Wikipedia cutoff 직전 revision에 유효한 constituents 표가 없으면 미래 revision을 사용하지 않고 이전 10개 revision 중 첫 유효 표를 선택한다. Alpha historical earnings는 제외한다.
 
 최대 데이터 backfill의 일별 cutoff는 거래 세션 다음 날 `05:30 America/New_York`로 고정한다. range raw snapshot은 parent run에만 연결하고, 뉴스 `published_at`, 배당 `declaration_date`, split `execution_date`, SEC `accepted_at`이 cutoff 이하인 항목만 날짜별 derived snapshot과 manifest에 포함한다. Alpha historical earnings는 당시 revision을 증명할 수 없어 제외한다.
 
@@ -351,7 +351,7 @@ run identifiers:
 - latest input manifest: `5cefeecc-2651-5e15-a89e-3d68302ce217`
 - latest execution context: `7f56908c-23bb-596c-926f-211d136207aa`
 
-SEC `submissions.zip`·`companyfacts.zip`은 historical backfill orchestrator에 연결됐다. 2026-04-09~2026-10-08 두 실행에서 filing 4,320건과 allowlist fact 22,816건을 적재했고, CIK와 accession의 복합 identity 및 날짜별 cutoff observation을 사용한다. 공식 calendar·halt collector와 Qlib·selection은 아직 미구현이다.
+SEC `submissions.zip`·`companyfacts.zip`은 historical backfill orchestrator에 연결됐다. 2025-10-09~2026-10-08 실행에서 filing 8,452건과 allowlist fact 50,582건을 적재했고, CIK와 accession의 복합 identity 및 날짜별 cutoff observation을 사용한다. 공식 calendar·halt collector와 Qlib·selection은 아직 미구현이다.
 
 ## 실행 명령
 
