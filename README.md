@@ -38,6 +38,8 @@ execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
 | Wikipedia revision | prototype S&P 500 universe | 구현·실제 적재 |
 | NYSE/Nasdaq | calendar, early close, halts | 미구현 |
 
+NYSE/Nasdaq 공식 원천은 거래 달력·조기 폐장·거래정지를 서로 다른 문서와 피드로 제공해 안정적인 수집·과거 재현 정책 검증이 아직 필요합니다. 현재는 `exchange_calendars`의 XNYS 세션을 기준선으로 사용하며 공식 collector는 구현하지 않았습니다.
+
 주요 제한:
 
 - Massive Stocks Basic: 분당 5회, EOD, 가격 과거 2년
@@ -50,30 +52,43 @@ execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
 
 상세 내용은 [데이터 원천·라이선스 카탈로그](.github/modernize/assessment/engines/facts/data-source-license-catalog.md)를 참고하세요.
 
-## 아키텍처
+## 전체 아키텍처
 
-<!-- mermaid-checked: no \n, no em-dash/en-dash, no {} in labels, arrows are -->|"label"|, ids unique -->
 ```mermaid
-flowchart TD
-    Scheduler["05:30 ET Daily Scheduler"] --> Preflight["Session Key Quota Check"]
-    Preflight --> Massive["Massive Shared 5 per Minute Queue"]
-    Preflight --> SEC["SEC JSON and Bulk Lane"]
-    Preflight --> Alpha["Alpha Earnings One Request"]
-    Preflight --> Reference["Universe Calendar Halt Lane"]
-    Massive --> Raw["Raw Snapshots and Hashes"]
-    SEC --> Raw
-    Alpha --> Raw
-    Reference --> Raw
-    Raw --> Normalize["Parallel Normalize"]
-    Normalize --> Fence["Temporal and Quality Gates"]
-    Fence --> PostgreSQL[("Azure PostgreSQL 16")]
-    PostgreSQL --> Features["Qlib Features Planned"]
-    Features --> Scores["Scoring Planned"]
-    Scores --> Candidates["Five to Ten Candidates Planned"]
-    Candidates --> TradingAgents["TradingAgents Boundary"]
+flowchart LR
+    subgraph Sources["데이터 원천"]
+        Massive["Massive<br/>가격·기업행위·뉴스"]
+        SEC["SEC EDGAR<br/>식별자·공시·재무"]
+        Alpha["Alpha Vantage<br/>실적 일정"]
+        Reference["Wikipedia·거래 달력<br/>참조 데이터"]
+    end
+
+    subgraph Engine["Candidate Engine - 구현"]
+        Scheduler["05:30 ET<br/>스케줄·세션 결정"]
+        Collectors["Provider별 수집<br/>quota 제어"]
+        Raw["Raw snapshot<br/>hash·provenance"]
+        Normalize["병렬 정규화"]
+        Gates["Point-in-time<br/>품질 gate"]
+        Database[("Azure PostgreSQL 16")]
+    end
+
+    subgraph Planned["후속 단계 - 미구현"]
+        Features["Qlib 특징"]
+        Scores["모델 점수·순위"]
+        Candidates["5~10개 후보"]
+        TradingAgents["TradingAgents"]
+    end
+
+    Massive --> Collectors
+    SEC --> Collectors
+    Alpha --> Collectors
+    Reference --> Collectors
+    Scheduler --> Collectors
+    Collectors --> Raw --> Normalize --> Gates --> Database
+    Database -.-> Features -.-> Scores -.-> Candidates -.-> TradingAgents
 ```
 
-전체 설계:
+상세 설계:
 
 - [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
 - [일 1회 수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)
@@ -82,6 +97,38 @@ flowchart TD
 ## 일일 파이프라인
 
 기본 스케줄은 매일 `05:30 America/New_York`입니다.
+
+### 수집 파이프라인 아키텍처
+
+```mermaid
+flowchart TD
+    Start["05:30 ET 실행"] --> Session["직전 완료 세션 결정"]
+    Session --> Preflight["Key·quota·checkpoint·DB preflight"]
+
+    Preflight --> MassiveLane["Massive lane<br/>공유 5 req/min queue"]
+    Preflight --> SecLane["SEC lane<br/>JSON·bulk ZIP"]
+    Preflight --> AlphaLane["Alpha lane<br/>전체 earnings 1회"]
+    Preflight --> RefLane["Reference lane<br/>universe·calendar"]
+
+    MassiveLane --> Raw["Atomic raw snapshot<br/>SHA-256·coverage"]
+    SecLane --> Raw
+    AlphaLane --> Raw
+    RefLane --> Raw
+
+    Raw --> MarketWorker["Market·action worker"]
+    Raw --> SecWorker["SEC worker"]
+    Raw --> EventWorker["Event worker"]
+    Raw --> RefWorker["Reference worker"]
+
+    MarketWorker --> Gate["Cutoff·manifest·품질 gate"]
+    SecWorker --> Gate
+    EventWorker --> Gate
+    RefWorker --> Gate
+
+    Gate --> Transactions["Dataset별 transaction"]
+    Transactions --> Manifest["Final input manifest"]
+    Manifest -.-> Candidate["Qlib·후보 생성<br/>미구현"]
+```
 
 1. 마지막 완료 미국 거래 세션 결정
 2. key·quota·checkpoint·DB preflight
@@ -127,6 +174,44 @@ authentication: Microsoft Entra
 | `fundamental` | SEC filing·fact와 snapshot observation |
 | `analytics` | Qlib run, 미구현 |
 | `selection` | candidate batch, 미구현 |
+
+### 데이터 스키마 ER 다이어그램
+
+아래 다이어그램은 현재 적재 경로의 핵심 테이블과 provenance 관계를 표시합니다. `analytics`와 `selection`은 논리 스키마만 예약되어 있어 제외했습니다.
+
+```mermaid
+erDiagram
+    OPS_INGESTION_RUN ||--o{ OPS_SOURCE_SNAPSHOT : produces
+    OPS_SOURCE_SNAPSHOT }o--o{ OPS_INPUT_MANIFEST : included_in
+    OPS_INPUT_MANIFEST ||--o{ OPS_EXECUTION_CONTEXT : creates
+    OPS_PROCESS_RUN ||--o{ OPS_PROCESS_DATE_STATUS : tracks
+
+    REF_ISSUER ||--o{ REF_INSTRUMENT : issues
+    REF_INSTRUMENT ||--o{ REF_INSTRUMENT_IDENTIFIER : identifies
+    REF_INSTRUMENT ||--o{ REF_INSTRUMENT_STATE : has
+    REF_UNIVERSE ||--o{ REF_UNIVERSE_VERSION : versions
+    REF_UNIVERSE_VERSION ||--o{ REF_UNIVERSE_MEMBER : contains
+    REF_INSTRUMENT ||--o{ REF_UNIVERSE_MEMBER : joins
+
+    REF_INSTRUMENT ||--o{ MARKET_DAILY_BAR : prices
+    MARKET_DAILY_BAR ||--o{ MARKET_DAILY_BAR_OBSERVATION : observed_as
+    OPS_SOURCE_SNAPSHOT ||--o{ MARKET_DAILY_BAR_OBSERVATION : records
+    REF_INSTRUMENT ||--o{ MARKET_CORPORATE_ACTION : affects
+    MARKET_CORPORATE_ACTION ||--o{ MARKET_CORPORATE_ACTION_OBSERVATION : observed_as
+    OPS_SOURCE_SNAPSHOT ||--o{ MARKET_CORPORATE_ACTION_OBSERVATION : records
+
+    EVENT_MARKET_EVENT ||--o{ EVENT_EVENT_REVISION : revises
+    EVENT_MARKET_EVENT }o--o{ REF_INSTRUMENT : maps_to
+    EVENT_EVENT_REVISION ||--o{ EVENT_EVENT_REVISION_OBSERVATION : observed_as
+    OPS_SOURCE_SNAPSHOT ||--o{ EVENT_EVENT_REVISION_OBSERVATION : records
+
+    REF_ISSUER ||--o{ FUNDAMENTAL_SEC_FILING : files
+    FUNDAMENTAL_SEC_FILING ||--o{ FUNDAMENTAL_FACT : reports
+    FUNDAMENTAL_SEC_FILING ||--o{ FUNDAMENTAL_SEC_FILING_OBSERVATION : observed_as
+    FUNDAMENTAL_FACT ||--o{ FUNDAMENTAL_FACT_OBSERVATION : observed_as
+    OPS_SOURCE_SNAPSHOT ||--o{ FUNDAMENTAL_SEC_FILING_OBSERVATION : observes
+    OPS_SOURCE_SNAPSHOT ||--o{ FUNDAMENTAL_FACT_OBSERVATION : observes
+```
 
 Migration은 [sql/](sql/)에 있으며 파일명 순서대로 적용됩니다.
 
@@ -317,34 +402,14 @@ Process 로그의 날짜별 줄:
 
 모든 초기 날짜 처리가 끝난 뒤 `RETRY_CHECK` 줄을 기록하고, 실패 날짜를 재처리할 때 같은 파일에 날짜별 `RETRY` 줄을 추가합니다.
 
-## 6개월 Backfill 실행 결과
+## Backfill 실행 결과
 
-2026-10-10에 로컬에서 두 process로 `2026-04-09`부터 `2026-10-08`까지 실행했다.
-
-| 항목 | 결과 |
-|---|---:|
-| process runs | `9822c675-f1bc-495c-b66a-ecb58f9ff689`, `9d333911-64e9-4f81-bd88-5cfc60f86bef` |
-| 상태 | 둘 다 `SUCCEEDED` |
-| XNYS 거래일 | 127/127 성공 |
-| 실패·재처리 | 0/0 |
-| Massive logical bars | 63,878 |
-| Corporate actions | 735 |
-| News events | 16,208 |
-| SEC filings | 4,320 |
-| SEC facts | 22,816 |
-| 미래 누수 | bars/actions/events/filings/facts 모두 0 |
-| 동일 payload bar/action/event revision 중복 | 0 |
-
-예상 63,881 bars와의 차이 3건은 기존 구간의 provider 원본 결측이다. VMRK(2026-08-17)와 PSKY(2026-10-06)는 해당 날짜 ticker reference도 없었고, WBD(2026-10-06)는 ticker reference는 유효하지만 aggregate가 0건이었다. 추가한 2026-04-09~2026-07-08 구간은 모든 날짜가 503 bars를 반환했다.
-
-로그와 raw payload는 Git에 올리지 않습니다.
-
-## 1년 Historical Data 결과
-
-2026-10-10에 추가 backfill과 manual retry로 `2025-10-09`~`2026-10-08` 251거래일을 적재했다. 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했다.
+2026-10-10에 로컬 backfill과 manual retry를 통해 `2025-10-09`~`2026-10-08` 1년, 251거래일을 적재했습니다. 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했습니다.
 
 | 항목 | 결과 |
 |---|---:|
+| 기간 | `2025-10-09`~`2026-10-08` |
+| XNYS 거래일 | 251 |
 | Massive logical bars | 126,233 |
 | 날짜별 universe 기준 예상 bars | 126,237 |
 | 평균 일별 coverage | 99.9968% |
@@ -357,7 +422,9 @@ Process 로그의 날짜별 줄:
 | 미래 누수 | 0 |
 | semantic duplicate revisions | 0 |
 
-기존 OHLCV는 덮어쓰지 않고 enrichment revision을 추가했다. revision 1의 `UNKNOWN` 상태와 revision 2의 `UNADJUSTED`·VWAP 보강은 서로 다른 semantic payload이며 완전 동일 revision 중복은 0이다. provider 원본 결측은 HOLX(2026-04-07), VMRK(2026-08-17), PSKY·WBD(2026-10-06) 4건이다.
+기존 OHLCV는 덮어쓰지 않고 enrichment revision을 추가했습니다. revision 1의 `UNKNOWN` 상태와 revision 2의 `UNADJUSTED`·VWAP 보강은 서로 다른 semantic payload이며 완전 동일 revision 중복은 0입니다. provider 원본 결측은 HOLX(2026-04-07), VMRK(2026-08-17), PSKY·WBD(2026-10-06) 4건입니다.
+
+로그와 raw payload는 Git에 올리지 않습니다.
 
 ## 테스트
 
@@ -406,32 +473,6 @@ Process 로그의 날짜별 줄:
 - Qlib Alpha158·LightGBM
 - 5~10개 후보 selection
 - TradingAgents downstream integration
-
-## Azure Backfill VM
-
-배포 계획은 [.azure/deployment-plan.md](.azure/deployment-plan.md)에 있습니다.
-
-West US 3 배포는 준비·검증 중 사용자가 취소했고 실제 3개월 backfill은 로컬에서 완료했다. 향후 VM 배포 시 계획과 validation을 다시 수행해야 한다.
-
-선택 구성:
-
-- West US 3
-- Existing resource group `rg-ai-project`
-- Ubuntu 24.04
-- Standard_D4as_v5, live capacity 거부 시 동일 리전 D-series fallback
-- 64 GB Standard SSD
-- Password SSH
-- System-assigned managed identity
-- VM 고정 공인 IP만 PostgreSQL public firewall에 허용
-- Auto-shutdown schedule 없음
-
-배포 스크립트:
-
-- [deploy-vm.ps1](scripts/azure/deploy-vm.ps1)
-- [upload_and_bootstrap.py](scripts/azure/upload_and_bootstrap.py)
-- [bootstrap-vm.sh](scripts/azure/bootstrap-vm.sh)
-
-VM password와 배포 출력은 `.azure/*.tmp`에 저장하며 Git에서 제외합니다.
 
 ## 라이선스 주의
 

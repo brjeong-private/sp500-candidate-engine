@@ -8,6 +8,10 @@
 - YYYY-MM-DD | 영역 | 변경 요약
 ```
 
+## 2026-10-10
+
+- 2026-10-10 | Documentation | README의 전체 아키텍처와 수집 파이프라인을 정비하고 데이터 스키마 ER 다이어그램을 추가했으며 데이터 원천 미구현 사유·1년 backfill 통합 결과를 반영하고 Azure Backfill VM 내용을 제거했다.
+
 ## 2026-10-09
 
 - 2026-10-09 | Backfill | XNYS 세션 기반 3개월 backfill dry-run 계획과 API 호출량 계산을 추가했다.
