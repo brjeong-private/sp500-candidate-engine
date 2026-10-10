@@ -314,23 +314,25 @@ Process 로그의 날짜별 줄:
 
 모든 초기 날짜 처리가 끝난 뒤 `RETRY_CHECK` 줄을 기록하고, 실패 날짜를 재처리할 때 같은 파일에 날짜별 `RETRY` 줄을 추가합니다.
 
-## 3개월 Backfill 실행 결과
+## 6개월 Backfill 실행 결과
 
-2026-10-10에 로컬에서 `2026-07-09`부터 `2026-10-08`까지 실행했다.
+2026-10-10에 로컬에서 두 process로 `2026-04-09`부터 `2026-10-08`까지 실행했다.
 
 | 항목 | 결과 |
 |---|---:|
-| process run | `9d333911-64e9-4f81-bd88-5cfc60f86bef` |
-| 상태 | `SUCCEEDED` |
-| XNYS 거래일 | 65/65 성공 |
+| process runs | `9822c675-f1bc-495c-b66a-ecb58f9ff689`, `9d333911-64e9-4f81-bd88-5cfc60f86bef` |
+| 상태 | 둘 다 `SUCCEEDED` |
+| XNYS 거래일 | 127/127 성공 |
 | 실패·재처리 | 0/0 |
-| Massive logical bars | 32,692 |
-| SEC filings | 1,974 |
-| SEC facts | 12,310 |
+| Massive logical bars | 63,878 |
+| Corporate actions | 735 |
+| News events | 16,208 |
+| SEC filings | 4,320 |
+| SEC facts | 22,816 |
 | 미래 누수 | bars/actions/events/filings/facts 모두 0 |
-| 동일 payload bar revision 중복 | 0 |
+| 동일 payload bar/action/event revision 중복 | 0 |
 
-Massive가 bar를 반환하지 않은 경고는 3건이다. VMRK(2026-08-17)와 PSKY(2026-10-06)는 해당 날짜 ticker reference도 없었고, WBD(2026-10-06)는 ticker reference는 유효하지만 aggregate가 0건이었다. 현재 Wikipedia 구성 종목을 과거 날짜에 재사용하는 `HISTORICAL_RECONSTRUCTION` 한계와 provider 원본 결측으로 보존한다.
+예상 63,881 bars와의 차이 3건은 기존 구간의 provider 원본 결측이다. VMRK(2026-08-17)와 PSKY(2026-10-06)는 해당 날짜 ticker reference도 없었고, WBD(2026-10-06)는 ticker reference는 유효하지만 aggregate가 0건이었다. 추가한 2026-04-09~2026-07-08 구간은 모든 날짜가 503 bars를 반환했다.
 
 로그와 raw payload는 Git에 올리지 않습니다.
 

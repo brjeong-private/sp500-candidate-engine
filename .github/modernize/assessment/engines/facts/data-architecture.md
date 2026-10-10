@@ -34,7 +34,7 @@
 | adjusted close | 수집 | Yahoo adjusted close를 별도 컬럼에 저장 | 공식 corporate action lineage로 재계산한 값 아님 |
 | 분할·배당 | 수집 시작 | Massive corporate-action revision 99 | 무료 플랜 과거 범위 제한, 장기 backfill 미완료 |
 | 거래 달력 | 미수집 | 0 | 공식 NYSE/Nasdaq session·조기 폐장 테이블 없음 |
-| SEC 공시 | 수집 | bulk submissions parser와 filing observation 적재 | 3개월 backfill 기준 filing 1,974건 |
+| SEC 공시 | 수집 | bulk submissions parser와 filing observation 적재 | 6개월 backfill 기준 filing 4,320건 |
 | SEC 재무 fact | 미수집 | 0 | Company Facts/XBRL parser와 concept allowlist 미구현 |
 | 실적 일정 | 수집 시작 | Alpha Vantage earnings 467 events | 오늘 이후 snapshot 축적만 가능, 과거 revision 없음 |
 | 뉴스·거래정지 | 부분 수집 | Massive news 291 events | Nasdaq halt 미구현, 뉴스 무료 과거 범위 제한 |
@@ -54,7 +54,7 @@
 | `ops` | `schema_migration`, `data_source`, `ingestion_run`, `source_snapshot`, `input_manifest`, `input_manifest_member`, `execution_context`, `data_quality_issue` | 구현 |
 | `ref` | `issuer`, `instrument`, `instrument_identifier`, `instrument_state`, `universe`, `universe_version`, `universe_member` | production reference 포함 |
 | `market` | `daily_bar`, `daily_bar_observation`, `corporate_action`, `corporate_action_observation` | production price/action 포함 |
-| `fundamental` | `sec_filing`, `sec_filing_observation`, `fact`, `fact_observation` | 3개월 backfill 적재 완료, filing 1,974건·fact 12,310건 |
+| `fundamental` | `sec_filing`, `sec_filing_observation`, `fact`, `fact_observation` | 6개월 backfill 적재 완료, filing 4,320건·fact 22,816건 |
 | `event` | `market_event`, `event_revision`, `event_revision_observation`, `event_instrument` | Massive news와 Alpha earnings 적재 |
 | `analytics` | 없음 | 목표 설계만 존재 |
 | `selection` | 없음 | 목표 설계만 존재 |

@@ -94,3 +94,6 @@
 - 2026-10-10 | Data | 2026-07-09~2026-10-08 XNYS 65개 세션 backfill을 실패·재처리 없이 완료하고 미래 누수·중복 revision 0을 검증했다.
 - 2026-10-10 | Documentation | 3개월 backfill 실측 bar·SEC 적재량과 provider 원본 결측 3건을 README·데이터 아키텍처·파이프라인 문서에 반영했다.
 - 2026-10-10 | Maintenance | 실행별 JSONL process 로그 디렉터리를 Git 추적에서 제외했다.
+- 2026-10-10 | Review | 3개월 실행 결과와 Yahoo prototype 대비 Massive historical sample의 분석 적합성을 ignored 임시 검토 파일로 작성했다.
+- 2026-10-10 | Data | 2026-04-09~2026-07-08의 62개 XNYS 세션을 추가 적재해 총 127거래일·63,878 bars의 6개월 데이터를 확보했다.
+- 2026-10-10 | Documentation | 6개월 통합 bar·action·news·SEC 적재량과 무결성 검증 결과를 README·아키텍처·임시 실행 결과에 반영했다.

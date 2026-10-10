@@ -1,6 +1,8 @@
 # Local design-review notes
 /architecture-design-review-summary.md
 /data-collection-review.md
+/backfill-execution-result.tmp.md
+/historical-data-sample-review.tmp.md
 /.azure/*.tmp
 /.azure/*.tmp.json
 
