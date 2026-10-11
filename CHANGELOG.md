@@ -10,6 +10,41 @@
 
 ## 2026-10-11
 
+- 2026-10-11 | Presentation | 최신 MEDIUM_20D 모델·하네스·Backend API·TradingAgents 외부 경계를 반영한 8장 중간발표 v4를 작성했다.
+- 2026-10-11 | MEDIUM_20D Model | 20거래일 label·purged walk-forward·scorecard 모델 선택과 다중 모델 저장/API를 구현하고 2026-10-09 SHADOW 후보 10개를 저장했다.
+- 2026-10-11 | Advanced Features | 장기 가격·SEC 가용성·총수익 label·optional Azure OpenAI 뉴스 분류와 E2~E6 readiness 계층을 추가했다.
+- 2026-10-11 | Temporal Safety | 과거 후보 export의 명시적 cutoff 선택, label 성숙 경계와 historical reconstruction 제한을 검증했다.
+- 2026-10-11 | Model Documentation | README·모델 아키텍처·모델 변경 이력과 ignored 후보 결과 파일을 MEDIUM_20D 실제 실행 결과로 갱신했다.
+- 2026-10-11 | Backend Deployment | 기본 후보 API가 MEDIUM_20D를 반환하도록 기존 App Service에 배포하고 SHORT_5D 명시 조회·포털 CORS·readiness를 운영 검증했다.
+- 2026-10-11 | API Documentation | 후보 API의 MEDIUM_20D 기본값, SHORT_5D 명시 조회, 모델 간 자동 fallback 금지와 응답 의미를 README에 명시했다.
+- 2026-10-11 | Model Architecture Documentation | 하단에 추가된 Alpha158·LightGBM·scoring·결과 계약 정보를 기존 모델 흐름에 맞춰 재배치하고 다중 기간 확장을 독립 절로 정리했다.
+- 2026-10-11 | Backend Verification Tests | 기존 실행 재검증의 중복 POST 방지, gateway 재시도 상한과 실패·성공 poll 증거의 영속화를 회귀 테스트로 검증했다.
+- 2026-10-11 | Backend DAILY Deployment | cutoff 수정본 재배포 후 운영 DAILY의 scoring·selection 성공과 고정 SHADOW 모델 기반 신규 후보 10개, 실제 포털 CORS를 확인하고 임시 배포 파일을 정리했다.
+- 2026-10-11 | Backend Gateway Diagnostics | 502.0 플랫폼 gateway 오류와 container recycle 부재를 확인하고 미확정 세부 원인·재발 대응 및 완료된 배포 검증을 운영 문서에 기록했다.
+
+- 2026-10-11 | Model Plan | 63거래일 계획을 20거래일 중기 수익률 모델로 개정하고 다중 모델 API, 검증 scorecard, E1~E6 및 Azure OpenAI 특징 계약을 확정했다.
+- 2026-10-11 | Model Plan | Azure OpenAI 뉴스 특징을 optional로 전환하고 실패 시 상태를 기록하되 미래 정보 없이 non-LLM 모델 분석을 계속하도록 정책을 수정했다.
+- 2026-10-11 | Configuration Example | Azure OpenAI endpoint·deployment·API version과 Entra service-principal 환경변수 예시를 추가했다.
+- 2026-10-11 | Backend Verification | 실행 검증의 대기 시간을 설정 가능하게 하고 run ID·응답 시각·상태·request ID를 영속 기록하며 후보 조회의 미지원 process 필터를 제거했다.
+- 2026-10-11 | Backend Artifact Deployment | 명시적 모델·manifest의 원격 checksum 검증과 Bicep checksum 설정을 추가하고 로컬 추론 검증 산출물을 Git 제외했다.
+
+- 2026-10-11 | Backend Inference Cutoff | API 추론 export에 요청 session의 결정 cutoff를 명시해 재수집 관찰 시각이 상속되어 과거 후보 생성이 차단되는 오류를 수정하고 CLI export 기본 동작을 보존했다.
+
+- 2026-10-11 | Backend Live | 전용 B3 App Service에 API를 배포하고 Managed Identity PostgreSQL 조회, 인증된 RANGE 완료와 실제 종목토론방 브라우저 CORS 호출을 검증했다.
+
+- 2026-10-11 | Backend Plan | PostgreSQL 단일 원본, 비동기 실행·후보·실행 이력·8개 데이터셋 API, 10일 조회 제한과 App Service 배포·검증 계획을 작성했다.
+- 2026-10-11 | Backend Foundation | FastAPI application factory, 정확한 포털 Origin CORS, 실행 API Key 인증, 표준 오류·request ID·상태 확인 API와 backend 의존성을 추가했다.
+- 2026-10-11 | Backend Read APIs | 날짜별 최신 성공 후보, 필터 결합 서명 커서, 8개 정규화 데이터셋의 10일 조회 및 provenance와 API 실행 상태·날짜별 attempt 조회를 typed 모델과 SQL/API 테스트로 추가했다.
+- 2026-10-11 | Backend Status | API 후보 생성이 진행 중이면 수집 완료 시각을 상속하지 않고 API 소유 finished_at의 null 상태를 유지하도록 조회와 회귀 테스트를 보강했다.
+- 2026-10-11 | Backend Execution | 거래일·완료 cutoff·provider 범위를 검증한 API 접수를 원자적으로 영속화하고 동일 run ID, RANGE child ID, 전역 활성 작업 제한, API 소유 중단 복구와 후보 추론 warm-up export를 기존 배치 함수에 연결했다.
+- 2026-10-11 | Backend Operations Docs | API 소유 상태·중단 복구, inference-only DAILY의 고정 model/manifest hash·설정 기반 61-session 이력·영속 출력 경로와 공유 B1의 미검증 용량 제한을 문서화했다.
+- 2026-10-11 | Backend Workspace | BACKEND_WORKSPACE_DIR와 명시적 model manifest·checksum 환경 설정을 기존 service 생성자에 연결하고 Qlib·후보 출력을 영속 workspace에 저장하면서 배포된 config·SQL 경로와 분리했다.
+- 2026-10-11 | Model Core | 기존 5일 경로를 보존하면서 versioned 20-session label·LightGBM config와 horizon별 학습·평가·scoring 전파를 추가했다.
+- 2026-10-11 | Model Safety | 20일 E1 scoring의 LLM 비의존성을 명시하고 historical cutoff 선택과 fit 시점 label 성숙도 검사를 fail-closed로 강화했다.
+- 2026-10-11 | Backend Model Provisioning | 명시적으로 선택한 registry LightGBM과 parquet feature 순서를 검증해 weights 및 checksum manifest만 배치하는 artifact 준비 도구를 추가했다.
+- 2026-10-11 | Backend Least Privilege | API 소유 DAILY·BACKFILL은 runtime migration을 생략하고 일별 수집의 DDL을 명시적으로 비활성화하면서 CLI의 자동 migration 기본 동작을 보존했다.
+- 2026-10-11 | Backend Deployment | 포털을 변경하지 않는 별도 App Service Bicep, 비밀값 제외 source ZIP, Entra DB 권한 부여 도구와 운영 문서를 추가했다.
+
 - 2026-10-11 | Backfill | Massive Basic 허용 범위 내 추가 1년 248 sessions를 실패·재처리 없이 적재해 전체 500 sessions를 확보했다.
 - 2026-10-11 | Data Quality | 2년 범위 미래 데이터 위반 0, semantic duplicate 0, SPY 500/500, blocking issue 0을 검증했다.
 - 2026-10-11 | Model Retraining | 2년 Qlib export 251,471행으로 Model v2를 재학습하고 LightGBM SHADOW 후보 10개를 갱신했다.

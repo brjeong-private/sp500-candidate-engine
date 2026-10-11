@@ -1,0 +1,41 @@
+name: alpha158-lightgbm-forward-return-20d
+version: "1"
+seed: 42
+model_purpose: MEDIUM_20D
+prediction_semantics: PREDICTED_20D_RETURN
+return_policy: PRICE_RETURN
+experiment:
+  code: E1
+  feature_set: ALPHA158
+  requires_news_llm: false
+model:
+  loss: mse
+  learning_rate: 0.03
+  num_leaves: 31
+  max_depth: 6
+  min_data_in_leaf: 20
+  feature_fraction: 0.8
+  bagging_fraction: 0.8
+  bagging_freq: 1
+  lambda_l1: 0.1
+  lambda_l2: 1.0
+  num_threads: 4
+  deterministic: true
+  force_col_wise: true
+  num_boost_round: 300
+  early_stopping_rounds: 30
+walk_forward:
+  minimum_train_sessions: 100
+  validation_sessions: 40
+  test_sessions: 40
+  step_sessions: 20
+  minimum_test_sessions: 40
+  purge_by_label_exit: true
+evaluation:
+  top_k: [5, 10]
+  holding_period_sessions: 20
+  round_trip_cost_bps: 10
+  overlapping_cohort_allocation: 0.05
+baselines:
+  momentum_lookback_sessions: 20
+  ridge_alpha: 10.0

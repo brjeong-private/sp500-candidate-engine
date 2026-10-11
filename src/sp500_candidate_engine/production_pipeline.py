@@ -74,6 +74,7 @@ async def collect_production_inputs(
     *,
     target_date: date,
     knowledge_mode: KnowledgeMode = KnowledgeMode.OPERATIONAL_REPLAY,
+    migrate_database: bool = True,
 ) -> ProductionPersistedRun:
     if settings.massive_api_key is None:
         raise ValueError("MASSIVE_API_KEY is not configured")
@@ -92,8 +93,9 @@ async def collect_production_inputs(
     )
     logger = PipelineLogger(settings.log_dir)
     database = Database(settings)
-    with logger.stage(target_date, "production_database_migration"):
-        await asyncio.to_thread(database.migrate)
+    if migrate_database:
+        with logger.stage(target_date, "production_database_migration"):
+            await asyncio.to_thread(database.migrate)
 
     provisional_spec = RunSpec(
         target_date=target_date,

@@ -27,3 +27,18 @@ def test_model_version_identity_is_artifact_and_config_bound() -> None:
         }
     )
     assert model_version_id(registration) != model_version_id(changed)
+
+    medium_horizon = ModelRegistration(
+        **{
+            **registration.__dict__,
+            "model_purpose": "MEDIUM_20D",
+        }
+    )
+    total_return = ModelRegistration(
+        **{
+            **registration.__dict__,
+            "return_policy": "TOTAL_RETURN",
+        }
+    )
+    assert model_version_id(registration) != model_version_id(medium_horizon)
+    assert model_version_id(registration) != model_version_id(total_return)

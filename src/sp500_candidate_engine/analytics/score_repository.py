@@ -22,17 +22,23 @@ class ScoreRepository:
         universe_version_id: uuid.UUID,
         config_hash: str,
         score_semantics: str = "PREDICTED_5D_RETURN",
+        prediction_horizon_sessions: int = 5,
     ) -> uuid.UUID:
-        key = _canonical_hash(
-            {
-                "session_date": session_date,
-                "execution_context_id": execution_context_id,
-                "export_run_id": export_run_id,
-                "model_version_id": model_version_id,
-                "universe_version_id": universe_version_id,
-                "config_hash": config_hash,
-            }
-        )
+        identity = {
+            "session_date": session_date,
+            "execution_context_id": execution_context_id,
+            "export_run_id": export_run_id,
+            "model_version_id": model_version_id,
+            "universe_version_id": universe_version_id,
+            "config_hash": config_hash,
+        }
+        if (score_semantics, prediction_horizon_sessions) != (
+            "PREDICTED_5D_RETURN",
+            5,
+        ):
+            identity["score_semantics"] = score_semantics
+            identity["prediction_horizon_sessions"] = prediction_horizon_sessions
+        key = _canonical_hash(identity)
         run_id = _stable_uuid("scoring-run", key)
         self.connection.execute(  # type: ignore[attr-defined]
             """

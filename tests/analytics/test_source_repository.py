@@ -170,3 +170,41 @@ def test_read_bars_is_manifest_and_cutoff_constrained() -> None:
     assert "market.daily_bar_observation" in connection.sql[1]
     assert "obs.observed_at <= ec.cutoff_at" in connection.sql[1]
     assert connection.params[0][0] == context_id
+
+
+def test_read_sec_facts_is_manifest_and_cutoff_constrained() -> None:
+    context_id = uuid.uuid4()
+    issuer_id = uuid.uuid4()
+    connection = _Connection([[]])
+
+    SourceRepository(connection).read_sec_facts(  # type: ignore[arg-type]
+        execution_context_id=context_id,
+        issuer_id=issuer_id,
+        period_end_on_or_before=date(2025, 12, 31),
+    )
+
+    sql = connection.sql[0]
+    assert "ops.input_manifest_member" in sql
+    assert "fundamental.fact_observation" in sql
+    assert "fact.source_available_at <= ec.cutoff_at" in sql
+    assert "filing.accepted_at <= ec.cutoff_at" in sql
+    assert "obs.observed_at <= ec.cutoff_at" in sql
+
+
+def test_read_actions_is_manifest_and_cutoff_constrained() -> None:
+    context_id = uuid.uuid4()
+    instrument_id = uuid.uuid4()
+    connection = _Connection([[]])
+
+    SourceRepository(connection).read_corporate_actions(  # type: ignore[arg-type]
+        execution_context_id=context_id,
+        instrument_id=instrument_id,
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 31),
+    )
+
+    sql = connection.sql[0]
+    assert "ops.input_manifest_member" in sql
+    assert "market.corporate_action_observation" in sql
+    assert "action.source_available_at <= ec.cutoff_at" in sql
+    assert "obs.observed_at <= ec.cutoff_at" in sql

@@ -1,0 +1,2 @@
+# Oryx installs the local project and declared backend/analytics extras.
+.[backend,analytics]

@@ -181,7 +181,8 @@ class SourceRepository:
             )
             SELECT
                 instrument_id, session_date, source_id, revision_no,
-                open, high, low, close, volume, vwap,
+                open, high, low, close, adjusted_close, volume, vwap,
+                price_adjustment_status, volume_adjustment_status,
                 source_available_at, manifest_observed_at AS observed_at
             FROM manifest_bars
             WHERE selected_revision = 1
@@ -190,3 +191,97 @@ class SourceRepository:
             (execution_context_id, start_date, end_date),
         ).fetchall()
         return rows
+
+    def read_sec_facts(
+        self,
+        *,
+        execution_context_id: uuid.UUID,
+        issuer_id: uuid.UUID,
+        period_end_on_or_before: date,
+    ) -> list[dict[str, object]]:
+        return self.connection.execute(
+            """
+            WITH manifest_facts AS (
+                SELECT
+                    fact.*, filing.accession_no, filing.accepted_at,
+                    obs.observed_at AS manifest_observed_at,
+                    imm.precedence,
+                    row_number() OVER (
+                        PARTITION BY fact.context_hash
+                        ORDER BY imm.precedence DESC, obs.observed_at DESC
+                    ) AS selected_revision
+                FROM ops.execution_context ec
+                JOIN ops.input_manifest_member imm
+                  ON imm.input_manifest_id = ec.input_manifest_id
+                JOIN fundamental.fact_observation obs
+                  ON obs.source_snapshot_id = imm.source_snapshot_id
+                JOIN fundamental.fact fact ON fact.fact_id = obs.fact_id
+                JOIN fundamental.sec_filing filing
+                  ON filing.filing_id = fact.filing_id
+                WHERE ec.execution_context_id = %s
+                  AND fact.issuer_id = %s
+                  AND fact.period_end <= %s
+                  AND fact.source_available_at <= ec.cutoff_at
+                  AND filing.accepted_at <= ec.cutoff_at
+                  AND (
+                      ec.knowledge_mode <> 'OPERATIONAL_REPLAY'
+                      OR obs.observed_at <= ec.cutoff_at
+                  )
+            )
+            SELECT
+                fact_id, filing_id, accession_no, accepted_at, taxonomy,
+                concept, unit, period_start, period_end, value_numeric,
+                fiscal_year, fiscal_period, frame, context_hash,
+                source_available_at, manifest_observed_at AS observed_at
+            FROM manifest_facts
+            WHERE selected_revision = 1
+            ORDER BY period_end, accepted_at, concept
+            """,
+            (execution_context_id, issuer_id, period_end_on_or_before),
+        ).fetchall()
+
+    def read_corporate_actions(
+        self,
+        *,
+        execution_context_id: uuid.UUID,
+        instrument_id: uuid.UUID,
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, object]]:
+        return self.connection.execute(
+            """
+            WITH manifest_actions AS (
+                SELECT
+                    action.*,
+                    obs.observed_at AS manifest_observed_at,
+                    imm.precedence,
+                    row_number() OVER (
+                        PARTITION BY action.source_id, action.source_action_id
+                        ORDER BY imm.precedence DESC, action.revision_no DESC
+                    ) AS selected_revision
+                FROM ops.execution_context ec
+                JOIN ops.input_manifest_member imm
+                  ON imm.input_manifest_id = ec.input_manifest_id
+                JOIN market.corporate_action_observation obs
+                  ON obs.source_snapshot_id = imm.source_snapshot_id
+                JOIN market.corporate_action action
+                  ON action.action_id = obs.action_id
+                WHERE ec.execution_context_id = %s
+                  AND action.instrument_id = %s
+                  AND action.effective_date BETWEEN %s AND %s
+                  AND action.source_available_at <= ec.cutoff_at
+                  AND (
+                      ec.knowledge_mode <> 'OPERATIONAL_REPLAY'
+                      OR obs.observed_at <= ec.cutoff_at
+                  )
+            )
+            SELECT
+                action_id, action_type, effective_date, cash_amount, currency,
+                split_from, split_to, source_available_at,
+                manifest_observed_at AS observed_at
+            FROM manifest_actions
+            WHERE selected_revision = 1
+            ORDER BY effective_date, action_id
+            """,
+            (execution_context_id, instrument_id, start_date, end_date),
+        ).fetchall()

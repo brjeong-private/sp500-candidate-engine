@@ -6,7 +6,10 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 
 프로젝트의 전체 범위는 `수집 -> 전처리 -> 모델 점수 -> 후보 선정`까지입니다. TradingAgents를 포함한 후보 이후 분석은 별도 프로젝트에서 구현합니다. 공통 무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
 
-현재 model v2는 개별 종목의 `D+1 adjusted open -> D+5 adjusted close` raw 수익률을 예측합니다. SPY는 optional 비교 지표이며 학습 label에서 차감하지 않습니다. 모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)에 기록합니다.
+현재 `SHORT_5D` model v2와 `MEDIUM_20D` model v1을 독립 보존합니다.
+두 모델은 각각 `D+1 adjusted open -> D+5/D+20 adjusted close` raw 수익률을
+예측합니다. SPY는 optional 비교 지표이며 학습 label에서 차감하지 않습니다.
+모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)에 기록합니다.
 
 ## 현재 상태
 
@@ -25,9 +28,10 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 | ACTIVE production 품질 이슈 | 0개 |
 | Qlib historical export | 500 sessions, 251,471 rows |
 | Alpha158 | 158 features |
-| 일일 score | 503개 |
-| 후보 | 10개, SHADOW model |
-| score 의미 | 향후 5거래일 예측 수익률 |
+| SHORT_5D 후보 | 10개, SHADOW model |
+| MEDIUM_20D 후보 | 10개, SHADOW model |
+| MEDIUM_20D score 의미 | 향후 20거래일 예측 수익률 |
+| MEDIUM_20D OOS Rank IC | 0.006072 |
 
 Production identifiers:
 
@@ -38,7 +42,15 @@ execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
 latest_export_run_id b47ef1cc-fd0b-5c75-a0c4-e38e89c0a889
 latest_scoring_run_id fa74d683-2c11-521b-a791-5e6496920834
 latest_selection_run_id b87800b5-8cd3-5634-91bb-b91b74a47690
+medium20_export_run_id da7992fc-f64f-53a3-893f-21b1b79bc507
+medium20_model_version_id 74c367e9-bd84-58ab-b933-19a36dae35c4
+medium20_scoring_run_id cd46b3d6-dac2-5d26-b102-499641222d49
+medium20_selection_run_id 52d72987-ddf0-5a7f-9be7-1fc11aef5960
 ```
+
+배포된 후보 API는 옵션이 없으면 `MEDIUM_20D`를 반환합니다.
+기존 5거래일 결과는 `model_purpose=SHORT_5D`로 조회하며, 한 모델 목적의 결과가
+없을 때 다른 모델로 자동 대체하지 않습니다.
 
 ## 데이터 원천
 

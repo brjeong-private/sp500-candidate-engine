@@ -1,12 +1,14 @@
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from sp500_candidate_engine.analytics.labels import (
+    LabelCorporateAction,
     LabelPrice,
     generate_excess_return_labels,
     generate_forward_return_labels,
+    generate_total_return_labels,
 )
 
 
@@ -133,3 +135,80 @@ def test_raw_return_label_does_not_require_spy() -> None:
     assert label.benchmark_return is None
     assert label.entry_session_date == calendar[1]
     assert label.exit_session_date == calendar[5]
+
+
+def test_twenty_session_label_uses_next_open_and_d_plus_twenty_close() -> None:
+    calendar = tuple(date(2026, 1, 1 + offset) for offset in range(22))
+    stock = {session: _price(session, 100, 100) for session in calendar}
+    stock[calendar[20]] = _price(calendar[20], 125, 125)
+
+    label = generate_forward_return_labels(
+        instrument_id=uuid.uuid4(),
+        calendar=calendar,
+        stock_prices=stock,
+        benchmark_prices=None,
+        horizon_sessions=20,
+    )[0]
+
+    assert label.entry_session_date == calendar[1]
+    assert label.exit_session_date == calendar[20]
+    assert label.label_value == pytest.approx(0.25)
+
+
+def test_twenty_session_total_return_keeps_dividends_as_cash_and_changes_quantity() -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(22))
+    prices = {session: _price(session, 100, 100) for session in calendar}
+    prices[calendar[20]] = _price(calendar[20], 50, 50)
+
+    label = generate_total_return_labels(
+        instrument_id=uuid.uuid4(),
+        calendar=calendar,
+        stock_prices=prices,
+        corporate_actions=(
+            LabelCorporateAction(
+                effective_date=calendar[10],
+                action_type="SPLIT",
+                split_from=1,
+                split_to=2,
+            ),
+            LabelCorporateAction(
+                effective_date=calendar[15],
+                action_type="DIVIDEND",
+                cash_amount=1,
+            ),
+        ),
+    )[0]
+
+    # Buy one share for 100, split to two, receive $2 cash, exit value is $102.
+    assert label.raw_return == pytest.approx(0.02)
+    assert label.label_value == pytest.approx(0.02)
+    assert label.exit_session_date == calendar[20]
+    assert label.quality_status == "OK"
+
+
+def test_total_return_label_fails_closed_on_duplicate_split_actions() -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(22))
+    prices = {session: _price(session, 100, 100) for session in calendar}
+
+    label = generate_total_return_labels(
+        instrument_id=uuid.uuid4(),
+        calendar=calendar,
+        stock_prices=prices,
+        corporate_actions=(
+            LabelCorporateAction(
+                effective_date=calendar[10],
+                action_type="SPLIT",
+                split_from=1,
+                split_to=2,
+            ),
+            LabelCorporateAction(
+                effective_date=calendar[10],
+                action_type="SPLIT",
+                split_from=1,
+                split_to=3,
+            ),
+        ),
+    )[0]
+
+    assert label.label_value is None
+    assert label.quality_status == "INVALID_CORPORATE_ACTION"

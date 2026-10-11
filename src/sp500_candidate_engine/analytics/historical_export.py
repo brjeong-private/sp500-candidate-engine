@@ -80,15 +80,25 @@ class HistoricalQlibExportService:
         end_date: date,
         output_root: Path,
         qlib_version: str,
+        decision_cutoff: datetime | None = None,
+        require_snapshot_available_by_cutoff: bool = False,
     ) -> HistoricalExportSummary:
         if start_date > end_date:
             raise ValueError("start_date must be on or before end_date")
+        if require_snapshot_available_by_cutoff and decision_cutoff is None:
+            raise ValueError(
+                "decision_cutoff is required when snapshot availability is enforced"
+            )
         with self.database.connect() as connection:
             with connection.transaction():
                 context_id, universe_version_id, cutoff_at = self._create_context(
                     connection,
                     start_date=start_date,
                     end_date=end_date,
+                    decision_cutoff=decision_cutoff,
+                    require_snapshot_available_by_cutoff=(
+                        require_snapshot_available_by_cutoff
+                    ),
                 )
             calendar = build_exchange_calendar(
                 exchange_mic="XNYS",
@@ -183,6 +193,8 @@ class HistoricalQlibExportService:
         *,
         start_date: date,
         end_date: date,
+        decision_cutoff: datetime | None = None,
+        require_snapshot_available_by_cutoff: bool = False,
     ) -> tuple[uuid.UUID, uuid.UUID, datetime]:
         rows = connection.execute(
             """
@@ -206,6 +218,22 @@ class HistoricalQlibExportService:
                 WHERE ir.dataset_code = ANY(%s::text[])
                   AND ir.status = 'SUCCEEDED'
                   AND ir.target_date BETWEEN %s AND %s
+                  AND (
+                      %s::boolean = false
+                      OR (
+                          ec.cutoff_at <= %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM ops.input_manifest_member cutoff_member
+                              JOIN ops.source_snapshot cutoff_snapshot
+                                ON cutoff_snapshot.source_snapshot_id =
+                                   cutoff_member.source_snapshot_id
+                              WHERE cutoff_member.input_manifest_id =
+                                    ec.input_manifest_id
+                                AND cutoff_snapshot.source_available_at > %s
+                          )
+                      )
+                  )
             )
             SELECT DISTINCT
                 ss.source_snapshot_id, ss.dataset_code, ss.snapshot_kind,
@@ -218,6 +246,10 @@ class HistoricalQlibExportService:
               ON ss.source_snapshot_id = imm.source_snapshot_id
             WHERE rc.context_rank = 1
               AND ss.dataset_code = ANY(%s::text[])
+              AND (
+                  %s::boolean = false
+                  OR ss.source_available_at <= %s
+              )
             ORDER BY ss.dataset_code, ss.coverage_start, ss.source_snapshot_id
             """,
             (
@@ -225,7 +257,12 @@ class HistoricalQlibExportService:
                 ["massive_price_backfill", "production_daily_input"],
                 start_date,
                 end_date,
+                require_snapshot_available_by_cutoff,
+                decision_cutoff,
+                decision_cutoff,
                 list(self.DATASET_CODES),
+                require_snapshot_available_by_cutoff,
+                decision_cutoff,
             ),
         ).fetchall()
         if not rows:
@@ -234,8 +271,7 @@ class HistoricalQlibExportService:
         missing_parent_ids = {
             row["parent_snapshot_id"]
             for row in rows
-            if row["parent_snapshot_id"] is not None
-            and row["parent_snapshot_id"] not in by_id
+            if row["parent_snapshot_id"] is not None and row["parent_snapshot_id"] not in by_id
         }
         while missing_parent_ids:
             parents = connection.execute(
@@ -246,8 +282,16 @@ class HistoricalQlibExportService:
                     source_available_at AS cutoff_at
                 FROM ops.source_snapshot
                 WHERE source_snapshot_id = ANY(%s::uuid[])
+                  AND (
+                      %s::boolean = false
+                      OR source_available_at <= %s
+                  )
                 """,
-                (list(missing_parent_ids),),
+                (
+                    list(missing_parent_ids),
+                    require_snapshot_available_by_cutoff,
+                    decision_cutoff,
+                ),
             ).fetchall()
             if len(parents) != len(missing_parent_ids):
                 raise RuntimeError("Historical snapshot parent lineage is incomplete")
@@ -256,8 +300,7 @@ class HistoricalQlibExportService:
             missing_parent_ids = {
                 row["parent_snapshot_id"]
                 for row in parents
-                if row["parent_snapshot_id"] is not None
-                and row["parent_snapshot_id"] not in by_id
+                if row["parent_snapshot_id"] is not None and row["parent_snapshot_id"] not in by_id
             }
 
         snapshots = list(by_id.values())
@@ -332,7 +375,11 @@ class HistoricalQlibExportService:
                 for snapshot_id, dataset_code, precedence, role in member_rows
             ],
         )
-        cutoff_at = max(row["cutoff_at"] for row in rows)  # type: ignore[type-var]
+        cutoff_at = (
+            decision_cutoff
+            if decision_cutoff is not None
+            else max(row["cutoff_at"] for row in rows)  # type: ignore[type-var]
+        )
         context_hash = _canonical_hash(
             {
                 "input_manifest_id": manifest_id,

@@ -142,6 +142,24 @@ class ProcessTracker:
             started_counter=time.perf_counter(),
         )
 
+    def resume_run(self, process_run_id: uuid.UUID, *, log_uri: str) -> None:
+        row = (
+            self._require_connection()
+            .execute(
+                """
+            UPDATE ops.process_run
+               SET status = 'RUNNING', started_at = now(), heartbeat_at = now(),
+                   log_uri = %s
+             WHERE process_run_id = %s AND status = 'PENDING'
+            RETURNING process_run_id
+            """,
+                (log_uri, process_run_id),
+            )
+            .fetchone()
+        )
+        if row is None:
+            raise RuntimeError("Accepted process is missing or no longer pending")
+
     def finish_attempt(
         self,
         handle: AttemptHandle,

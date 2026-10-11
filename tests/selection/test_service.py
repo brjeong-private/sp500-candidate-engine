@@ -36,10 +36,18 @@ def test_candidate_result_contract_includes_temporal_identity() -> None:
         generated_at=datetime(2026, 10, 9, 10, 0, tzinfo=UTC),
         policy_version="1",
         result=result,
+        model_purpose="MEDIUM_20D",
+        prediction_horizon_sessions=20,
+        return_policy="PRICE_RETURN",
+        promotion_status="SHADOW",
     )
 
     assert payload["selection_type"] == "QUANTITATIVE"
     assert payload["model_status"] == "SHADOW"
+    assert payload["promotion_status"] == "SHADOW"
+    assert payload["model_purpose"] == "MEDIUM_20D"
+    assert payload["prediction_horizon_sessions"] == 20
+    assert payload["return_policy"] == "PRICE_RETURN"
     assert payload["promotion_gate_passed"] is False
     assert payload["candidates"][0]["predicted_return"] == 0.5
     assert payload["candidates"][0]["predicted_return_positive"] is True

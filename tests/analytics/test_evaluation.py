@@ -63,3 +63,23 @@ def test_overlapping_predictions_keep_earliest_fold_for_each_date_instrument() -
 
     assert len(result) == 1
     assert result.iloc[0]["fold"] == 1
+
+
+def test_twenty_session_walk_forward_uses_full_forty_session_windows() -> None:
+    dates = tuple(pd.bdate_range("2025-01-01", periods=220))
+
+    folds = build_walk_forward_folds(
+        dates,
+        WalkForwardSpec(
+            minimum_train_sessions=100,
+            validation_sessions=40,
+            test_sessions=40,
+            step_sessions=20,
+            minimum_test_sessions=40,
+        ),
+    )
+
+    assert len(folds) == 3
+    assert all((fold.valid_end - fold.valid_start).days >= 39 for fold in folds)
+    assert all((fold.test_end - fold.test_start).days >= 39 for fold in folds)
+    assert folds[1].train_end == dates[119]

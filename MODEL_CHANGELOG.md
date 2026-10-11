@@ -2,6 +2,31 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## MEDIUM_20D v1 — 2026-10-11
+
+- 기존 `SHORT_5D`를 보존하고 Alpha158·LightGBM 기반 20거래일 raw-return
+  회귀 모델을 별도 `MEDIUM_20D` 목적으로 등록했다.
+- label은 `D+20 adjusted close / D+1 adjusted open - 1`이다.
+- 100/40/40 sessions, step 20의 purged walk-forward를 사용했다.
+- 2026-10-09 후보는 공식 cutoff의 500-session historical reconstruction
+  export에서 생성했다.
+
+```text
+export_run_id: da7992fc-f64f-53a3-893f-21b1b79bc507
+model_version_id: 74c367e9-bd84-58ab-b933-19a36dae35c4
+scoring_run_id: cd46b3d6-dac2-5d26-b102-499641222d49
+selection_run_id: 52d72987-ddf0-5a7f-9be7-1fc11aef5960
+label_semantics: RAW_STOCK_20D_RETURN
+score_semantics: PREDICTED_20D_RETURN
+Rank IC mean: 0.006072
+Top-10 net return at 10 bps: 3.0515%
+promotion_status: SHADOW
+```
+
+가격 session과 label exit는 target date 이하로 제한했다. 당시 관찰 snapshot의
+완전한 operational replay는 아니므로 결과를 `HISTORICAL_RECONSTRUCTION`으로
+분류한다. Azure OpenAI 뉴스 특징은 optional이며 이번 모델 입력에는 포함하지 않았다.
+
 ## v2 two-year retrain — 2026-10-11
 
 - 동일 v2 raw-return 계약과 hyperparameter를 2024-10-11~2026-10-09 500 sessions로 재학습했다.

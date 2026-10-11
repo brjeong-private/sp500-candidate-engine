@@ -1,6 +1,218 @@
 # Azure Deployment Plan
 
-Status: Cancelled - local backfill selected
+Status: Deployed
+
+## Active deployment update: MEDIUM_20D backend (2026-10-11)
+
+Deploy the existing backend App Service source with the additive multi-model API and
+MEDIUM_20D candidate contract. Do not provision or modify infrastructure.
+
+### Scope
+
+- Target existing app `web-sp500-candidate-8d0218f4` in `rg-ai-project`.
+- Keep existing dedicated Linux B3 plan, Python 3.11, one worker and Managed Identity.
+- Package source only; never include `.env`, model outputs, raw data or credentials.
+- Database migrations `018_multi_model_support` and
+  `019_advanced_feature_availability` are already applied by the Entra administrator.
+- Default `GET /api/v1/candidates` must return `MEDIUM_20D`.
+- Explicit `model_purpose=SHORT_5D` must preserve the existing five-session model.
+- Missing MEDIUM_20D results must not silently fallback to SHORT_5D.
+- Azure OpenAI news classification remains optional and is not required for API startup.
+- No portal deployment or infrastructure change.
+
+### Update checklist
+
+- [x] MEDIUM_20D model trained and 2026-10-09 candidates persisted
+- [x] Additive database migrations applied and existing SHORT_5D models preserved
+- [x] Full application tests, Ruff, compile and package exclusion checks
+- [x] Local API default/explicit-purpose functional verification
+- [x] Source ZIP generation and secret scan
+- [x] Azure validation handoff complete
+- [x] Existing App Service ZIP deployment complete
+- [x] Live readiness, default MEDIUM_20D, SHORT_5D and portal CORS verified
+
+### Update functional verification
+
+- Full Python suite: 214 passed using `.venv-alpha158`.
+- Ruff `src backend tests scripts`: passed.
+- `compileall src backend`: passed.
+- Local `/health/ready`: 200/ready.
+- Local candidate GET without `model_purpose`: 10 `MEDIUM_20D`, horizon 20.
+- Local explicit `model_purpose=SHORT_5D`: 10 `SHORT_5D`, horizon 5.
+- No Azure OpenAI configuration is required for backend startup or candidate reads.
+
+### Update validation proof
+
+- Azure CLI context: subscription `8d0218f4-f340-446d-b76a-3ff419b03e77`.
+- Deployment ZIP: 124 entries, forbidden secret/raw/output paths 0.
+- Bicep build: passed; only BCP081 type-availability warnings for the selected API version.
+- ARM group validate: passed.
+- ResourceIdOnly what-if: existing `asp-sp500-candidate` and
+  `web-sp500-candidate-8d0218f4` Deploy, portal and unrelated resources Ignore,
+  no Delete.
+- The installed azure-validate `references/scripts` directory was empty. The official
+  `microsoft/azure-skills` workflow helper was fetched from the trusted upstream
+  repository and completed after the equivalent checks above.
+
+### Update deployment verification
+
+- OneDeploy ID: `22c85d46-51e4-4b65-b2c7-0c4206df6ec6`
+- Runtime status: successful, one instance succeeded, zero failed.
+- Kudu deployment status 4, complete/active, errors 0, warnings 0.
+- App Service: Running in Korea Central on existing `asp-sp500-candidate`.
+- `GET /health/ready`: 200, `ready`.
+- Candidate GET without model option: 10 `MEDIUM_20D`, horizon 20.
+- Explicit `model_purpose=SHORT_5D`: 10 `SHORT_5D`, horizon 5.
+- Portal-origin browser fetch: 200, 10 `MEDIUM_20D`, horizon 20.
+- Managed identity Azure RBAC assignments at app scope: none, as designed.
+- PostgreSQL data-plane access: verified through live readiness and candidate reads.
+- AppServiceConsoleLogs table was not yet available in Log Analytics; Kudu deployment
+  logs and live endpoint verification provide deployment/runtime evidence.
+
+### All update validation checks pass
+
+- [x] Application tests, lint, compile and editor diagnostics
+- [x] Deployment package content and secret exclusion
+- [x] Bicep build and ARM group validate
+- [x] ResourceIdOnly what-if with no deletes or portal changes
+- [x] Static Managed Identity and least-privilege data-plane grant review
+- [x] Local runtime readiness and MEDIUM_20D/SHORT_5D endpoint verification
+
+## Active deployment: Backend API (2026-10-11)
+
+Implement `backend/plan.md` and deploy a separate Linux App Service with Python 3.11,
+single Uvicorn worker, Always On, Managed Identity PostgreSQL access, and exact
+TradingAgents portal Origin CORS. Use Bicep and Azure CLI zip deployment.
+Existing portal must not be redeployed.
+
+### Confirmed execution context
+
+- Subscription: ME-MngEnvMCAP572020-annajeong-1 (`8d0218f4-f340-446d-b76a-3ff419b03e77`).
+- Resource group: existing `rg-ai-project` (RG metadata location West US 3).
+- App and PostgreSQL region: **Korea Central**, explicitly set regardless of RG metadata.
+- App: `web-sp500-candidate-8d0218f4`; dedicated Linux B3 `asp-sp500-candidate`.
+- No change to the existing portal container, configuration, or plan size.
+- One single-worker API app; no scale-out and no durable queue promise.
+- PostgreSQL: `pg-jongmok-candidate-8d0218f4`, Entra-only, TLS, database `candidate_engine`.
+- Secrets: secure Bicep parameters into encrypted App Settings, never ZIP contents.
+- API key generated locally into ignored `backend/.env`; parameter file removed after deployment.
+- User requested implementation/deployment; context confirmation tool returned user unavailable.
+  Proceed with the existing subscription and same-region separate app, without deleting resources.
+
+### Provisioning limits and policy evidence
+
+| Resource | New | Total after | Evidence |
+|---|---:|---:|---|
+| Microsoft.Web/sites | 1 | 2 | API isolated from portal |
+| Microsoft.Web/serverfarms | 1 | 2 | Dedicated B3 capacity 1 |
+| Regional Web VMs | 1 | Within quota | `az quota list` limit 11; Web usage API current 0 |
+
+2026-10-11: registered Microsoft.Quota and checked Microsoft.Web quota.
+`isQuotaApplicable=false` means the quota response is informational, not unlimited.
+Dedicated backend requests one regional compute instance.
+Effective policy assignments queried; final ARM validate/what-if required.
+Owner role inherited from tenant management group verified for deployment principal.
+No new VM, public IP, storage account, or Key Vault. Additional App Service compute
+charge applies for dedicated B3; portal and API do not share plan memory/CPU.
+
+### Active execution checklist
+
+- [x] Backend implementation and Python 3.11 targeted API/regression tests
+- [x] Bicep build, ARM validate/what-if, source ZIP/secret exclusion
+- [x] azure-validate status and validation proof
+- [x] Separate API deployment and PostgreSQL managed identity grants
+- [x] Live reads, invalid/authenticated execution tests, exact-origin CORS and browser fetch
+
+### Final Backend Deployment Verification
+
+2026-10-11: source deployment `a802183f-8d82-4e7c-b57c-816be39a9b3c`
+completed at 08:07:33 UTC (Kudu status 4, complete/active, build errors/warnings 0).
+Endpoint: https://web-sp500-candidate-8d0218f4.azurewebsites.net
+
+Production DAILY `d58b5e37-0964-40fe-ba0e-11517566902d` completed SUCCEEDED
+at 08:16:08 UTC. Read-only PostgreSQL lineage verification confirmed scoring
+`b07f33a8-de06-52cb-b0bd-ef06c9ceba11` and selection
+`3a46dac1-fc6b-5c18-a482-67d31539aa36` SUCCEEDED, ten distinct candidates,
+session 2026-10-09, cutoff 2026-10-10 09:30 UTC and the pinned SHADOW model.
+Exact-selection GET and real portal browser readiness/candidate/daily-bar fetches
+returned 200 with CORS. No portal deployment. Final regressions: 146 passed; Ruff passed.
+Live ARM role-assignment query for the app identity returned no assignments;
+PostgreSQL data-plane access and successful execution were independently verified.
+
+Operational caveat: App Service diagnosed 44 historical BACKFILL poll failures
+as 502.0 invalid gateway upstream responses, with no 502.3 or container recycle
+in the 05:05-05:35 UTC window. Final DAILY observed two transient 502s and recovered.
+The exact lower-level connection cause remains unconfirmed; this deployment does
+not claim to eliminate gateway errors. See [backend runbook](../backend/README.md).
+Generated secret parameters and source ZIP are removed after final verification;
+ignored local environment and persistent model artifacts are retained.
+
+### Active Validation Proof
+
+Final artifact/settings revalidation (2026-10-11): backend tests 81 passed,
+Ruff passed; Bicep build and ARM validate passed. ARM what-if deploys only
+`asp-sp500-candidate` and `web-sp500-candidate-8d0218f4`, ignores 34 resources
+including portal. SHA-pinned manifest and selected model uploaded and checksum verified.
+No infrastructure RBAC grants are added; existing PostgreSQL data-plane grants remain.
+
+2026-10-11: integrated backend plus existing process/candidate/backfill/selection tests:
+93 passed. Ruff backend/tests/modified engine modules: passed. compileall: passed.
+Source-only wheel excludes .env and configured secret values. Packaging test passed.
+Bicep build passed (latest ARM API schema unavailable in local Bicep warning only).
+ARM validation passed. What-if: one API app Create, portal and all existing resources Ignore.
+Quota and deployment Owner checked; local PostgreSQL data-plane connectivity passed after
+starting the previously stopped database. PostgreSQL identity grants are handled by
+administrator script after provisioning; app does not receive ARM Owner/Contributor.
+Historical VM validation below is not evidence for this App Service deployment.
+
+## 7. Backend Validation Proof
+
+Final source-fix revalidation (2026-10-11): backend, process tracking, candidate,
+backfill, selection and analytics pytest suites all passed; Ruff passed.
+ARM group validate passed for unchanged dedicated B3 infrastructure/settings.
+Source ZIP rebuilt after explicit decision-cutoff fix; packaging exclusion tests passed.
+No active API or external process runs at predeployment check.
+
+2026-10-11:
+- Official `microsoft/azure-skills` pinned validation helper (local skill installation
+  was missing scripts): CLI/auth/Bicep/ARM validate/what-if OVERALL PASS.
+- ARM what-if scope reviewed: API site Create, no portal Modify/Delete.
+- Python 3.11 pytest integrated run: 93 passed; Ruff and compileall passed.
+- Local running API with real PostgreSQL: 18 smoke checks passed, including all eight
+  collection datasets, candidate cursor, readiness, API-key rejection, 10-day limit,
+  allowed portal preflight and rejected unrelated Origin.
+- `sql/017_backend_requests.sql` applied by Entra administrator.
+- Wheel/source packaging tests passed; generated `.env` and deployment parameters ignored.
+- Static identity: system-assigned App Service identity; PostgreSQL data permissions
+  provisioned with `grant_database_access.py`. No Azure ARM permission assigned to app.
+- Public PostgreSQL firewall remains restricted to explicit client/app outbound addresses.
+- No unresolved application/infrastructure validation failure.
+
+### All validation checks pass
+- [x] CLI/auth/Bicep build and ARM validation
+- [x] What-if scope reviewed; no portal modifications or deletion
+- [x] Policy validation through ARM validation
+- [x] Application tests, compile and lint
+- [x] Static identity/data permission script reviewed
+- [x] Official azure-validate workflow and proof finalization
+
+### Backend compute isolation update
+
+The initial separate API site was provisioned on the existing B1 plan, but candidate
+inference and Oryx build memory are unsuitable for sharing 1.75 GB with the portal.
+Keep portal and existing plan unchanged; move API only to dedicated
+`asp-sp500-candidate`, Linux B3, 7 GB, one instance. Additional ongoing compute cost
+applies. Asked for confirmation; user unavailable, selecting isolation to fulfill
+full candidate execution verification without risking portal availability.
+Regional Web usage 0 / limit 11 previously checked; request one new plan instance.
+Rerun ARM validate and what-if before this compute deployment.
+Validation rerun: official core helper OVERALL PASS; filtered ARM what-if shows
+only new `asp-sp500-candidate` Create and API site Modify. Portal is Ignore.
+Application code and static data permissions unchanged; prior 93 tests and 18
+database-backed smoke checks remain applicable. Official validation workflow repeated.
+
+The cancelled VM plan below is retained as historical context, not authorization
+to provision a VM.
 
 ## Objective
 

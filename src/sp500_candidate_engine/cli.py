@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from importlib.metadata import version
 from pathlib import Path
 
@@ -35,6 +35,13 @@ from sp500_candidate_engine.temporal import FutureDataViolation, TemporalFence
 
 def _date(value: str) -> date:
     return date.fromisoformat(value)
+
+
+def _datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("datetime must include a UTC offset")
+    return parsed
 
 
 def _mode(value: str) -> KnowledgeMode:
@@ -115,6 +122,17 @@ def build_parser() -> argparse.ArgumentParser:
             help="Run the idempotent model, scoring, and selection workflow for a date",
         )
         candidate_command.add_argument("--date", type=_date, required=True)
+        candidate_command.add_argument(
+            "--horizon-sessions",
+            type=int,
+            choices=(5, 20),
+            default=5,
+        )
+        candidate_command.add_argument(
+            "--decision-cutoff",
+            type=_datetime,
+            help="Maximum point-in-time export cutoff, including UTC offset",
+        )
 
     run_backfill = commands.add_parser(
         "run-backfill",
@@ -278,6 +296,8 @@ def main() -> None:
             settings,
             target_date=args.date,
             repository_root=Path(__file__).parents[2],
+            horizon_sessions=args.horizon_sessions,
+            decision_cutoff=args.decision_cutoff,
         )
         print(json.dumps(summary.__dict__, indent=2, sort_keys=True, default=str))
         return

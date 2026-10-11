@@ -67,6 +67,10 @@ class Phase45Summary:
     candidate_path: Path
     candidate_count: int
     price_session_date: date
+    model_purpose: str = "SHORT_5D"
+    prediction_horizon_sessions: int = 5
+    return_policy: str = "PRICE_RETURN"
+    scorecard_quality_gate_passed: bool = False
 
 
 def _hash_file(path: Path) -> str:
@@ -281,6 +285,7 @@ def prepare_training_data(
     experiment_dir: Path,
     export_run_id: uuid.UUID,
     momentum_lookback: int,
+    horizon_sessions: int,
 ) -> PreparedTrainingData:
     dataset_path = experiment_dir / "training_dataset.parquet"
     metadata_path = experiment_dir / "candidate_metadata.parquet"
@@ -337,7 +342,7 @@ def prepare_training_data(
         benchmark=benchmark,
         membership=membership,
         calendar=calendar,
-        horizon=5,
+        horizon=horizon_sessions,
     )
     momentum = compute_momentum_scores(
         adjusted_close,
@@ -368,14 +373,17 @@ def _segment_index(
     *,
     start: pd.Timestamp,
     end: pd.Timestamp,
+    fit_at: pd.Timestamp | None = None,
 ) -> pd.Index:
     dates = labels.index.get_level_values("datetime")
+    label_exit = pd.to_datetime(labels["exit_date"])
+    observation_end = min(end, fit_at) if fit_at is not None else end
     mask = (
         (dates >= start)
         & (dates <= end)
         & labels["label"].notna()
         & labels["exit_date"].notna()
-        & (pd.to_datetime(labels["exit_date"]) <= end)
+        & (label_exit <= observation_end)
     )
     return labels.index[mask]
 
@@ -392,6 +400,7 @@ def run_phase45_workflow(
     export_manifest = json.loads(
         (export_dir / "manifest.json").read_text(encoding="utf-8")
     )
+    fit_at = pd.Timestamp(export_manifest["cutoff_at"])
     export_run_id = uuid.UUID(export_manifest["export_run_id"])
     experiment_key = _canonical_hash(
         {
@@ -405,8 +414,18 @@ def run_phase45_workflow(
     experiment_dir.mkdir(parents=True, exist_ok=True)
     model_payload = model_config.payload
     label_payload = label_config.payload
-    if int(label_payload["horizon_sessions"]) != 5:
-        raise ValueError("Phase 4-5 workflow requires a 5-session label")
+    horizon_sessions = int(label_payload["horizon_sessions"])
+    if horizon_sessions < 1:
+        raise ValueError("Label horizon must be positive")
+    score_semantics = str(model_payload["prediction_semantics"])
+    model_purpose = str(model_payload.get("model_purpose", "SHORT_5D"))
+    return_policy = str(model_payload.get("return_policy", "PRICE_RETURN"))
+    expected_score_semantics = f"PREDICTED_{horizon_sessions}D_RETURN"
+    if score_semantics != expected_score_semantics:
+        raise ValueError(
+            "Model prediction_semantics must match the label horizon: "
+            f"expected {expected_score_semantics}, got {score_semantics}"
+        )
     baseline_config = model_payload["baselines"]
     if not isinstance(baseline_config, dict):
         raise ValueError("baselines config must be a mapping")
@@ -416,6 +435,7 @@ def run_phase45_workflow(
         experiment_dir=experiment_dir,
         export_run_id=export_run_id,
         momentum_lookback=int(baseline_config["momentum_lookback_sessions"]),
+        horizon_sessions=horizon_sessions,
     )
     joined = data.labels.join(data.features, how="inner")
     valid = joined["label"].notna() & data.features.notna().any(axis=1)
@@ -425,6 +445,8 @@ def run_phase45_workflow(
     fold_config = model_payload["walk_forward"]
     if not isinstance(fold_config, dict):
         raise ValueError("walk_forward config must be a mapping")
+    if not bool(fold_config.get("purge_by_label_exit", True)):
+        raise ValueError("walk_forward.purge_by_label_exit must remain enabled")
     folds = build_walk_forward_folds(
         usable_dates,
         WalkForwardSpec(
@@ -441,6 +463,13 @@ def run_phase45_workflow(
     evaluation_config = model_payload.get("evaluation", {})
     if not isinstance(evaluation_config, dict):
         raise ValueError("evaluation config must be a mapping")
+    holding_period_sessions = int(
+        evaluation_config.get("holding_period_sessions", horizon_sessions)
+    )
+    if holding_period_sessions != horizon_sessions:
+        raise ValueError(
+            "evaluation.holding_period_sessions must match the label horizon"
+        )
     top_k_values = evaluation_config.get("top_k", [5, 10])
     if not isinstance(top_k_values, list) or not top_k_values:
         raise ValueError("evaluation.top_k must be a non-empty list")
@@ -451,16 +480,19 @@ def run_phase45_workflow(
             data.labels,
             start=fold.train_start,
             end=fold.train_end,
+            fit_at=fold.test_start,
         ).intersection(data.features.index)
         valid_index = _segment_index(
             data.labels,
             start=fold.valid_start,
             end=fold.valid_end,
+            fit_at=fold.test_start,
         ).intersection(data.features.index)
         test_index = _segment_index(
             data.labels,
             start=fold.test_start,
             end=fold.test_end,
+            fit_at=fold.test_end,
         ).intersection(data.features.index)
         train_index = train_index[data.features.loc[train_index].notna().any(axis=1)]
         valid_index = valid_index[data.features.loc[valid_index].notna().any(axis=1)]
@@ -508,20 +540,63 @@ def run_phase45_workflow(
             round_trip_cost_bps=float(
                 evaluation_config.get("round_trip_cost_bps", 10)
             ),
-            holding_period_sessions=int(
-                evaluation_config.get("holding_period_sessions", 5)
-            ),
+            holding_period_sessions=holding_period_sessions,
         )
-        metrics[str(model_name)] = asdict(metric)
+        fold_rank_ic = []
+        for _, fold_frame in frame.groupby("fold"):
+            fold_indexed = fold_frame.set_index(
+                ["datetime", "instrument"]
+            ).sort_index()
+            fold_metric = evaluate_predictions(
+                fold_indexed["score"],
+                fold_indexed["label"],
+                top_k=maximum_top_k,
+                min_cross_section=30,
+                round_trip_cost_bps=float(
+                    evaluation_config.get("round_trip_cost_bps", 10)
+                ),
+                holding_period_sessions=holding_period_sessions,
+            )
+            fold_rank_ic.append(fold_metric.rank_ic_mean)
+        model_metrics = asdict(metric)
+        model_metrics["test_blocks"] = len(fold_rank_ic)
+        model_metrics["fold_rank_ic_median"] = float(pd.Series(fold_rank_ic).median())
+        metrics[str(model_name)] = model_metrics
 
-    selected_shadow_model = "lightgbm"
-    if selected_shadow_model not in metrics:
-        raise RuntimeError("LightGBM metrics are required for candidate scoring")
-    all_index = data.labels.index[
-        data.labels["label"].notna() & data.features.notna().any(axis=1)
+    candidate_models = [
+        model_name
+        for model_name in ("lightgbm", "ridge")
+        if model_name in metrics
+        and float(metrics[model_name]["coverage"]) >= 0.8
+        and int(metrics[model_name]["test_blocks"]) >= 3
     ]
+    if not candidate_models:
+        raise RuntimeError(
+            "No candidate model passed temporal, test-block, and coverage eligibility"
+        )
+    selected_shadow_model = max(
+        candidate_models,
+        key=lambda model_name: (
+            float(metrics[model_name]["rank_ic_mean"]),
+            float(metrics[model_name]["fold_rank_ic_median"]),
+            float(metrics[model_name]["net_top_10_return"]),
+            float(metrics[model_name]["max_drawdown_top_10"]),
+            model_name,
+        ),
+    )
+    scorecard_quality_gate_passed = (
+        float(metrics[selected_shadow_model]["rank_ic_mean"]) > 0
+    )
+    label_dates = data.labels.index.get_level_values("datetime")
+    all_index = _segment_index(
+        data.labels,
+        start=pd.Timestamp(label_dates.min()),
+        end=pd.Timestamp(export_manifest["calendar_end"]),
+        fit_at=pd.Timestamp(export_manifest["calendar_end"]),
+    ).intersection(data.features.index)
+    all_index = all_index[data.features.loc[all_index].notna().any(axis=1)]
     all_dates = sorted(all_index.get_level_values("datetime").unique())
-    final_valid_dates = set(all_dates[-30:])
+    final_valid_dates = set(all_dates[-int(fold_config["validation_sessions"]) :])
     final_valid_index = all_index[
         all_index.get_level_values("datetime").isin(final_valid_dates)
     ]
@@ -594,12 +669,18 @@ def run_phase45_workflow(
                     export_run_id=export_run_id,
                     config_hash=effective_model_hash,
                     split_spec={
+                        "fit_at": fit_at.isoformat(),
+                        "label_horizon_sessions": horizon_sessions,
                         "folds": [
                             {
                                 key: value.isoformat()
                                 if isinstance(value, pd.Timestamp)
                                 else value
                                 for key, value in asdict(fold).items()
+                            }
+                            | {
+                                "fit_at": fold.test_start.isoformat(),
+                                "label_observation_end": fold.valid_end.isoformat(),
                             }
                             for fold in folds
                         ],
@@ -614,7 +695,9 @@ def run_phase45_workflow(
                     artifact_hash=_hash_file(artifact_path),
                     metrics=metrics[model_name],
                     promotion_status="SHADOW",
-                    label_semantics="RAW_STOCK_5D_RETURN",
+                    label_semantics=f"RAW_STOCK_{horizon_sessions}D_RETURN",
+                    model_purpose=model_purpose,
+                    return_policy=return_policy,
                 )
             )
 
@@ -652,12 +735,13 @@ def run_phase45_workflow(
             model_version_id=model_ids[selected_shadow_model],
             universe_version_id=export_row["universe_version_id"],
             config_hash=effective_model_hash,
-            score_semantics="PREDICTED_5D_RETURN",
+            score_semantics=score_semantics,
+            prediction_horizon_sessions=horizon_sessions,
         )
         score_repository.write_scores(
             scoring_run_id=scoring_run_id,
             scores=daily_scores,
-            prediction_horizon=5,
+            prediction_horizon=horizon_sessions,
         )
         selection_payload = selection_config.payload
         policy = SelectionPolicy(
@@ -702,6 +786,10 @@ def run_phase45_workflow(
         generated_at=generated_at,
         policy_version=str(selection_payload["version"]),
         result=selection_result,
+        model_purpose=model_purpose,
+        prediction_horizon_sessions=horizon_sessions,
+        return_policy=return_policy,
+        promotion_status="SHADOW",
         model_status="SHADOW",
         promotion_gate_passed=False,
     )
@@ -719,6 +807,10 @@ def run_phase45_workflow(
                 "experiment_key": experiment_key,
                 "selected_shadow_model": selected_shadow_model,
                 "promotion_gate_passed": False,
+                "scorecard_quality_gate_passed": scorecard_quality_gate_passed,
+                "model_purpose": model_purpose,
+                "prediction_horizon_sessions": horizon_sessions,
+                "return_policy": return_policy,
                 "label_name": label_config.name,
                 "label_version": label_config.version,
                 "label_config_hash": label_config.config_hash,
@@ -746,4 +838,8 @@ def run_phase45_workflow(
         candidate_path=candidate_path,
         candidate_count=len(selection_result.candidates),
         price_session_date=latest_date.date(),
+        model_purpose=model_purpose,
+        prediction_horizon_sessions=horizon_sessions,
+        return_policy=return_policy,
+        scorecard_quality_gate_passed=scorecard_quality_gate_passed,
     )

@@ -20,6 +20,8 @@ class ModelRegistration:
     artifact_hash: str
     metrics: dict[str, object]
     label_semantics: str = "RAW_STOCK_5D_RETURN"
+    model_purpose: str = "SHORT_5D"
+    return_policy: str = "PRICE_RETURN"
     promotion_status: str = "SHADOW"
     training_feature_run_id: uuid.UUID | None = None
     processor_version_id: uuid.UUID | None = None
@@ -27,15 +29,20 @@ class ModelRegistration:
 
 
 def model_version_id(registration: ModelRegistration) -> uuid.UUID:
-    key = _canonical_hash(
-        {
-            "model_name": registration.model_name,
-            "version": registration.version,
-            "export_run_id": registration.export_run_id,
-            "config_hash": registration.config_hash,
-            "artifact_hash": registration.artifact_hash,
-        }
-    )
+    identity = {
+        "model_name": registration.model_name,
+        "version": registration.version,
+        "export_run_id": registration.export_run_id,
+        "config_hash": registration.config_hash,
+        "artifact_hash": registration.artifact_hash,
+    }
+    if (
+        registration.model_purpose,
+        registration.return_policy,
+    ) != ("SHORT_5D", "PRICE_RETURN"):
+        identity["model_purpose"] = registration.model_purpose
+        identity["return_policy"] = registration.return_policy
+    key = _canonical_hash(identity)
     return _stable_uuid("model-version", key)
 
 
@@ -52,10 +59,16 @@ class ModelRegistry:
                 training_feature_run_id, processor_version_id, label_run_id,
                 config_hash, split_spec, parameters, artifact_uri,
                 artifact_hash, metrics, promotion_status
-                , label_semantics
+                , label_semantics, model_purpose, return_policy
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (model_name, version, config_hash, export_run_id)
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (
+                model_name, version, config_hash, export_run_id,
+                model_purpose, return_policy
+            )
             DO UPDATE SET
                 artifact_uri = EXCLUDED.artifact_uri,
                 artifact_hash = EXCLUDED.artifact_hash,
@@ -79,6 +92,8 @@ class ModelRegistry:
                 Jsonb(registration.metrics),
                 registration.promotion_status,
                 registration.label_semantics,
+                registration.model_purpose,
+                registration.return_policy,
             ),
         )
         return version_id

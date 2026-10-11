@@ -16,9 +16,11 @@
 /sample-candidate-*.md
 /.azure/*.tmp
 /.azure/*.tmp.json
+/.azure/*.tmp.zip
 
 # Local environment and Python artifacts
 /.env
+/backend/.env
 /.venv/
 /.venv-alpha158/
 /.pytest_cache/
@@ -29,9 +31,12 @@
 # Collected raw payloads and local output
 /data/raw/
 /data/output/
+/data/backend-artifacts/
+/data/inference-verification/
 /files/
 /phase-result/
 /notebooks/.ipynb_checkpoints/
 /notebooks/output/
 /logs/
-/infra/
+/infra/*
+!/infra/backend-appservice.bicep

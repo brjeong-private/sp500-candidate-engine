@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
@@ -132,21 +132,29 @@ async def run_daily_process(
     *,
     target_date: date,
     run_candidates: bool = False,
+    process_run_id: uuid.UUID | None = None,
+    candidate_history_start: date | None = None,
+    candidate_runner: Callable[..., object] | None = None,
 ) -> dict[str, object]:
     database = Database(settings)
-    await asyncio.to_thread(database.migrate)
-    process_run_id = uuid.uuid4()
+    accepted_run = process_run_id is not None
+    if not accepted_run:
+        await asyncio.to_thread(database.migrate)
+    process_run_id = process_run_id or uuid.uuid4()
     writer = ProcessLogWriter(settings.log_dir, process_run_id)
     with ProcessTracker(database) as tracker:
-        tracker.create_run(
-            process_run_id=process_run_id,
-            process_type="DAILY",
-            range_start=target_date,
-            range_end=target_date,
-            total_dates=1,
-            log_uri=writer.path.as_uri(),
-            metadata={"pipeline": "collect-production"},
-        )
+        if accepted_run:
+            tracker.resume_run(process_run_id, log_uri=writer.path.as_uri())
+        else:
+            tracker.create_run(
+                process_run_id=process_run_id,
+                process_type="DAILY",
+                range_start=target_date,
+                range_end=target_date,
+                total_dates=1,
+                log_uri=writer.path.as_uri(),
+                metadata={"pipeline": "collect-production"},
+            )
         writer.write(
             {
                 "process_run_id": str(process_run_id),
@@ -164,7 +172,10 @@ async def run_daily_process(
             event_type="COLLECTION",
         )
         try:
-            result = await collect_production_inputs(settings, target_date=target_date)
+            collection_options = {"migrate_database": False} if accepted_run else {}
+            result = await collect_production_inputs(
+                settings, target_date=target_date, **collection_options
+            )
             counts = {
                 "universe_members": result.universe_count,
                 "changed_bars": result.changed_bars,
@@ -204,8 +215,22 @@ async def run_daily_process(
         if run_candidates and summary["status"] == "SUCCEEDED":
             from sp500_candidate_engine.candidate_pipeline import run_candidate_date
 
+            if candidate_history_start is not None:
+                from importlib.metadata import version
+
+                from sp500_candidate_engine.analytics.historical_export import (
+                    HistoricalQlibExportService,
+                )
+
+                await asyncio.to_thread(
+                    HistoricalQlibExportService(database).export,
+                    start_date=candidate_history_start,
+                    end_date=target_date,
+                    output_root=Path(__file__).parents[2] / "data" / "output" / "qlib",
+                    qlib_version=version("pyqlib"),
+                )
             candidate = await asyncio.to_thread(
-                run_candidate_date,
+                candidate_runner or run_candidate_date,
                 settings,
                 target_date=target_date,
                 repository_root=Path(__file__).parents[2],
@@ -216,7 +241,7 @@ async def run_daily_process(
                 "scoring_run_id": candidate.scoring_run_id,
                 "selection_run_id": candidate.selection_run_id,
                 "candidate_count": candidate.candidate_count,
-                "model_status": "SHADOW",
+                "model_status": getattr(candidate, "model_status", "SHADOW"),
                 "promotion_gate_passed": candidate.promotion_gate_passed,
             }
         return response
@@ -228,6 +253,7 @@ async def run_backfill_process(
     start_date: date,
     end_date: date,
     auto_retry: bool = True,
+    process_run_id: uuid.UUID | None = None,
 ) -> dict[str, object]:
     plan = build_backfill_plan(
         start_date=start_date,
@@ -243,6 +269,7 @@ async def run_backfill_process(
         range_end=end_date,
         metadata={"plan": plan.as_dict()},
         auto_retry=auto_retry,
+        process_run_id=process_run_id,
     )
     return result
 
@@ -298,25 +325,31 @@ async def _run_backfill_dates(
     range_end: date,
     metadata: dict[str, object],
     auto_retry: bool,
+    process_run_id: uuid.UUID | None = None,
 ) -> dict[str, object]:
     if settings.massive_api_key is None:
         raise ValueError("MASSIVE_API_KEY is not configured")
     database = Database(settings)
-    await asyncio.to_thread(database.migrate)
-    process_run_id = uuid.uuid4()
+    accepted_run = process_run_id is not None
+    if not accepted_run:
+        await asyncio.to_thread(database.migrate)
+    process_run_id = process_run_id or uuid.uuid4()
     writer = ProcessLogWriter(settings.log_dir, process_run_id)
     raw_writer = RawSnapshotWriter(settings.raw_data_dir)
     repository = BackfillRepository(database)
     with ProcessTracker(database) as tracker:
-        tracker.create_run(
-            process_run_id=process_run_id,
-            process_type=process_type,
-            range_start=range_start,
-            range_end=range_end,
-            total_dates=len(dates),
-            log_uri=writer.path.as_uri(),
-            metadata=metadata,
-        )
+        if accepted_run:
+            tracker.resume_run(process_run_id, log_uri=writer.path.as_uri())
+        else:
+            tracker.create_run(
+                process_run_id=process_run_id,
+                process_type=process_type,
+                range_start=range_start,
+                range_end=range_end,
+                total_dates=len(dates),
+                log_uri=writer.path.as_uri(),
+                metadata=metadata,
+            )
         writer.write(
             {
                 "process_run_id": str(process_run_id),

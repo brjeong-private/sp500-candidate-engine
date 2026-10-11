@@ -17,6 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+backend = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+]
 analytics = [
   "joblib>=1.4,<2",
   "lightgbm>=4,<5",
@@ -43,9 +47,11 @@ dev = [
 
 [project.scripts]
 candidate-engine = "sp500_candidate_engine.cli:main"
+candidate-api = "backend.app.main:run"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sp500_candidate_engine"]
+packages = ["src/sp500_candidate_engine", "backend"]
+exclude = ["backend/.env", "**/__pycache__"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
