@@ -190,8 +190,10 @@ flowchart TD
 - Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
 - system-assigned 관리 ID는 Durable/FC1 Storage의 Blob·Queue·Table, Key Vault·App
   Insights·ACS와 ARM 조회에 사용하고, 서버 간 API credential은 Key Vault reference로
-  주입한다. 조직 Policy가 Storage public endpoint를 닫을 수 있으므로 preflight와 운영
-  점검은 Blob·Queue·Table data plane 연결을 확인하고 실패 시 실행을 차단해야 한다.
+  주입한다. Storage public access는 Disabled이며 West US 3 VNet의 FC1 위임 subnet,
+  Blob·Queue·Table private endpoint와 private DNS link를 통해서만 접근한다.
+  preflight는 public access를 열지 않고 private data plane 연결을 확인해 실패 시
+  실행을 차단한다.
 
 상태 전이, 멱등성 계층, 외부 API, RBAC, timeout과 관측성의 기준 설계는
 [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를

@@ -133,8 +133,8 @@ def test_candidate_verification_requires_all_five_to_ten(monkeypatch):
             "Microsoft.Storage/storageAccounts/orchestrator"
         ),
         orchestrator_storage_container_name="app-package",
-        orchestrator_storage_public_network_access="Enabled",
-        orchestrator_storage_network_default_action="Allow",
+        orchestrator_storage_public_network_access="Disabled",
+        orchestrator_storage_network_default_action="Deny",
         acs_endpoint="https://acs.communication.azure.com",
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
@@ -201,8 +201,8 @@ def _settings(*, tradingagents_base_url=None):
             "Microsoft.Storage/storageAccounts/orchestrator"
         ),
         orchestrator_storage_container_name="app-package",
-        orchestrator_storage_public_network_access="Enabled",
-        orchestrator_storage_network_default_action="Allow",
+        orchestrator_storage_public_network_access="Disabled",
+        orchestrator_storage_network_default_action="Deny",
         acs_endpoint="https://acs.communication.azure.com",
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
@@ -437,8 +437,8 @@ def test_storage_preflight_checks_hardened_contract_and_container_access(monkeyp
             "defaultToOAuthAuthentication": True,
             "supportsHttpsTrafficOnly": True,
             "minimumTlsVersion": "TLS1_2",
-            "publicNetworkAccess": "Enabled",
-            "networkAcls": {"defaultAction": "Allow"},
+            "publicNetworkAccess": "Disabled",
+            "networkAcls": {"defaultAction": "Deny"},
             "primaryEndpoints": {
                 "blob": "https://orchestrator.blob.core.windows.net/",
                 "queue": "https://orchestrator.queue.core.windows.net/",
@@ -484,8 +484,8 @@ def test_storage_preflight_restores_safe_contract(monkeypatch):
             "defaultToOAuthAuthentication": True,
             "supportsHttpsTrafficOnly": True,
             "minimumTlsVersion": "TLS1_2",
-            "publicNetworkAccess": "Enabled",
-            "networkAcls": {"defaultAction": "Allow"},
+            "publicNetworkAccess": "Disabled",
+            "networkAcls": {"defaultAction": "Deny"},
             "primaryEndpoints": {
                 "blob": "https://orchestrator.blob.core.windows.net/",
                 "queue": "https://orchestrator.queue.core.windows.net/",
@@ -512,8 +512,8 @@ def test_storage_preflight_restores_safe_contract(monkeypatch):
         "properties": {
             "allowBlobPublicAccess": False,
             "allowSharedKeyAccess": False,
-            "publicNetworkAccess": "Enabled",
-            "networkAcls": {"defaultAction": "Allow"},
+            "publicNetworkAccess": "Disabled",
+            "networkAcls": {"defaultAction": "Deny"},
         }
     }
     assert remediated == ["orchestrator_storage:restore_contract"]
@@ -650,8 +650,9 @@ def test_bicep_uses_identity_based_storage_durable_backend():
     assert "Microsoft.DurableTask/" not in template
     assert "DURABLE_TASK_SCHEDULER_CONNECTION_STRING" not in template
     assert "0ad04412-c4d5-4796-b79c-f76d14c8d402" not in template
-    assert "name: 'AzureWebJobsStorage__accountName'" in template
-    assert "value: storage.name" in template
+    assert "name: 'AzureWebJobsStorage__blobServiceUri'" in template
+    assert "name: 'AzureWebJobsStorage__queueServiceUri'" in template
+    assert "name: 'AzureWebJobsStorage__tableServiceUri'" in template
     assert "name: 'AzureWebJobsStorage__credential'" in template
     assert "value: 'managedidentity'" in template
     assert "b7e6dc6d-f1e8-4753-8033-0f276bb0955b" in template
@@ -662,11 +663,67 @@ def test_bicep_uses_identity_based_storage_durable_backend():
     assert "allowBlobPublicAccess: false" in template
     assert "supportsHttpsTrafficOnly: true" in template
     assert "minimumTlsVersion: 'TLS1_2'" in template
-    assert "publicNetworkAccess: 'Enabled'" in template
-    assert "defaultAction: 'Allow'" in template
+    assert "publicNetworkAccess: 'Disabled'" in template
+    assert "defaultAction: 'Deny'" in template
     assert "type: 'SystemAssigned'" in template
     assert "name: 'FC1'" in template
     assert "type: 'blobContainer'" in template
+    assert "serviceName: 'Microsoft.App/environments'" in template
+    assert "privateEndpointNetworkPolicies: 'Disabled'" in template
+    assert template.count("Microsoft.Network/privateEndpoints@2024-05-01") == 3
+    assert "name: 'privatelink.blob.${storageDnsSuffix}'" in template
+    assert "name: 'privatelink.queue.${storageDnsSuffix}'" in template
+    assert "name: 'privatelink.table.${storageDnsSuffix}'" in template
+    assert "virtualNetworkSubnetId: functionIntegrationSubnet.id" in template
+    assert "vnetRouteAllEnabled: true" in template
+    assert "WEBSITE_VNET_ROUTE_ALL" not in template
+
+
+def test_storage_remediation_never_enables_public_access(monkeypatch):
+    configured = _settings()
+    storage = {
+        "properties": {
+            "provisioningState": "Succeeded",
+            "allowBlobPublicAccess": False,
+            "allowSharedKeyAccess": True,
+            "defaultToOAuthAuthentication": True,
+            "supportsHttpsTrafficOnly": True,
+            "minimumTlsVersion": "TLS1_2",
+            "publicNetworkAccess": "Enabled",
+            "networkAcls": {"defaultAction": "Allow"},
+            "primaryEndpoints": {
+                "blob": "https://orchestrator.blob.core.windows.net/",
+                "queue": "https://orchestrator.queue.core.windows.net/",
+                "table": "https://orchestrator.table.core.windows.net/",
+            },
+        }
+    }
+    monkeypatch.setattr(clients, "_arm_resource", lambda *args: storage)
+    mutations = []
+
+    def fake_action(method, resource_path, api_version, credential, **kwargs):
+        del resource_path, api_version, credential
+        mutations.append((method, kwargs["json_body"]))
+        storage["properties"].update(kwargs["json_body"]["properties"])
+
+    monkeypatch.setattr(clients, "_arm_request", fake_action)
+    monkeypatch.setattr(clients, "request_status", lambda *args, **kwargs: None)
+
+    clients._check_storage(configured, FakeCredential(), [])
+
+    assert mutations == [
+        (
+            "PATCH",
+            {
+                "properties": {
+                    "allowBlobPublicAccess": False,
+                    "allowSharedKeyAccess": False,
+                    "publicNetworkAccess": "Disabled",
+                    "networkAcls": {"defaultAction": "Deny"},
+                }
+            },
+        )
+    ]
 
 
 def test_local_settings_use_storage_emulator_for_durable_backend():

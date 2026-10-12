@@ -14,7 +14,9 @@
 ```mermaid
 flowchart LR
     Timer["05:30 ET gate"] --> Function["Python Durable Functions<br/>Linux FC1"]
-    Storage["Azure Storage<br/>Durable history·task state<br/>FC1 runtime·deployment package"] --> Function
+    Storage["Private Azure Storage<br/>Durable history·task state<br/>FC1 runtime·deployment package"] --> Function
+    VNet["West US 3 VNet<br/>FC1 delegated subnet"] --> Function
+    Function -->|"private DNS + endpoints"| Storage
     Vault["Key Vault<br/>server credentials"] --> Function
     Function -->|"idempotent DAILY"| Candidate["Candidate API"]
     Candidate --> PostgreSQL[("PostgreSQL<br/>candidate source of truth")]
@@ -111,7 +113,7 @@ Invoke-RestMethod `
   ID에 네 기존 리소스 범위의 `Reader`를 별도로 부여해야 한다. 템플릿이 소유하지
   않는 다른 resource group의 역할 할당은 자동화하지 않는다.
 - 자동 복구는 중지된 App Service·DB의 시작, TradingAgents의 배포된 최소 replica와
-  실행 상태 복원, Storage의 `publicNetworkAccess=Enabled`,
+  실행 상태 복원, Storage의 `publicNetworkAccess=Disabled`,
   `allowSharedKeyAccess=false`, `allowBlobPublicAccess=false`와 배포된 network
   default action 복원으로 제한한다. SKU·DB firewall·secret·데이터는 변경하지 않는다.
   STARTED 이메일에는 resource ID나 ARM payload 없이 검사 범주와 수행한 안전한
@@ -127,14 +129,16 @@ Invoke-RestMethod `
   Blob 접근을 막고 `AzureWebJobsStorage__accountName`과 `managedidentity` credential을
   사용한다. Function의 system-assigned identity에는 Storage Blob·Queue·Table data
   역할이 있으며, 같은 Storage가 표준 Durable backend와 FC1 runtime·배포에 사용된다.
-- FC1 Storage는 `publicNetworkAccess=Enabled`, `defaultAction=Allow`를 유지한다.
-  조직 Azure Policy가 배포 후 public endpoint 또는 기본 동작을 닫을 수 있으므로,
-  배포 전 preflight와 일상 운영 점검은 control plane 설정뿐 아니라 Function에서
-  Blob·Queue·Table data plane 연결이 실제로 가능한지 확인하고 불가하면 fail closed
-  해야 한다. `ORCHESTRATOR_STORAGE_RESOURCE_ID`,
+- FC1 Storage는 `publicNetworkAccess=Disabled`, `defaultAction=Deny`를 유지한다.
+  West US 3 VNet의 `/24` FC1 통합 subnet은 `Microsoft.App/environments`에
+  위임하며 별도 `/24` subnet의 Blob·Queue·Table private endpoint와 각
+  `privatelink.*.core.windows.net` private DNS zone/link를 사용한다. Function의
+  모든 outbound traffic은 VNet으로 라우팅하고 identity 기반 Blob·Queue·Table URI와
+  배포 Blob container를 private DNS로 해석한다. preflight는 public access를
+  활성화하지 않으며 private data plane 연결이 불가하면 fail closed한다.
+  `ORCHESTRATOR_STORAGE_RESOURCE_ID`,
   `ORCHESTRATOR_STORAGE_CONTAINER_NAME`, `ORCHESTRATOR_STORAGE_PUBLIC_NETWORK_ACCESS`
-  설정은 실제 배포 리소스와 같아야 한다. private endpoint를 강제한다면 FC1 VNet
-  통합과 DNS를 먼저 설계한다.
+  설정은 실제 private-only 배포 리소스와 같아야 한다.
 - 관리 ID에는 built-in Contributor 대신 다음 `Actions`만 가진 custom role을 해당
   resource scope에 부여하는 것이 최소 권한 계약이다.
   - App Service: `Microsoft.Web/sites/read`, `Microsoft.Web/sites/start/action`

@@ -2,21 +2,31 @@
 
 Status: Validated
 
-## Active preparation update: Azure Storage Durable backend (2026-10-13)
+## Active preparation update: private FC1 storage network (2026-10-13)
 
 - Use the standard Durable Functions Azure Storage backend through identity-based
   `AzureWebJobsStorage`; do not configure Durable Task Scheduler.
-- Keep FC1 Storage `publicNetworkAccess=Enabled`, `defaultAction=Allow`,
+- Keep FC1 Storage `publicNetworkAccess=Disabled`, `defaultAction=Deny`,
   `allowSharedKeyAccess=false`, `allowBlobPublicAccess=false`, HTTPS-only and TLS 1.2.
+- Add a West US 3 `10.203.0.0/16` VNet with non-overlapping `/24` subnets for
+  FC1 integration and private endpoints. Delegate only the integration subnet to
+  `Microsoft.App/environments`.
+- Add Blob, Queue and Table storage private endpoints, matching private DNS zones,
+  zone groups and VNet links. Route Function outbound traffic through the VNet.
 - Keep system-assigned identity Blob, Queue and Table data roles for host, deployment
-  and Durable state access.
+  and Durable state access; use identity-based service URIs for all three services.
 - Remove scheduler/task hub resources, DTS app settings, outputs and scheduler RBAC
   from the template.
-- Organization policy may close the Storage public endpoint after deployment.
-  Preflight and operational checks must verify effective Blob, Queue and Table data
-  plane access and fail closed rather than relying only on desired Bicep settings.
-- Do not deploy. Existing deployed DTS resources are intentionally retained until a
-  separately approved decommission verifies that no orchestration uses them.
+- Organization policy requires the Storage public endpoint to remain disabled.
+  Preflight may restore only the private-only contract and must never enable public
+  access. It verifies Blob, Queue and Table data-plane access before pipeline start.
+- Before STARTED email, remediate stopped Candidate/Portal App Services,
+  PostgreSQL/MySQL and TradingAgents replica state. Temporarily remove only blocking
+  resource-level ReadOnly locks and restore identical locks in `finally`.
+- Do not change SKU, broaden database firewall rules, rotate secrets or modify
+  business data during automatic remediation.
+- Existing deployed DTS resources remain unused and are retained until post-run
+  decommission.
 
 ### Validation proof
 
@@ -25,6 +35,17 @@ Status: Validated
 - Ruff for `orchestrator` and `tests/orchestrator`: passed.
 - Static tests confirm the template contains no `Microsoft.DurableTask` resources,
   DTS connection setting or scheduler-scoped RBAC.
+- Expanded preflight suite: 37 passed; Ruff passed.
+- ARM group validation with explicit Candidate/PostgreSQL/Portal/MySQL/
+  TradingAgents resource IDs: succeeded.
+- ResourceIdOnly what-if: one custom role definition and one assignment Create,
+  existing orchestrator resources Deploy, all unrelated resources Ignore, no Delete.
+- Private-network update validation: Bicep build passed without warnings, 38 focused
+  orchestrator tests passed, and Ruff passed.
+- Deployment/package implication: a runner outside the VNet can no longer upload the
+  FC1 ZIP directly to the deployment container. Package upload must run from a
+  VNet-connected private-DNS-capable runner (or use an approved private path), before
+  the Function app consumes the blob through its system-assigned identity.
 
 ## Active deployment update: MEDIUM_20D backend (2026-10-11)
 

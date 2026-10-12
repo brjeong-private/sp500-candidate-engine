@@ -88,7 +88,11 @@ var appInsightsName = take('${namePrefix}-appi-${suffix}', 63)
 var vaultName = take('${compactPrefix}kv${suffix}', 24)
 var communicationName = take('${namePrefix}-acs-${suffix}', 63)
 var emailServiceName = take('${namePrefix}-email-${suffix}', 63)
+var vnetName = take('${namePrefix}-vnet-${suffix}', 64)
+var functionIntegrationSubnetName = 'snet-function-integration'
+var privateEndpointSubnetName = 'snet-private-endpoints'
 var deploymentContainerName = 'function-releases'
+var storageDnsSuffix = environment().suffixes.storage
 var keyVaultReferencePrefix = '@Microsoft.KeyVault(VaultName=${vaultName};SecretName='
 var tags = {
   workload: 'sp500-candidate-orchestrator'
@@ -119,11 +123,225 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     defaultToOAuthAuthentication: true
     supportsHttpsTrafficOnly: true
     minimumTlsVersion: 'TLS1_2'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: 'Disabled'
     networkAcls: {
-      bypass: 'AzureServices'
-      defaultAction: 'Allow'
+      bypass: 'None'
+      defaultAction: 'Deny'
     }
+  }
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+  name: vnetName
+  location: location
+  tags: tags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        '10.203.0.0/16'
+      ]
+    }
+    subnets: [
+      {
+        name: functionIntegrationSubnetName
+        properties: {
+          addressPrefix: '10.203.0.0/24'
+          delegations: [
+            {
+              name: 'flex-consumption-delegation'
+              properties: {
+                serviceName: 'Microsoft.App/environments'
+              }
+            }
+          ]
+        }
+      }
+      {
+        name: privateEndpointSubnetName
+        properties: {
+          addressPrefix: '10.203.1.0/24'
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+    ]
+  }
+}
+
+resource functionIntegrationSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  parent: vnet
+  name: functionIntegrationSubnetName
+}
+
+resource privateEndpointSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  parent: vnet
+  name: privateEndpointSubnetName
+}
+
+resource blobPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'privatelink.blob.${storageDnsSuffix}'
+  location: 'global'
+  tags: tags
+}
+
+resource queuePrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'privatelink.queue.${storageDnsSuffix}'
+  location: 'global'
+  tags: tags
+}
+
+resource tablePrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: 'privatelink.table.${storageDnsSuffix}'
+  location: 'global'
+  tags: tags
+}
+
+resource blobDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: blobPrivateDnsZone
+  name: '${vnet.name}-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource queueDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: queuePrivateDnsZone
+  name: '${vnet.name}-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource tableDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: tablePrivateDnsZone
+  name: '${vnet.name}-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnet.id
+    }
+  }
+}
+
+resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: '${storage.name}-blob-pe'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'blob'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [
+            'blob'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource queuePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: '${storage.name}-queue-pe'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'queue'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [
+            'queue'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource tablePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: '${storage.name}-table-pe'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'table'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [
+            'table'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource blobPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: blobPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'blob'
+        properties: {
+          privateDnsZoneId: blobPrivateDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+resource queuePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: queuePrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'queue'
+        properties: {
+          privateDnsZoneId: queuePrivateDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+resource tablePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: tablePrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'table'
+        properties: {
+          privateDnsZoneId: tablePrivateDnsZone.id
+        }
+      }
+    ]
   }
 }
 
@@ -260,6 +478,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     serverFarmId: plan.id
     httpsOnly: true
     publicNetworkAccess: 'Enabled'
+    virtualNetworkSubnetId: functionIntegrationSubnet.id
     functionAppConfig: {
       deployment: {
         storage: {
@@ -284,14 +503,23 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       scmMinTlsVersion: '1.2'
       ftpsState: 'Disabled'
       http20Enabled: true
+      vnetRouteAllEnabled: true
       appSettings: [
         {
           name: 'FUNCTIONS_EXTENSION_VERSION'
           value: '~4'
         }
         {
-          name: 'AzureWebJobsStorage__accountName'
-          value: storage.name
+          name: 'AzureWebJobsStorage__blobServiceUri'
+          value: storage.properties.primaryEndpoints.blob
+        }
+        {
+          name: 'AzureWebJobsStorage__queueServiceUri'
+          value: storage.properties.primaryEndpoints.queue
+        }
+        {
+          name: 'AzureWebJobsStorage__tableServiceUri'
+          value: storage.properties.primaryEndpoints.table
         }
         {
           name: 'AzureWebJobsStorage__credential'
@@ -367,11 +595,11 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         }
         {
           name: 'ORCHESTRATOR_STORAGE_PUBLIC_NETWORK_ACCESS'
-          value: 'Enabled'
+          value: 'Disabled'
         }
         {
           name: 'ORCHESTRATOR_STORAGE_NETWORK_DEFAULT_ACTION'
-          value: 'Allow'
+          value: 'Deny'
         }
         {
           name: 'ACS_EMAIL_ENDPOINT'
@@ -404,6 +632,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       ]
     }
   }
+  dependsOn: [
+    blobDnsVnetLink
+    queueDnsVnetLink
+    tableDnsVnetLink
+    blobPrivateDnsZoneGroup
+    queuePrivateDnsZoneGroup
+    tablePrivateDnsZoneGroup
+  ]
 }
 
 var storageBlobDataOwnerRole = subscriptionResourceId(
