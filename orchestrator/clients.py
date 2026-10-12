@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+import time
+from collections.abc import Callable, Iterable
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -14,10 +15,28 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 CANDIDATE_TERMINAL = {"SUCCEEDED", "PARTIAL_SUCCESS", "FAILED"}
 PORTAL_JOB_TERMINAL = {"completed", "failed"}
+ARM_ENDPOINT = "https://management.azure.com"
+ARM_SCOPE = f"{ARM_ENDPOINT}/.default"
+STORAGE_SCOPE = "https://storage.azure.com/.default"
+LOCK_API_VERSION = "2016-09-01"
+APP_SERVICE_API_VERSION = "2024-04-01"
+POSTGRES_API_VERSION = "2024-08-01"
+MYSQL_API_VERSION = "2023-12-30"
+CONTAINER_APP_API_VERSION = "2024-03-01"
+STORAGE_API_VERSION = "2023-05-01"
+ARM_RECHECK_ATTEMPTS = 30
+ARM_RECHECK_SECONDS = 10
 
 
 class ExternalServiceError(RuntimeError):
     """외부 서비스 호출 또는 응답 계약 위반을 나타낸다."""
+
+
+class ArmRequestError(ExternalServiceError):
+    def __init__(self, status_code: int, code: str):
+        super().__init__(f"ARM request failed with HTTP {status_code} ({code})")
+        self.status_code = status_code
+        self.code = code
 
 
 def _validate_https_url(url: str) -> None:
@@ -87,6 +106,26 @@ def request_json(
         raise ExternalServiceError("external service request failed") from error
 
 
+def request_status(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    expected_statuses: Iterable[int] = (200,),
+) -> None:
+    """응답 본문을 보존하지 않고 제한된 상태 코드만 확인한다."""
+    _validate_https_url(url)
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
+            response = client.request(method, url, headers=headers)
+            if 300 <= response.status_code < 400:
+                raise ExternalServiceError("redirect response rejected")
+            if response.status_code not in set(expected_statuses):
+                raise ExternalServiceError(f"external service returned HTTP {response.status_code}")
+    except httpx.HTTPError as error:
+        raise ExternalServiceError("external service request failed") from error
+
+
 def _candidate_headers(settings: Settings) -> dict[str, str]:
     return {"X-API-Key": settings.candidate_api_key, "Accept": "application/json"}
 
@@ -123,13 +162,375 @@ def check_exchange_session(analysis_date: str) -> dict[str, Any]:
     }
 
 
-def _arm_site(resource_id: str, credential: Any) -> dict[str, Any]:
-    token = credential.get_token("https://management.azure.com/.default").token
+def _arm_resource(resource_id: str, api_version: str, credential: Any) -> dict[str, Any]:
+    token = credential.get_token(ARM_SCOPE).token
     return request_json(
         "GET",
-        f"https://management.azure.com{resource_id}?api-version=2024-04-01",
+        f"{ARM_ENDPOINT}{resource_id}?api-version={api_version}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
+
+
+def _arm_request(
+    method: str,
+    resource_path: str,
+    api_version: str,
+    credential: Any,
+    *,
+    json_body: dict[str, Any] | None = None,
+    expected_statuses: Iterable[int] = (200, 201, 202, 204),
+) -> None:
+    token = credential.get_token(ARM_SCOPE).token
+    url = f"{ARM_ENDPOINT}{resource_path}?api-version={api_version}"
+    _validate_https_url(url)
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
+            response = client.request(
+                method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+                json=json_body,
+            )
+    except httpx.HTTPError as error:
+        raise ExternalServiceError("ARM request failed") from error
+    if response.status_code in set(expected_statuses):
+        return
+    code = "Unknown"
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        candidate = error.get("code") if isinstance(error, dict) else None
+        if isinstance(candidate, str) and candidate.replace("_", "").isalnum():
+            code = candidate[:64]
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    raise ArmRequestError(response.status_code, code)
+
+
+def _resource_readonly_locks(resource_id: str, credential: Any) -> list[dict[str, Any]]:
+    payload = _arm_resource(
+        f"{resource_id}/providers/Microsoft.Authorization/locks",
+        LOCK_API_VERSION,
+        credential,
+    )
+    locks = payload.get("value")
+    if not isinstance(locks, list):
+        raise ExternalServiceError("resource lock response is invalid")
+    prefix = f"{resource_id}/providers/Microsoft.Authorization/locks/".casefold()
+    return [
+        lock
+        for lock in locks
+        if isinstance(lock, dict)
+        and isinstance(lock.get("id"), str)
+        and lock["id"].casefold().startswith(prefix)
+        and isinstance(lock.get("properties"), dict)
+        and str(lock["properties"].get("level", "")).casefold() == "readonly"
+    ]
+
+
+def _with_readonly_lock_retry(
+    resource_id: str,
+    credential: Any,
+    operation: Callable[[], None],
+) -> bool:
+    try:
+        operation()
+        return False
+    except ArmRequestError as error:
+        if error.code.casefold() not in {"scopelocked", "lockviolation"}:
+            raise
+    removed: list[dict[str, Any]] = []
+    try:
+        for lock in _resource_readonly_locks(resource_id, credential):
+            _arm_request("DELETE", lock["id"], LOCK_API_VERSION, credential)
+            removed.append(lock)
+        if not removed:
+            raise ExternalServiceError("ARM remediation was blocked")
+        operation()
+        return True
+    finally:
+        for lock in removed:
+            _arm_request(
+                "PUT",
+                lock["id"],
+                LOCK_API_VERSION,
+                credential,
+                json_body={"properties": lock["properties"]},
+            )
+
+
+def _wait_for_resource(
+    name: str,
+    getter: Callable[[], dict[str, Any]],
+    ready: Callable[[dict[str, Any]], bool],
+) -> dict[str, Any]:
+    for attempt in range(ARM_RECHECK_ATTEMPTS):
+        resource = getter()
+        if ready(resource):
+            return resource
+        if attempt + 1 < ARM_RECHECK_ATTEMPTS:
+            time.sleep(ARM_RECHECK_SECONDS)
+    raise ExternalServiceError(f"{name} remediation did not reach ready state")
+
+
+def _require_state(
+    name: str,
+    resource: dict[str, Any],
+    expected: str,
+    *,
+    property_name: str = "state",
+) -> dict[str, Any]:
+    properties = resource.get("properties")
+    if not isinstance(properties, dict):
+        raise ExternalServiceError(f"{name} ARM response is invalid")
+    state = str(properties.get(property_name, "")).upper()
+    if state != expected:
+        raise ExternalServiceError(f"{name} is not {expected}")
+    return properties
+
+
+def _require_database_network(
+    name: str,
+    properties: dict[str, Any],
+    expected_public_network_access: str,
+) -> None:
+    network = properties.get("network")
+    if not isinstance(network, dict):
+        raise ExternalServiceError(f"{name} network configuration is unavailable")
+    if network.get("publicNetworkAccess") != expected_public_network_access:
+        raise ExternalServiceError(f"{name} network configuration differs from contract")
+
+
+def _properties(resource: dict[str, Any]) -> dict[str, Any]:
+    properties = resource.get("properties")
+    if not isinstance(properties, dict):
+        raise ExternalServiceError("ARM response is invalid")
+    return properties
+
+
+def _ensure_started(
+    name: str,
+    resource_id: str,
+    api_version: str,
+    expected_state: str,
+    credential: Any,
+    remediated: list[str],
+) -> dict[str, Any]:
+    def get_resource() -> dict[str, Any]:
+        return _arm_resource(resource_id, api_version, credential)
+
+    resource = get_resource()
+    state = str(_properties(resource).get("state", "")).upper()
+    if state == "STOPPED":
+        lock_removed = _with_readonly_lock_retry(
+            resource_id,
+            credential,
+            lambda: _arm_request(
+                "POST",
+                f"{resource_id}/start",
+                api_version,
+                credential,
+            ),
+        )
+        remediated.append(f"{name}:start")
+        if lock_removed:
+            remediated.append(f"{name}:readonly_lock_restored")
+    elif state not in {expected_state, "STARTING"}:
+        raise ExternalServiceError(f"{name} is not safely startable")
+    return _wait_for_resource(
+        name,
+        get_resource,
+        lambda value: str(_properties(value).get("state", "")).upper() == expected_state,
+    )
+
+
+def _ensure_tradingagents(
+    settings: Settings,
+    credential: Any,
+    remediated: list[str],
+) -> None:
+    resource_id = settings.tradingagents_resource_id
+
+    def get_resource() -> dict[str, Any]:
+        return _arm_resource(resource_id, CONTAINER_APP_API_VERSION, credential)
+
+    resource = get_resource()
+    properties = _properties(resource)
+    template = properties.get("template")
+    scale = template.get("scale") if isinstance(template, dict) else None
+    min_replicas = scale.get("minReplicas") if isinstance(scale, dict) else None
+    running_status = str(properties.get("runningStatus", "")).upper()
+    if min_replicas != settings.tradingagents_min_replicas:
+        updated_template = {
+            **template,
+            "scale": {
+                **scale,
+                "minReplicas": settings.tradingagents_min_replicas,
+            },
+        }
+        lock_removed = _with_readonly_lock_retry(
+            resource_id,
+            credential,
+            lambda: _arm_request(
+                "PATCH",
+                resource_id,
+                CONTAINER_APP_API_VERSION,
+                credential,
+                json_body={
+                    "properties": {
+                        "template": updated_template,
+                    }
+                },
+            ),
+        )
+        remediated.append("tradingagents:min_replicas")
+        if lock_removed:
+            remediated.append("tradingagents:readonly_lock_restored")
+        resource = get_resource()
+        running_status = str(_properties(resource).get("runningStatus", "")).upper()
+    if running_status == "STOPPED":
+        lock_removed = _with_readonly_lock_retry(
+            resource_id,
+            credential,
+            lambda: _arm_request(
+                "POST",
+                f"{resource_id}/start",
+                CONTAINER_APP_API_VERSION,
+                credential,
+            ),
+        )
+        remediated.append("tradingagents:start")
+        if lock_removed:
+            remediated.append("tradingagents:readonly_lock_restored")
+    elif running_status not in {"RUNNING", "STARTING", "PROGRESSING"}:
+        raise ExternalServiceError("TradingAgents is not safely startable")
+
+    def ready(value: dict[str, Any]) -> bool:
+        current = _properties(value)
+        current_template = current.get("template")
+        current_scale = (
+            current_template.get("scale") if isinstance(current_template, dict) else None
+        )
+        return (
+            str(current.get("runningStatus", "")).upper() == "RUNNING"
+            and isinstance(current_scale, dict)
+            and current_scale.get("minReplicas") == settings.tradingagents_min_replicas
+        )
+
+    _wait_for_resource("TradingAgents", get_resource, ready)
+
+
+def _storage_contract_matches(properties: dict[str, Any], settings: Settings) -> bool:
+    network_acls = properties.get("networkAcls")
+    return (
+        isinstance(network_acls, dict)
+        and properties.get("allowBlobPublicAccess") is False
+        and properties.get("allowSharedKeyAccess") is False
+        and properties.get("publicNetworkAccess")
+        == settings.orchestrator_storage_public_network_access
+        and network_acls.get("defaultAction")
+        == settings.orchestrator_storage_network_default_action
+    )
+
+
+def _check_storage(
+    settings: Settings,
+    credential: Any,
+    remediated: list[str],
+) -> None:
+    resource_id = settings.orchestrator_storage_resource_id
+
+    def get_resource() -> dict[str, Any]:
+        return _arm_resource(resource_id, STORAGE_API_VERSION, credential)
+
+    storage = get_resource()
+    properties = _properties(storage)
+    if not _storage_contract_matches(properties, settings):
+        network_acls = properties.get("networkAcls")
+        preserved_network_acls = network_acls if isinstance(network_acls, dict) else {}
+        lock_removed = _with_readonly_lock_retry(
+            resource_id,
+            credential,
+            lambda: _arm_request(
+                "PATCH",
+                resource_id,
+                STORAGE_API_VERSION,
+                credential,
+                json_body={
+                    "properties": {
+                        "allowBlobPublicAccess": False,
+                        "allowSharedKeyAccess": False,
+                        "publicNetworkAccess": (
+                            settings.orchestrator_storage_public_network_access
+                        ),
+                        "networkAcls": {
+                            **preserved_network_acls,
+                            "defaultAction": (settings.orchestrator_storage_network_default_action),
+                        },
+                    }
+                },
+            ),
+        )
+        remediated.append("orchestrator_storage:restore_contract")
+        if lock_removed:
+            remediated.append("orchestrator_storage:readonly_lock_restored")
+        storage = _wait_for_resource(
+            "orchestrator storage",
+            get_resource,
+            lambda value: (
+                str(_properties(value).get("provisioningState", "")).upper() == "SUCCEEDED"
+                and _storage_contract_matches(_properties(value), settings)
+            ),
+        )
+    properties = _require_state(
+        "orchestrator storage",
+        storage,
+        "SUCCEEDED",
+        property_name="provisioningState",
+    )
+    network_acls = properties.get("networkAcls")
+    if not isinstance(network_acls, dict):
+        raise ExternalServiceError("orchestrator storage network configuration is unavailable")
+    expected = {
+        "allowBlobPublicAccess": False,
+        "allowSharedKeyAccess": False,
+        "defaultToOAuthAuthentication": True,
+        "supportsHttpsTrafficOnly": True,
+        "minimumTlsVersion": "TLS1_2",
+        "publicNetworkAccess": settings.orchestrator_storage_public_network_access,
+    }
+    if any(properties.get(key) != value for key, value in expected.items()):
+        raise ExternalServiceError("orchestrator storage configuration differs from contract")
+    if network_acls.get("defaultAction") != settings.orchestrator_storage_network_default_action:
+        raise ExternalServiceError(
+            "orchestrator storage network configuration differs from contract"
+        )
+    primary_endpoints = properties.get("primaryEndpoints")
+    if not isinstance(primary_endpoints, dict):
+        raise ExternalServiceError("orchestrator storage endpoints are unavailable")
+    endpoints = {name: primary_endpoints.get(name) for name in ("blob", "queue", "table")}
+    if any(not isinstance(endpoint, str) for endpoint in endpoints.values()):
+        raise ExternalServiceError("orchestrator storage endpoints are unavailable")
+    token = credential.get_token(STORAGE_SCOPE).token
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "x-ms-version": "2023-11-03",
+    }
+    access_checks = (
+        (
+            "HEAD",
+            f"{str(endpoints['blob']).rstrip('/')}/"
+            f"{quote(settings.orchestrator_storage_container_name, safe='')}"
+            "?restype=container",
+        ),
+        ("GET", f"{str(endpoints['queue']).rstrip('/')}?comp=list&maxresults=1"),
+        ("GET", f"{str(endpoints['table']).rstrip('/')}/Tables?$top=1"),
+    )
+    for method, url in access_checks:
+        request_status(method, url, headers=headers)
 
 
 def readiness_preflight() -> dict[str, str]:
@@ -137,14 +538,53 @@ def readiness_preflight() -> dict[str, str]:
 
     settings = Settings.from_env()
     credential = DefaultAzureCredential()
-    for name, resource_id in (
-        ("candidate", settings.candidate_resource_id),
-        ("portal", settings.portal_resource_id),
-    ):
-        resource = _arm_site(resource_id, credential)
-        state = str(resource.get("properties", {}).get("state", "")).upper()
-        if state != "RUNNING":
-            raise ExternalServiceError(f"{name} App Service is not RUNNING")
+    remediated: list[str] = []
+    _ensure_started(
+        "candidate_app",
+        settings.candidate_resource_id,
+        APP_SERVICE_API_VERSION,
+        "RUNNING",
+        credential,
+        remediated,
+    )
+    _ensure_started(
+        "portal_app",
+        settings.portal_resource_id,
+        APP_SERVICE_API_VERSION,
+        "RUNNING",
+        credential,
+        remediated,
+    )
+    postgres = _ensure_started(
+        "candidate_postgresql",
+        settings.candidate_postgres_resource_id,
+        POSTGRES_API_VERSION,
+        "READY",
+        credential,
+        remediated,
+    )
+    postgres_properties = _properties(postgres)
+    _require_database_network(
+        "candidate PostgreSQL",
+        postgres_properties,
+        settings.candidate_postgres_public_network_access,
+    )
+    mysql = _ensure_started(
+        "portal_mysql",
+        settings.portal_mysql_resource_id,
+        MYSQL_API_VERSION,
+        "READY",
+        credential,
+        remediated,
+    )
+    mysql_properties = _properties(mysql)
+    _require_database_network(
+        "portal MySQL",
+        mysql_properties,
+        settings.portal_mysql_public_network_access,
+    )
+    _ensure_tradingagents(settings, credential, remediated)
+    _check_storage(settings, credential, remediated)
     candidate_health = request_json(
         "GET",
         f"{settings.candidate_base_url}/health/ready",
@@ -153,13 +593,23 @@ def readiness_preflight() -> dict[str, str]:
     portal_health = request_json("GET", f"{settings.portal_base_url}/readyz")
     if candidate_health.get("status") != "ready" or portal_health.get("status") != "ready":
         raise ExternalServiceError("application readiness check failed")
-    checked = ["candidate", "portal"]
+    checked = [
+        "candidate",
+        "candidate_postgresql",
+        "portal",
+        "portal_mysql",
+        "orchestrator_storage",
+    ]
     if settings.tradingagents_base_url:
         tradingagents_health = request_json("GET", f"{settings.tradingagents_base_url}/readyz")
         if tradingagents_health.get("status") != "ready":
             raise ExternalServiceError("TradingAgents readiness check failed")
         checked.append("tradingagents")
-    return {"status": "ready", "checked": ",".join(checked)}
+    return {
+        "status": "ready",
+        "checked": ",".join(checked),
+        "remediated": ",".join(remediated) if remediated else "none",
+    }
 
 
 def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:

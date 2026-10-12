@@ -107,12 +107,34 @@ def test_candidate_verification_requires_all_five_to_ten(monkeypatch):
         candidate_resource_id=(
             "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/candidate"
         ),
+        candidate_postgres_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.DBforPostgreSQL/flexibleServers/candidate-db"
+        ),
+        candidate_postgres_public_network_access="Disabled",
         portal_base_url="https://portal.example.test",
         portal_api_key="portal-key",
         portal_resource_id=(
             "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/portal"
         ),
+        portal_mysql_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.DBforMySQL/flexibleServers/portal-db"
+        ),
+        portal_mysql_public_network_access="Disabled",
         tradingagents_base_url=None,
+        tradingagents_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.App/containerApps/tradingagents"
+        ),
+        tradingagents_min_replicas=1,
+        orchestrator_storage_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.Storage/storageAccounts/orchestrator"
+        ),
+        orchestrator_storage_container_name="app-package",
+        orchestrator_storage_public_network_access="Enabled",
+        orchestrator_storage_network_default_action="Allow",
         acs_endpoint="https://acs.communication.azure.com",
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
@@ -153,12 +175,34 @@ def _settings(*, tradingagents_base_url=None):
         candidate_resource_id=(
             "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/candidate"
         ),
+        candidate_postgres_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.DBforPostgreSQL/flexibleServers/candidate-db"
+        ),
+        candidate_postgres_public_network_access="Disabled",
         portal_base_url="https://portal.example.test",
         portal_api_key="portal-token",
         portal_resource_id=(
             "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Web/sites/portal"
         ),
+        portal_mysql_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.DBforMySQL/flexibleServers/portal-db"
+        ),
+        portal_mysql_public_network_access="Disabled",
         tradingagents_base_url=tradingagents_base_url,
+        tradingagents_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.App/containerApps/tradingagents"
+        ),
+        tradingagents_min_replicas=1,
+        orchestrator_storage_resource_id=(
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.Storage/storageAccounts/orchestrator"
+        ),
+        orchestrator_storage_container_name="app-package",
+        orchestrator_storage_public_network_access="Enabled",
+        orchestrator_storage_network_default_action="Allow",
         acs_endpoint="https://acs.communication.azure.com",
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
@@ -236,10 +280,37 @@ def test_candidate_submission_idempotency_includes_model_purpose(monkeypatch):
 def test_preflight_requires_portal_and_configured_tradingagents_ready(monkeypatch):
     configured = _settings(tradingagents_base_url="https://tradingagents.example.test")
     monkeypatch.setattr(clients.Settings, "from_env", lambda: configured)
+    resources = {
+        configured.candidate_resource_id: {"properties": {"state": "Running"}},
+        configured.portal_resource_id: {"properties": {"state": "Running"}},
+        configured.candidate_postgres_resource_id: {
+            "properties": {
+                "state": "Ready",
+                "network": {"publicNetworkAccess": "Disabled"},
+            }
+        },
+        configured.portal_mysql_resource_id: {
+            "properties": {
+                "state": "Ready",
+                "network": {"publicNetworkAccess": "Disabled"},
+            }
+        },
+        configured.tradingagents_resource_id: {
+            "properties": {
+                "runningStatus": "Running",
+                "template": {"scale": {"minReplicas": 1}},
+            }
+        },
+    }
     monkeypatch.setattr(
         clients,
-        "_arm_site",
-        lambda resource_id, credential: {"properties": {"state": "Running"}},
+        "_arm_resource",
+        lambda resource_id, api_version, credential: resources[resource_id],
+    )
+    monkeypatch.setattr(
+        clients,
+        "_check_storage",
+        lambda configured, credential, remediated: None,
     )
     urls = []
 
@@ -254,9 +325,316 @@ def test_preflight_requires_portal_and_configured_tradingagents_ready(monkeypatc
     monkeypatch.setattr(clients, "request_json", fake_request)
     result = clients.readiness_preflight()
 
-    assert result == {"status": "ready", "checked": "candidate,portal,tradingagents"}
+    assert result == {
+        "status": "ready",
+        "checked": (
+            "candidate,candidate_postgresql,portal,portal_mysql,orchestrator_storage,tradingagents"
+        ),
+        "remediated": "none",
+    }
     assert "https://portal.example.test/readyz" in urls
     assert "https://tradingagents.example.test/readyz" in urls
+
+
+@pytest.mark.parametrize(
+    ("name", "api_version", "expected_state"),
+    [
+        ("candidate_app", clients.APP_SERVICE_API_VERSION, "RUNNING"),
+        ("portal_app", clients.APP_SERVICE_API_VERSION, "RUNNING"),
+        ("candidate_postgresql", clients.POSTGRES_API_VERSION, "READY"),
+        ("portal_mysql", clients.MYSQL_API_VERSION, "READY"),
+    ],
+)
+def test_preflight_starts_stopped_resource_then_rereads(
+    monkeypatch,
+    name,
+    api_version,
+    expected_state,
+):
+    state = {"value": "Stopped"}
+    actions = []
+
+    def fake_arm(resource_id, requested_api_version, credential):
+        del resource_id, credential
+        assert requested_api_version == api_version
+        return {"properties": {"state": state["value"]}}
+
+    def fake_action(method, resource_path, requested_api_version, credential, **kwargs):
+        del credential, kwargs
+        actions.append((method, resource_path, requested_api_version))
+        state["value"] = expected_state.title()
+
+    monkeypatch.setattr(clients, "_arm_resource", fake_arm)
+    monkeypatch.setattr(clients, "_arm_request", fake_action)
+    remediated = []
+
+    clients._ensure_started(
+        name,
+        "/subscriptions/sub/resourceGroups/rg/providers/Test/resource",
+        api_version,
+        expected_state,
+        object(),
+        remediated,
+    )
+
+    assert actions == [
+        (
+            "POST",
+            "/subscriptions/sub/resourceGroups/rg/providers/Test/resource/start",
+            api_version,
+        )
+    ]
+    assert remediated == [f"{name}:start"]
+
+
+def test_preflight_fails_only_after_start_does_not_reach_ready(monkeypatch):
+    monkeypatch.setattr(
+        clients,
+        "_arm_resource",
+        lambda *args: {"properties": {"state": "Stopped"}},
+    )
+    monkeypatch.setattr(clients, "_arm_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(clients, "ARM_RECHECK_ATTEMPTS", 2)
+    monkeypatch.setattr(clients.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(clients.ExternalServiceError, match="did not reach ready"):
+        clients._ensure_started(
+            "candidate_app",
+            "/subscriptions/sub/resourceGroups/rg/providers/Test/resource",
+            clients.APP_SERVICE_API_VERSION,
+            "RUNNING",
+            object(),
+            [],
+        )
+
+
+def test_database_network_mismatch_is_not_auto_remediated():
+    with pytest.raises(clients.ExternalServiceError, match="differs from contract"):
+        clients._require_database_network(
+            "candidate PostgreSQL",
+            {"network": {"publicNetworkAccess": "Enabled"}},
+            "Disabled",
+        )
+
+
+class FakeCredential:
+    def __init__(self):
+        self.scopes = []
+
+    def get_token(self, scope):
+        self.scopes.append(scope)
+        return type("Token", (), {"token": "not-a-real-token"})()
+
+
+def test_storage_preflight_checks_hardened_contract_and_container_access(monkeypatch):
+    configured = _settings()
+    credential = FakeCredential()
+    storage = {
+        "properties": {
+            "provisioningState": "Succeeded",
+            "allowBlobPublicAccess": False,
+            "allowSharedKeyAccess": False,
+            "defaultToOAuthAuthentication": True,
+            "supportsHttpsTrafficOnly": True,
+            "minimumTlsVersion": "TLS1_2",
+            "publicNetworkAccess": "Enabled",
+            "networkAcls": {"defaultAction": "Allow"},
+            "primaryEndpoints": {
+                "blob": "https://orchestrator.blob.core.windows.net/",
+                "queue": "https://orchestrator.queue.core.windows.net/",
+                "table": "https://orchestrator.table.core.windows.net/",
+            },
+        }
+    }
+    monkeypatch.setattr(clients, "_arm_resource", lambda *args: storage)
+    captured = []
+    monkeypatch.setattr(
+        clients,
+        "request_status",
+        lambda method, url, **kwargs: captured.append((method, url, kwargs)),
+    )
+
+    clients._check_storage(configured, credential, [])
+
+    assert credential.scopes == [clients.STORAGE_SCOPE]
+    assert [(method, url) for method, url, _ in captured] == [
+        (
+            "HEAD",
+            "https://orchestrator.blob.core.windows.net/app-package?restype=container",
+        ),
+        (
+            "GET",
+            "https://orchestrator.queue.core.windows.net?comp=list&maxresults=1",
+        ),
+        (
+            "GET",
+            "https://orchestrator.table.core.windows.net/Tables?$top=1",
+        ),
+    ]
+    assert all(call["headers"]["Authorization"].startswith("Bearer ") for _, _, call in captured)
+
+
+def test_storage_preflight_restores_safe_contract(monkeypatch):
+    configured = _settings()
+    storage = {
+        "properties": {
+            "provisioningState": "Succeeded",
+            "allowBlobPublicAccess": False,
+            "allowSharedKeyAccess": True,
+            "defaultToOAuthAuthentication": True,
+            "supportsHttpsTrafficOnly": True,
+            "minimumTlsVersion": "TLS1_2",
+            "publicNetworkAccess": "Enabled",
+            "networkAcls": {"defaultAction": "Allow"},
+            "primaryEndpoints": {
+                "blob": "https://orchestrator.blob.core.windows.net/",
+                "queue": "https://orchestrator.queue.core.windows.net/",
+                "table": "https://orchestrator.table.core.windows.net/",
+            },
+        }
+    }
+    monkeypatch.setattr(clients, "_arm_resource", lambda *args: storage)
+    mutations = []
+
+    def fake_action(method, resource_path, api_version, credential, **kwargs):
+        del credential
+        mutations.append((method, resource_path, api_version, kwargs["json_body"]))
+        storage["properties"]["allowSharedKeyAccess"] = False
+
+    monkeypatch.setattr(clients, "_arm_request", fake_action)
+    monkeypatch.setattr(clients, "request_status", lambda *args, **kwargs: None)
+    remediated = []
+
+    clients._check_storage(configured, FakeCredential(), remediated)
+
+    assert mutations[0][0] == "PATCH"
+    assert mutations[0][3] == {
+        "properties": {
+            "allowBlobPublicAccess": False,
+            "allowSharedKeyAccess": False,
+            "publicNetworkAccess": "Enabled",
+            "networkAcls": {"defaultAction": "Allow"},
+        }
+    }
+    assert remediated == ["orchestrator_storage:restore_contract"]
+
+
+def test_tradingagents_restores_min_replicas_and_running_state(monkeypatch):
+    configured = _settings(tradingagents_base_url="https://tradingagents.example.test")
+    resource = {
+        "properties": {
+            "runningStatus": "Stopped",
+            "template": {"scale": {"minReplicas": 0}},
+        }
+    }
+    monkeypatch.setattr(clients, "_arm_resource", lambda *args: resource)
+    actions = []
+
+    def fake_action(method, resource_path, api_version, credential, **kwargs):
+        del resource_path, api_version, credential
+        actions.append((method, kwargs.get("json_body")))
+        if method == "PATCH":
+            resource["properties"]["template"]["scale"]["minReplicas"] = 1
+        if method == "POST":
+            resource["properties"]["runningStatus"] = "Running"
+
+    monkeypatch.setattr(clients, "_arm_request", fake_action)
+    remediated = []
+
+    clients._ensure_tradingagents(configured, object(), remediated)
+
+    assert [method for method, _ in actions] == ["PATCH", "POST"]
+    assert remediated == ["tradingagents:min_replicas", "tradingagents:start"]
+
+
+def test_readonly_lock_is_removed_only_after_scope_locked_and_restored(monkeypatch):
+    resource_id = "/subscriptions/sub/resourceGroups/rg/providers/Test/resources/example"
+    lock_id = f"{resource_id}/providers/Microsoft.Authorization/locks/guard"
+    attempts = 0
+    calls = []
+
+    def operation():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise clients.ArmRequestError(409, "ScopeLocked")
+
+    monkeypatch.setattr(
+        clients,
+        "_resource_readonly_locks",
+        lambda candidate_id, credential: [
+            {
+                "id": lock_id,
+                "properties": {
+                    "level": "ReadOnly",
+                    "notes": "unchanged",
+                    "owners": [{"applicationId": "owner-id"}],
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        clients,
+        "_arm_request",
+        lambda method, path, version, credential, **kwargs: calls.append(
+            (method, path, kwargs.get("json_body"))
+        ),
+    )
+
+    removed = clients._with_readonly_lock_retry(resource_id, object(), operation)
+
+    assert removed is True
+    assert attempts == 2
+    assert calls == [
+        ("DELETE", lock_id, None),
+        (
+            "PUT",
+            lock_id,
+            {
+                "properties": {
+                    "level": "ReadOnly",
+                    "notes": "unchanged",
+                    "owners": [{"applicationId": "owner-id"}],
+                }
+            },
+        ),
+    ]
+
+
+def test_readonly_lock_is_restored_when_retry_fails(monkeypatch):
+    resource_id = "/subscriptions/sub/resourceGroups/rg/providers/Test/resources/example"
+    lock_id = f"{resource_id}/providers/Microsoft.Authorization/locks/guard"
+    calls = []
+    attempts = 0
+
+    def operation():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise clients.ArmRequestError(409, "ScopeLocked")
+        raise clients.ExternalServiceError("still unavailable")
+
+    monkeypatch.setattr(
+        clients,
+        "_resource_readonly_locks",
+        lambda candidate_id, credential: [
+            {"id": lock_id, "properties": {"level": "ReadOnly", "notes": "same"}}
+        ],
+    )
+    monkeypatch.setattr(
+        clients,
+        "_arm_request",
+        lambda method, path, version, credential, **kwargs: calls.append(method),
+    )
+
+    with pytest.raises(clients.ExternalServiceError, match="still unavailable"):
+        clients._with_readonly_lock_retry(
+            resource_id,
+            object(),
+            operation,
+        )
+
+    assert calls == ["DELETE", "PUT"]
 
 
 def test_bicep_requires_and_configures_tradingagents_url():
@@ -331,6 +709,62 @@ def _run(generator, responder):
                 event = generator.send(response)
     except StopIteration as stopped:
         return stopped.value
+
+
+def test_started_email_contains_only_safe_preflight_summary():
+    events = []
+    preflight = {
+        "status": "ready",
+        "checked": "candidate,candidate_postgresql,portal,portal_mysql,orchestrator_storage",
+        "remediated": "candidate_app:start",
+    }
+    generator = workflow.daily_orchestrator(FakeContext())
+
+    event = next(generator)
+    events.append(event)
+    event = generator.send({"is_session": True})
+    events.append(event)
+    event = generator.send(preflight)
+    events.append(event)
+
+    assert [item[1] for item in events] == [
+        "check_exchange_session",
+        "readiness_preflight",
+        "send_email",
+    ]
+    payload = events[-1][2]
+    assert "STARTED" in payload["body"]
+    assert "candidate_app:start" in payload["body"]
+    assert "/subscriptions/" not in payload["body"]
+
+
+def test_preflight_failure_occurs_before_started_email_and_pipeline_submission():
+    activities = []
+
+    def respond(event):
+        assert event[0] == "activity"
+        name, payload = event[1], event[2]
+        activities.append((name, payload))
+        if name == "check_exchange_session":
+            return {"is_session": True}
+        if name == "readiness_preflight":
+            raise clients.ExternalServiceError("candidate PostgreSQL is not READY")
+        if name == "send_email":
+            return {"sent": True}
+        raise AssertionError(name)
+
+    outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
+
+    assert outcome["state"] == "FAILED"
+    assert outcome["reason"] == "ExternalServiceError"
+    assert [name for name, _ in activities] == [
+        "check_exchange_session",
+        "readiness_preflight",
+        "send_email",
+    ]
+    email = activities[-1][1]
+    assert "FAILED" in email["subject"]
+    assert "STARTED" not in email["subject"]
 
 
 def test_portal_batch_partial_failure_is_preserved_without_stock_retries():

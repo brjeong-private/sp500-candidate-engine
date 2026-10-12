@@ -56,8 +56,38 @@ def optional_https_base_url(name: str) -> str | None:
 
 def azure_resource_id(name: str) -> str:
     value = required(name)
-    if not value.startswith("/subscriptions/") or ".." in value or "?" in value:
+    if (
+        not value.startswith("/subscriptions/")
+        or ".." in value
+        or "?" in value
+        or "#" in value
+        or any(character.isspace() for character in value)
+    ):
         raise ConfigurationError(f"{name} must be an Azure resource ID")
+    return value
+
+
+def resource_access(name: str) -> str:
+    value = required(name).capitalize()
+    if value not in {"Enabled", "Disabled"}:
+        raise ConfigurationError(f"{name} must be Enabled or Disabled")
+    return value
+
+
+def positive_int(name: str) -> int:
+    try:
+        value = int(required(name))
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be a positive integer")
+    return value
+
+
+def network_action(name: str) -> str:
+    value = required(name).capitalize()
+    if value not in {"Allow", "Deny"}:
+        raise ConfigurationError(f"{name} must be Allow or Deny")
     return value
 
 
@@ -66,10 +96,20 @@ class Settings:
     candidate_base_url: str
     candidate_api_key: str
     candidate_resource_id: str
+    candidate_postgres_resource_id: str
+    candidate_postgres_public_network_access: str
     portal_base_url: str
     portal_api_key: str
     portal_resource_id: str
+    portal_mysql_resource_id: str
+    portal_mysql_public_network_access: str
     tradingagents_base_url: str | None
+    tradingagents_resource_id: str
+    tradingagents_min_replicas: int
+    orchestrator_storage_resource_id: str
+    orchestrator_storage_container_name: str
+    orchestrator_storage_public_network_access: str
+    orchestrator_storage_network_default_action: str
     acs_endpoint: str
     email_sender: str
     email_recipients: tuple[str, ...]
@@ -88,10 +128,28 @@ class Settings:
             candidate_base_url=https_base_url("CANDIDATE_API_URL"),
             candidate_api_key=required("CANDIDATE_API_KEY"),
             candidate_resource_id=azure_resource_id("CANDIDATE_RESOURCE_ID"),
+            candidate_postgres_resource_id=azure_resource_id("CANDIDATE_POSTGRES_RESOURCE_ID"),
+            candidate_postgres_public_network_access=resource_access(
+                "CANDIDATE_POSTGRES_PUBLIC_NETWORK_ACCESS"
+            ),
             portal_base_url=https_base_url("PORTAL_API_URL"),
             portal_api_key=required("PORTAL_AUTOMATION_API_KEY"),
             portal_resource_id=azure_resource_id("PORTAL_RESOURCE_ID"),
+            portal_mysql_resource_id=azure_resource_id("PORTAL_MYSQL_RESOURCE_ID"),
+            portal_mysql_public_network_access=resource_access(
+                "PORTAL_MYSQL_PUBLIC_NETWORK_ACCESS"
+            ),
             tradingagents_base_url=optional_https_base_url("TRADINGAGENTS_API_URL"),
+            tradingagents_resource_id=azure_resource_id("TRADINGAGENTS_RESOURCE_ID"),
+            tradingagents_min_replicas=positive_int("TRADINGAGENTS_MIN_REPLICAS"),
+            orchestrator_storage_resource_id=azure_resource_id("ORCHESTRATOR_STORAGE_RESOURCE_ID"),
+            orchestrator_storage_container_name=required("ORCHESTRATOR_STORAGE_CONTAINER_NAME"),
+            orchestrator_storage_public_network_access=resource_access(
+                "ORCHESTRATOR_STORAGE_PUBLIC_NETWORK_ACCESS"
+            ),
+            orchestrator_storage_network_default_action=network_action(
+                "ORCHESTRATOR_STORAGE_NETWORK_DEFAULT_ACTION"
+            ),
             acs_endpoint=https_base_url("ACS_EMAIL_ENDPOINT"),
             email_sender=required("ORCHESTRATOR_EMAIL_SENDER"),
             email_recipients=recipients,

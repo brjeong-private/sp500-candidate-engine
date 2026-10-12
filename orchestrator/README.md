@@ -39,12 +39,15 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
    `candidate-daily-YYYY-MM-DD-{model_purpose}` 형식이므로 날짜가 같아도
    `SHORT_5D` one-off와 충돌하지 않는다.
 2. Candidate `exchange-sessions` 조회로 XNYS 거래일인지 확인한다.
-3. `DefaultAzureCredential`로 Candidate/Portal App Service가 `RUNNING`인지,
-   Candidate PostgreSQL·Portal MySQL이 `READY`인지와 각 DB의 public network 설정이
-   배포 계약과 같은지 확인한다. 오케스트레이터 Storage는 provisioning 완료,
-   HTTPS/TLS 1.2, 공유 키·익명 Blob 차단, OAuth 기본값, public network 계약 및
-   관리 ID의 Blob·Queue·Table data plane 접근을 확인한다. 그 뒤 Candidate
-   `/health/ready`, Portal `/readyz`를 확인한다. 배포 인프라는
+3. `DefaultAzureCredential`로 Candidate/Portal App Service, Candidate PostgreSQL,
+   Portal MySQL을 읽고 중지 상태이면 `start`한다. TradingAgents Container App은
+   배포 설정의 최소 replica와 실행 상태를 복원한다. 오케스트레이터 Storage는
+   public endpoint, 공유 키·익명 Blob 차단, network default action을 배포 계약으로
+   복원한다. 허용된 변경이 resource-level `ReadOnly` lock에 막힌 경우에만 해당
+   lock을 제거하고 동일한 level·notes·owners로 `finally`에서 복원한다. 이후 모든
+   ARM 상태와 Storage Blob·Queue·Table data plane, Candidate `/health/ready`,
+   Portal·TradingAgents `/readyz`를 다시 확인한다. 복구가 끝나지 않으면 STARTED
+   알림이나 pipeline 제출 전에 실패한다. 배포 인프라는
    `TRADINGAGENTS_API_URL`을 필수로 설정하며 TradingAgents `/readyz`도
    `status=ready`인지 확인한다.
 4. 날짜와 모델 목적 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
@@ -107,6 +110,12 @@ Invoke-RestMethod `
   `publicNetworkAccess`(`Enabled` 또는 `Disabled`)를 입력한다. 오케스트레이터 관리
   ID에 네 기존 리소스 범위의 `Reader`를 별도로 부여해야 한다. 템플릿이 소유하지
   않는 다른 resource group의 역할 할당은 자동화하지 않는다.
+- 자동 복구는 중지된 App Service·DB의 시작, TradingAgents의 배포된 최소 replica와
+  실행 상태 복원, Storage의 `publicNetworkAccess=Enabled`,
+  `allowSharedKeyAccess=false`, `allowBlobPublicAccess=false`와 배포된 network
+  default action 복원으로 제한한다. SKU·DB firewall·secret·데이터는 변경하지 않는다.
+  STARTED 이메일에는 resource ID나 ARM payload 없이 검사 범주와 수행한 안전한
+  remediation 이름만 포함한다.
 - 포털 자동화 API와 멱등 계약은 포털 배포에서 먼저 제공해야 한다.
 - 운영 배포에서는 비어 있지 않은 HTTPS `tradingAgentsApiUrl` 파라미터가 필수다.
   로컬 격리 테스트에서만 `TRADINGAGENTS_API_URL`을 생략할 수 있다.
@@ -126,6 +135,22 @@ Invoke-RestMethod `
   `ORCHESTRATOR_STORAGE_CONTAINER_NAME`, `ORCHESTRATOR_STORAGE_PUBLIC_NETWORK_ACCESS`
   설정은 실제 배포 리소스와 같아야 한다. private endpoint를 강제한다면 FC1 VNet
   통합과 DNS를 먼저 설계한다.
+- 관리 ID에는 built-in Contributor 대신 다음 `Actions`만 가진 custom role을 해당
+  resource scope에 부여하는 것이 최소 권한 계약이다.
+  - App Service: `Microsoft.Web/sites/read`, `Microsoft.Web/sites/start/action`
+  - PostgreSQL: `Microsoft.DBforPostgreSQL/flexibleServers/read`,
+    `Microsoft.DBforPostgreSQL/flexibleServers/start/action`
+  - MySQL: `Microsoft.DBforMySQL/flexibleServers/read`,
+    `Microsoft.DBforMySQL/flexibleServers/start/action`
+  - TradingAgents: `Microsoft.App/containerApps/read`,
+    `Microsoft.App/containerApps/write`, `Microsoft.App/containerApps/start/action`
+  - Storage: `Microsoft.Storage/storageAccounts/read`,
+    `Microsoft.Storage/storageAccounts/write`
+  - 일시 lock 처리: `Microsoft.Authorization/locks/read`,
+    `Microsoft.Authorization/locks/delete`, `Microsoft.Authorization/locks/write`
+  Storage data plane 확인에는 기존 Storage Blob Data Owner, Storage Queue Data
+  Contributor, Storage Table Data Contributor를 유지한다. custom role은 `assignableScopes`
+  를 위 리소스 또는 공통 resource group보다 넓게 잡지 않는다.
 - 템플릿은 더 이상 Durable Task Scheduler와 task hub를 관리하지 않는다. 이미 배포된
   DTS 리소스는 이 변경에서 삭제하지 않으며 사용 중이 아님을 확인한 뒤 별도 승인된
   정리 작업으로 폐기한다.

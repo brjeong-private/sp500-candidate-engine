@@ -45,12 +45,16 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 reason="not_exchange_session",
             )
 
-        yield context.call_activity("readiness_preflight", None)
+        preflight = yield context.call_activity("readiness_preflight", None)
         yield context.call_activity(
             "send_email",
             _email(
                 f"[candidate-orchestrator] {analysis_date} started",
-                {"state": "STARTED", "analysis_date": analysis_date},
+                {
+                    "state": "STARTED",
+                    "analysis_date": analysis_date,
+                    "preflight": preflight,
+                },
             ),
         )
         candidate_request = {

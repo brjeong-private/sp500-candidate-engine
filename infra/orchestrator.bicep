@@ -14,15 +14,40 @@ param candidateApiUrl string
 @description('Candidate Engine App Service full ARM resource ID.')
 param candidateResourceId string
 
+@description('Candidate PostgreSQL Flexible Server full ARM resource ID.')
+param candidatePostgresResourceId string
+
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param candidatePostgresPublicNetworkAccess string = 'Enabled'
+
 @description('Portal HTTPS base URL.')
 param portalApiUrl string
 
 @description('Portal App Service full ARM resource ID.')
 param portalResourceId string
 
+@description('Portal MySQL Flexible Server full ARM resource ID.')
+param portalMysqlResourceId string
+
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+param portalMysqlPublicNetworkAccess string = 'Enabled'
+
 @minLength(9)
 @description('Required TradingAgents HTTPS base URL. Production preflight requires /readyz to report ready.')
 param tradingAgentsApiUrl string
+
+@description('TradingAgents Container App full ARM resource ID.')
+param tradingAgentsResourceId string
+
+@minValue(1)
+@maxValue(10)
+param tradingAgentsMinReplicas int = 1
 
 @description('Existing Action Group resource ID. Notification addresses remain outside this template.')
 param alertActionGroupResourceId string
@@ -68,6 +93,14 @@ var keyVaultReferencePrefix = '@Microsoft.KeyVault(VaultName=${vaultName};Secret
 var tags = {
   workload: 'sp500-candidate-orchestrator'
   component: 'durable-functions'
+}
+
+module remediationRole 'modules/orchestrator-remediation-role.bicep' = {
+  name: 'orchestrator-remediation-role'
+  scope: subscription()
+  params: {
+    assignableScope: resourceGroup().id
+  }
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
@@ -285,6 +318,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: candidateResourceId
         }
         {
+          name: 'CANDIDATE_POSTGRES_RESOURCE_ID'
+          value: candidatePostgresResourceId
+        }
+        {
+          name: 'CANDIDATE_POSTGRES_PUBLIC_NETWORK_ACCESS'
+          value: candidatePostgresPublicNetworkAccess
+        }
+        {
           name: 'PORTAL_API_URL'
           value: portalApiUrl
         }
@@ -297,8 +338,40 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: portalResourceId
         }
         {
+          name: 'PORTAL_MYSQL_RESOURCE_ID'
+          value: portalMysqlResourceId
+        }
+        {
+          name: 'PORTAL_MYSQL_PUBLIC_NETWORK_ACCESS'
+          value: portalMysqlPublicNetworkAccess
+        }
+        {
           name: 'TRADINGAGENTS_API_URL'
           value: tradingAgentsApiUrl
+        }
+        {
+          name: 'TRADINGAGENTS_RESOURCE_ID'
+          value: tradingAgentsResourceId
+        }
+        {
+          name: 'TRADINGAGENTS_MIN_REPLICAS'
+          value: string(tradingAgentsMinReplicas)
+        }
+        {
+          name: 'ORCHESTRATOR_STORAGE_RESOURCE_ID'
+          value: storage.id
+        }
+        {
+          name: 'ORCHESTRATOR_STORAGE_CONTAINER_NAME'
+          value: deploymentContainerName
+        }
+        {
+          name: 'ORCHESTRATOR_STORAGE_PUBLIC_NETWORK_ACCESS'
+          value: 'Enabled'
+        }
+        {
+          name: 'ORCHESTRATOR_STORAGE_NETWORK_DEFAULT_ACTION'
+          value: 'Allow'
         }
         {
           name: 'ACS_EMAIL_ENDPOINT'
@@ -356,6 +429,10 @@ var monitoringMetricsPublisherRole = subscriptionResourceId(
 var communicationEmailSenderRole = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '09976791-48a7-449e-bb21-39d1a415f350'
+)
+var remediationRoleDefinitionId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  guid(subscription().id, 'SP500 Orchestrator Resource Remediator')
 )
 resource storageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storage.id, functionApp.id, storageBlobDataOwnerRole)
@@ -415,6 +492,18 @@ resource emailSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     principalType: 'ServicePrincipal'
     roleDefinitionId: communicationEmailSenderRole
   }
+}
+
+resource remediationRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, functionApp.id, remediationRoleDefinitionId)
+  properties: {
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: remediationRoleDefinitionId
+  }
+  dependsOn: [
+    remediationRole
+  ]
 }
 
 resource exceptionAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
