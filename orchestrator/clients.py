@@ -162,14 +162,16 @@ def readiness_preflight() -> dict[str, str]:
     return {"status": "ready", "checked": ",".join(checked)}
 
 
-def submit_candidate_daily(analysis_date: str) -> dict[str, Any]:
+def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
     settings = Settings.from_env()
+    analysis_date = request["analysis_date"]
+    model_purpose = request["model_purpose"]
     payload = request_json(
         "POST",
         f"{settings.candidate_base_url}/api/v1/pipeline-runs",
         headers={
             **_candidate_headers(settings),
-            "Idempotency-Key": f"orchestrator-daily-{analysis_date}",
+            "Idempotency-Key": f"orchestrator-daily-{analysis_date}-{model_purpose.lower()}",
         },
         json_body={
             "mode": "DAILY",
@@ -203,15 +205,17 @@ def candidate_run_status(process_run_id: str) -> dict[str, Any]:
     }
 
 
-def fetch_and_verify_candidates(analysis_date: str) -> list[dict[str, Any]]:
+def fetch_and_verify_candidates(request: dict[str, str]) -> list[dict[str, Any]]:
     settings = Settings.from_env()
+    analysis_date = request["analysis_date"]
+    model_purpose = request["model_purpose"]
     cursor: str | None = None
     seen_cursors: set[str] = set()
     items: list[dict[str, Any]] = []
     while True:
         params: dict[str, Any] = {
             "date": analysis_date,
-            "model_purpose": settings.model_purpose,
+            "model_purpose": model_purpose,
             "limit": 100,
         }
         if cursor:
@@ -246,7 +250,7 @@ def fetch_and_verify_candidates(analysis_date: str) -> list[dict[str, Any]]:
         if (
             item.get("price_session_date") != analysis_date
             or item.get("status") not in {"SUCCEEDED", "SHORTFALL"}
-            or item.get("model_purpose") != settings.model_purpose
+            or item.get("model_purpose") != model_purpose
             or item.get("selected_count") != len(items)
             or item.get("requested_count") not in range(5, 11)
             or item.get("position") != position
@@ -265,7 +269,7 @@ def fetch_and_verify_candidates(analysis_date: str) -> list[dict[str, Any]]:
                 "ticker": ticker,
                 "instrument_id": instrument_id,
                 "selection_run_id": selection_run_id,
-                "model_purpose": settings.model_purpose,
+                "model_purpose": model_purpose,
                 "position": position,
             }
         )

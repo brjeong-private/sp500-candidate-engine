@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import azure.functions as func
 import httpx
 import pytest
 
@@ -13,6 +16,7 @@ INFRA_ROOT = Path(__file__).resolve().parents[2] / "infra"
 sys.path.insert(0, str(ORCHESTRATOR_ROOT))
 
 import clients  # noqa: E402
+import function_app  # noqa: E402
 import scheduler  # noqa: E402
 import settings  # noqa: E402
 import workflow  # noqa: E402
@@ -33,7 +37,44 @@ def test_new_york_gate_handles_standard_and_daylight_time(now, expected):
 
 def test_instance_id_is_deterministic():
     analysis_date = scheduler.scheduled_analysis_date(datetime(2026, 1, 12, 10, 30, tzinfo=UTC))
-    assert scheduler.orchestration_instance_id(analysis_date) == "candidate-daily-2026-01-11"
+    assert scheduler.orchestration_instance_id(analysis_date, "MEDIUM_20D") == (
+        "candidate-daily-2026-01-11-medium_20d"
+    )
+    assert scheduler.orchestration_instance_id(analysis_date, "SHORT_5D") == (
+        "candidate-daily-2026-01-11-short_5d"
+    )
+
+
+def test_manual_trigger_uses_function_auth():
+    manual = next(
+        item
+        for item in function_app.app.get_functions()
+        if item.get_function_name() == "manual_orchestration_start"
+    )
+    trigger = next(
+        binding
+        for binding in manual.get_dict_repr()["bindings"]
+        if binding["type"] == "httpTrigger"
+    )
+    assert trigger["authLevel"] == func.AuthLevel.FUNCTION
+
+
+@pytest.mark.parametrize(
+    ("target_date", "model_purpose"),
+    [
+        ("2026-02-30", "MEDIUM_20D"),
+        ("2026-1-01", "MEDIUM_20D"),
+        ("2026-10-12", "MEDIUM_20D"),
+        ("2026-10-09", "LONG_60D"),
+    ],
+)
+def test_manual_request_fields_are_validated(target_date, model_purpose):
+    if model_purpose in scheduler.MODEL_PURPOSES:
+        with pytest.raises(ValueError):
+            scheduler.validate_target_date(target_date, today=date(2026, 10, 12))
+    else:
+        with pytest.raises(ValueError):
+            scheduler.validate_model_purpose(model_purpose)
 
 
 @pytest.mark.parametrize(
@@ -76,7 +117,6 @@ def test_candidate_verification_requires_all_five_to_ten(monkeypatch):
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
         exchange_mic="XNYS",
-        model_purpose="MEDIUM_20D",
     )
     monkeypatch.setattr(clients.Settings, "from_env", lambda: configured)
     items = [
@@ -98,7 +138,9 @@ def test_candidate_verification_requires_all_five_to_ten(monkeypatch):
         "request_json",
         lambda *args, **kwargs: {"items": items, "next_cursor": None},
     )
-    result = clients.fetch_and_verify_candidates("2026-10-09")
+    result = clients.fetch_and_verify_candidates(
+        {"analysis_date": "2026-10-09", "model_purpose": "MEDIUM_20D"}
+    )
     assert len(result) == 10
     assert [item["position"] for item in result] == list(range(1, 11))
     assert {item["model_purpose"] for item in result} == {"MEDIUM_20D"}
@@ -121,7 +163,6 @@ def _settings(*, tradingagents_base_url=None):
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
         exchange_mic="XNYS",
-        model_purpose="MEDIUM_20D",
     )
 
 
@@ -173,6 +214,25 @@ def test_portal_batch_contract_uses_bearer_and_preserves_jobs(monkeypatch):
     assert aggregate["terminal"] is True
 
 
+def test_candidate_submission_idempotency_includes_model_purpose(monkeypatch):
+    monkeypatch.setattr(clients.Settings, "from_env", _settings)
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured.update(method=method, url=url, **kwargs)
+        return {"process_run_id": "run-id", "status": "PENDING"}
+
+    monkeypatch.setattr(clients, "request_json", fake_request)
+    clients.submit_candidate_daily({"analysis_date": "2026-10-09", "model_purpose": "SHORT_5D"})
+
+    assert captured["headers"]["Idempotency-Key"] == ("orchestrator-daily-2026-10-09-short_5d")
+    assert captured["json_body"] == {
+        "mode": "DAILY",
+        "date": "2026-10-09",
+        "with_candidates": True,
+    }
+
+
 def test_preflight_requires_portal_and_configured_tradingagents_ready(monkeypatch):
     configured = _settings(tradingagents_base_url="https://tradingagents.example.test")
     monkeypatch.setattr(clients.Settings, "from_env", lambda: configured)
@@ -207,6 +267,36 @@ def test_bicep_requires_and_configures_tradingagents_url():
     assert "value: tradingAgentsApiUrl" in template
 
 
+def test_bicep_uses_durable_task_scheduler_state_backend():
+    template = (INFRA_ROOT / "orchestrator.bicep").read_text(encoding="utf-8")
+    host_config = json.loads((ORCHESTRATOR_ROOT / "host.json").read_text(encoding="utf-8"))
+    assert "Microsoft.DurableTask/schedulers@2025-11-01" in template
+    assert "Microsoft.DurableTask/schedulers/taskHubs@2025-11-01" in template
+    assert f"var taskHubName = '{host_config['extensions']['durableTask']['hubName']}'" in template
+    assert "name: 'Consumption'" in template
+    assert "ipAllowlist: [\n      '0.0.0.0/0'" in template
+    assert "name: 'DURABLE_TASK_SCHEDULER_CONNECTION_STRING'" in template
+    assert (
+        "Endpoint=${durableTaskScheduler.properties.endpoint};"
+        "TaskHub=${durableTaskHub.name};Authentication=ManagedIdentity"
+    ) in template
+    assert "ClientID=" not in template
+    assert "0ad04412-c4d5-4796-b79c-f76d14c8d402" in template
+    assert "scope: durableTaskScheduler" in template
+    assert "type: 'SystemAssigned'" in template
+    assert "name: 'FC1'" in template
+    assert "type: 'blobContainer'" in template
+
+
+def test_local_settings_use_dts_emulator_task_hub():
+    local_settings = json.loads(
+        (ORCHESTRATOR_ROOT / "local.settings.example.json").read_text(encoding="utf-8")
+    )
+    assert local_settings["Values"]["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"] == (
+        "Endpoint=http://localhost:8080;Authentication=None;TaskHub=CandidateDailyOrchestrator"
+    )
+
+
 class FakeContext:
     def __init__(self):
         self.current_utc_datetime = datetime(2026, 10, 12, 10, 30, tzinfo=UTC)
@@ -214,6 +304,7 @@ class FakeContext:
     def get_input(self):
         return {
             "analysis_date": "2026-10-09",
+            "model_purpose": "MEDIUM_20D",
             "candidate_timeout_minutes": 120,
             "portal_timeout_minutes": 360,
             "poll_seconds": 60,
@@ -265,10 +356,18 @@ def test_portal_batch_partial_failure_is_preserved_without_stock_retries():
         if name in {"readiness_preflight", "send_email"}:
             return {"status": "ok"}
         if name == "submit_candidate_daily":
+            assert payload == {
+                "analysis_date": "2026-10-09",
+                "model_purpose": "MEDIUM_20D",
+            }
             return {"process_run_id": "run-id", "status": "PENDING"}
         if name == "candidate_run_status":
             return {"status": "SUCCEEDED", "terminal": True}
         if name == "fetch_and_verify_candidates":
+            assert payload == {
+                "analysis_date": "2026-10-09",
+                "model_purpose": "MEDIUM_20D",
+            }
             return candidates
         if name == "submit_portal_candidate_analysis":
             submissions += 1
@@ -315,9 +414,132 @@ def test_portal_batch_partial_failure_is_preserved_without_stock_retries():
 
     outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
     assert outcome["state"] == "PARTIAL_FAILED"
+    assert outcome["model_purpose"] == "MEDIUM_20D"
     assert outcome["succeeded"] == 4
     assert outcome["failed"] == 1
     assert len(outcome["jobs"]) == 5
     assert outcome["jobs"][-1]["error"] == "analysis_failed"
     assert submissions == 1
     assert polls == 1
+
+
+class FakeRequest:
+    def __init__(self, body):
+        self._body = body
+
+    def get_json(self):
+        return self._body
+
+
+class FakeDurableClient:
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.started = []
+
+    async def get_status(self, instance_id):
+        return self.existing
+
+    async def start_new(self, name, instance_id, client_input):
+        self.started.append((name, instance_id, client_input))
+        return instance_id
+
+    def create_check_status_response(self, request, instance_id):
+        del request
+        return func.HttpResponse(
+            (
+                '{"id":"'
+                + instance_id
+                + '","statusQueryGetUri":"https://example.test/status?code=secret&taskHub=hub"}'
+            ),
+            status_code=202,
+            headers={
+                "Location": "https://example.test/status?code=secret&taskHub=hub",
+            },
+            mimetype="application/json",
+        )
+
+
+def test_authenticated_manual_start_returns_management_info(monkeypatch):
+    monkeypatch.setattr(
+        function_app,
+        "validate_target_date",
+        lambda value: date.fromisoformat(value),
+    )
+    client = FakeDurableClient()
+
+    response = asyncio.run(
+        function_app._manual_orchestration_start(
+            FakeRequest(
+                {
+                    "target_date": "2026-10-09",
+                    "model_purpose": "SHORT_5D",
+                }
+            ),
+            client,
+        )
+    )
+
+    instance_id = "candidate-daily-2026-10-09-short_5d"
+    assert response.status_code == 202
+    assert b"secret" not in response.get_body()
+    assert json.loads(response.get_body()) == {
+        "id": instance_id,
+        "statusQueryGetUri": "https://example.test/status?taskHub=hub",
+    }
+    assert response.headers["Location"] == "https://example.test/status?taskHub=hub"
+    assert client.started == [
+        (
+            "daily_orchestrator",
+            instance_id,
+            {
+                "analysis_date": "2026-10-09",
+                "model_purpose": "SHORT_5D",
+                "candidate_timeout_minutes": 120,
+                "portal_timeout_minutes": 360,
+                "poll_seconds": 60,
+            },
+        )
+    ]
+
+
+def test_manual_start_reuses_existing_instance(monkeypatch):
+    monkeypatch.setattr(
+        function_app,
+        "validate_target_date",
+        lambda value: date.fromisoformat(value),
+    )
+    client = FakeDurableClient(existing={"runtime_status": "Running"})
+
+    response = asyncio.run(
+        function_app._manual_orchestration_start(
+            FakeRequest(
+                {
+                    "target_date": "2026-10-09",
+                    "model_purpose": "MEDIUM_20D",
+                }
+            ),
+            client,
+        )
+    )
+
+    assert json.loads(response.get_body())["id"] == ("candidate-daily-2026-10-09-medium_20d")
+    assert client.started == []
+
+
+def test_manual_start_rejects_unexpected_fields():
+    client = FakeDurableClient()
+    response = asyncio.run(
+        function_app._manual_orchestration_start(
+            FakeRequest(
+                {
+                    "target_date": "2026-10-09",
+                    "model_purpose": "SHORT_5D",
+                    "api_key": "must-not-be-accepted",
+                }
+            ),
+            client,
+        )
+    )
+
+    assert response.status_code == 400
+    assert client.started == []

@@ -1,6 +1,34 @@
 # Azure Deployment Plan
 
-Status: Deployed
+Status: Ready for Validation
+
+## Active preparation update: Durable Task Scheduler backend (2026-10-12)
+
+- Replace the Durable Functions Azure Storage state backend with
+  `Microsoft.DurableTask` scheduler and task hub resources using the stable
+  `2025-11-01` API and Consumption SKU.
+- Keep the existing FC1 Storage account, deployment container, and identity-based
+  storage settings for code deployment and Functions host/runtime requirements.
+- Configure the system-assigned Function identity with scheduler-scoped Durable Task
+  Data Contributor and use the scheduler-reported endpoint plus provisioned task hub
+  in `DURABLE_TASK_SCHEDULER_CONNECTION_STRING`, without `ClientID`.
+- Keep a non-empty DTS IP allowlist for the current public-network FC1 design.
+- Validate provider/API availability, Bicep compilation, focused tests, and Ruff.
+- Do not deploy.
+
+### Validation proof and blockers
+
+- Subscription provider metadata exposes stable `2025-11-01` schemas for
+  `schedulers` and `schedulers/taskHubs`; both include Korea Central and West US 3.
+- Official ARM template references confirm required `ipAllowlist`, Consumption SKU,
+  task hub schema, and task hub name constraints.
+- Bicep CLI 0.44.1 build: passed.
+- Focused orchestrator suite: 24 passed.
+- Ruff for `orchestrator` and `tests/orchestrator`: passed.
+- Blocker before any future deployment: `Microsoft.DurableTask` is currently
+  `NotRegistered` in the active subscription.
+- The installed azure-validate workflow script is absent, so the official workflow
+  could not record `Validated`; status remains `Ready for Validation`.
 
 ## Active deployment update: MEDIUM_20D backend (2026-10-11)
 

@@ -10,16 +10,25 @@
 
 ## 2026-10-12
 
+- 2026-10-12 | Orchestrator Infrastructure | Durable Functions 상태 backend를 Consumption Durable Task Scheduler와 task hub, system-assigned identity RBAC로 전환하고 FC1 Storage는 runtime·배포 용도로 분리했다.
+- 2026-10-12 | Orchestrator Manual Trigger | Function 인증 수동 HTTP starter에 날짜·모델 목적 검증, 목적별 Durable ID·Candidate 멱등 key와 secret 없는 관리 응답을 추가했다.
+- 2026-10-12 | Orchestrator Model Purpose | 모델 목적을 orchestration 입력에서 후보 조회와 포털 batch까지 전달하고 타이머 기본값을 MEDIUM_20D로 고정했다.
+- 2026-10-12 | Orchestrator Verification | SHORT_5D 충돌 방지·입력 검증·기존 인스턴스 재사용·Candidate/Portal 전달을 회귀 테스트와 운영 문서에 추가했다.
+- 2026-10-12 | Orchestrator Architecture | Durable 제어 흐름·상태 전이·멱등성·외부 계약·RBAC·관측성을 독립 기준 문서로 작성했다.
+- 2026-10-12 | Overall Architecture | 전체 Azure 아키텍처에 오케스트레이터 control plane의 저장 경계와 terminal 상태 흐름을 보강했다.
+- 2026-10-12 | Architecture Status | 전체 아키텍처의 데이터 완전성 표를 Massive·SEC·Alpha Vantage 실제 적재량과 현재 SHADOW 모델 상태로 교정했다.
+- 2026-10-12 | README Architecture | 메인 README의 전체 아키텍처 아래에 구현 기준 오케스트레이터 아키텍처와 상세 문서 링크를 추가했다.
 - 2026-10-12 | Architecture Documentation | Candidate Engine, FC1 Durable Functions, Portal service API, TradingAgents Container App, PostgreSQL·MySQL과 ACS Email의 전체 Azure 경계와 데이터 흐름을 문서화했다.
 - 2026-10-12 | Pipeline Documentation | 05:30 ET 거래일 trigger, Candidate API 멱등 계약과 MEDIUM_20D 기본·SHORT_5D one-off 실행 정책을 수집·모델·오케스트레이터 문서에 반영했다.
 - 2026-10-12 | Orchestrator Infrastructure | 운영 FC1 배포에서 TradingAgents URL을 필수 파라미터로 강제해 readiness 사전 점검이 생략되지 않도록 수정했다.
-- 2026-10-12 | Orchestrator Portal Contract | 포털 연동을 Bearer 기반 후보 분석 일괄 제출·집계 조회로 수정하고 5~10개 작업의 부분 실패 요약을 보존했다.
-- 2026-10-12 | Orchestrator Readiness | 포털 readiness를 `/readyz`로 수정하고 TradingAgents `/readyz`도 배포 전 점검하도록 추가했다.
+- 2026-10-12 | Orchestrator Portal Contract | 포털 연동을 Bearer 인증 기반 후보 분석 일괄 제출·집계 조회로 수정하고 5~10개 작업의 부분 실패 요약을 보존했다.
+- 2026-10-12 | Orchestrator Readiness | 포털 readiness를 `/readyz`로 수정하고 설정된 경우 TradingAgents `/readyz`도 배포 전 점검하도록 추가했다.
 - 2026-10-12 | Durable Orchestrator | 05:30 ET 거래일 게이트부터 Candidate 멱등 실행·후보 검증·포털 부분 실패 처리·ACS Email까지 replay-safe activity와 durable timer로 구현했다.
 - 2026-10-12 | Orchestrator Infrastructure | Linux FC1, 관리 ID 기반 Storage·Key Vault·Application Insights·ACS Email과 운영 알림을 구성하는 독립 Bicep을 추가했다.
 - 2026-10-12 | Orchestrator Verification | DST·HTTPS 제한·응답 크기·5~10개 후보 검증·종목별 무재시도 부분 실패를 격리 단위 테스트로 추가했다.
 - 2026-10-12 | Pipeline Planning | Candidate 일일 실행과 외부 포털·TradingAgents 분석을 Durable Function, 멱등 API, readiness, ACS Email로 연결하는 자동화 계획을 구체화했다.
 - 2026-10-12 | Candidate API | expand-compatible nullable pair로 파이프라인 Idempotency-Key와 canonical 요청 hash를 영속화하고 동일 요청 재사용·payload 충돌 검증을 추가했다.
+
 ## 2026-10-11
 
 - 2026-10-11 | Presentation | 최신 MEDIUM_20D 모델·하네스·Backend API·TradingAgents 외부 경계를 반영한 8장 중간발표 v4를 작성했다.

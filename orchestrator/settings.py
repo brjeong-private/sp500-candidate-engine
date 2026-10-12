@@ -74,7 +74,6 @@ class Settings:
     email_sender: str
     email_recipients: tuple[str, ...]
     exchange_mic: str
-    model_purpose: str
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -85,9 +84,6 @@ class Settings:
         )
         if not recipients:
             raise ConfigurationError("ORCHESTRATOR_EMAIL_RECIPIENTS is empty")
-        model_purpose = os.environ.get("ORCHESTRATOR_CANDIDATE_MODEL_PURPOSE", "MEDIUM_20D").strip()
-        if model_purpose not in {"MEDIUM_20D", "SHORT_5D"}:
-            raise ConfigurationError("invalid ORCHESTRATOR_CANDIDATE_MODEL_PURPOSE")
         return cls(
             candidate_base_url=https_base_url("CANDIDATE_API_URL"),
             candidate_api_key=required("CANDIDATE_API_KEY"),
@@ -100,5 +96,4 @@ class Settings:
             email_sender=required("ORCHESTRATOR_EMAIL_SENDER"),
             email_recipients=recipients,
             exchange_mic=os.environ.get("ORCHESTRATOR_EXCHANGE_MIC", "XNYS").strip().upper(),
-            model_purpose=model_purpose,
         )

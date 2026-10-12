@@ -375,17 +375,17 @@ flowchart LR
 
 | 목표 데이터 | 현재 | 재설계 경로 | 남는 한계 |
 |---|---|---|---|
-| 현재 S&P 500 종목군 | Wikipedia 503 securities | Wikipedia revision + SEC identity 보강 | 공식 S&P 구성·weight 아님 |
+| 현재 S&P 500 종목군 | Wikipedia 503 securities·500 issuers, SEC identity 보강 | versioned universe와 identifier 유지 | 공식 S&P 구성·weight 아님 |
 | 과거 구성·GICS | 없음 | S&P DJI 계약 필요 | 현재 선택 공급자로 수집 불가 |
-| 일봉 OHLCV | Yahoo 2026-10-01만 | Massive grouped daily | Basic은 장 마감·과거 2년 |
-| 3~5년 가격 | 없음 | Massive 상위 플랜 또는 별도 backfill | Basic으로 목표 미충족 |
-| 분할·배당 | 없음 | Massive corporate actions | 무료 플랜 과거 범위 제한 |
-| CIK·공시·재무 | CIK 일부 | SEC JSON + bulk ZIP | concept·기간·단위 정규화 필요 |
-| 실적 일정 | 없음 | Alpha Vantage 전체 목록 하루 1회 | 과거 revision history 없음 |
-| 뉴스 metadata | 없음 | Massive News | 무료 플랜 과거 범위와 콘텐츠 권리 제한 |
-| 거래 달력·조기 폐장 | 없음 | 공식 일정 + exchange calendar baseline | 비정상 휴장 archive 필요 |
+| 일봉 OHLCV | Massive 당일 503개, historical 500 sessions·251,471 rows | grouped daily와 ticker fallback | Basic은 장 마감·과거 약 2년 |
+| 3~5년 가격 | 약 2년·500 sessions 확보 | Massive 상위 플랜 또는 별도 licensed backfill | 현재 플랜으로 3~5년 목표 미충족 |
+| 분할·배당 | Massive corporate actions 99개 적재 | revision·factor lineage 유지 | 무료 플랜 과거 범위 제한 |
+| CIK·공시·재무 | SEC state 503개, filing 8,452개, allowlist fact 50,582개 | JSON·bulk ZIP point-in-time observation | allowlist 밖 concept와 원천 revision 한계 |
+| 실적 일정 | Alpha Vantage 467개 적재 | 전체 목록 하루 1회와 revision 저장 | 과거 revision history 없음 |
+| 뉴스 metadata | Massive 291개 적재 | event observation과 instrument mapping | 무료 플랜 과거 범위와 콘텐츠 권리 제한 |
+| 거래 달력·조기 폐장 | `exchange_calendars` XNYS 기준선 | NYSE/Nasdaq 공식 collector 추가 | 비정상 휴장 archive·공식 검증 필요 |
 | 거래정지 | 없음 | Nasdaq halt feed | 별도 collector 필요 |
-| 특징·점수·후보 | 구현 | Qlib Alpha158·LightGBM·selection | 현재 모델은 SHADOW, 승격 기준 미통과 |
+| 특징·점수·후보 | Alpha158 158개, SHORT_5D·MEDIUM_20D 후보 각 10개 | Qlib export·LightGBM·selection | 두 모델 모두 SHADOW, champion 승격 기준 미통과 |
 
 ## 기술 구성
 

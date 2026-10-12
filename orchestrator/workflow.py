@@ -8,8 +8,18 @@ from datetime import timedelta
 from typing import Any
 
 
-def result(state: str, analysis_date: str, **details: Any) -> dict[str, Any]:
-    return {"state": state, "analysis_date": analysis_date, **details}
+def result(
+    state: str,
+    analysis_date: str,
+    model_purpose: str,
+    **details: Any,
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "analysis_date": analysis_date,
+        "model_purpose": model_purpose,
+        **details,
+    }
 
 
 def _email(subject: str, body: dict[str, Any]) -> dict[str, str]:
@@ -19,6 +29,7 @@ def _email(subject: str, body: dict[str, Any]) -> dict[str, str]:
 def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
     request = context.get_input()
     analysis_date = str(request["analysis_date"])
+    model_purpose = str(request["model_purpose"])
     candidate_timeout = timedelta(minutes=int(request["candidate_timeout_minutes"]))
     portal_timeout = timedelta(minutes=int(request["portal_timeout_minutes"]))
     poll_interval = timedelta(seconds=int(request["poll_seconds"]))
@@ -29,6 +40,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             return result(
                 "SUCCEEDED",
                 analysis_date,
+                model_purpose,
                 skipped=True,
                 reason="not_exchange_session",
             )
@@ -41,7 +53,11 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 {"state": "STARTED", "analysis_date": analysis_date},
             ),
         )
-        accepted = yield context.call_activity("submit_candidate_daily", analysis_date)
+        candidate_request = {
+            "analysis_date": analysis_date,
+            "model_purpose": model_purpose,
+        }
+        accepted = yield context.call_activity("submit_candidate_daily", candidate_request)
         candidate_deadline = context.current_utc_datetime + candidate_timeout
         while True:
             candidate_run = yield context.call_activity(
@@ -53,6 +69,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 final = result(
                     "TIMED_OUT",
                     analysis_date,
+                    model_purpose,
                     stage="candidate",
                     process_run_id=accepted["process_run_id"],
                 )
@@ -67,6 +84,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             final = result(
                 "FAILED",
                 analysis_date,
+                model_purpose,
                 stage="candidate",
                 process_run_id=accepted["process_run_id"],
                 candidate_status=candidate_run["status"],
@@ -78,13 +96,13 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             )
             return final
 
-        candidates = yield context.call_activity("fetch_and_verify_candidates", analysis_date)
+        candidates = yield context.call_activity("fetch_and_verify_candidates", candidate_request)
         portal_analysis = yield context.call_activity(
             "submit_portal_candidate_analysis",
             {
                 "analysis_date": analysis_date,
                 "selection_run_id": candidates[0]["selection_run_id"],
-                "model_purpose": candidates[0]["model_purpose"],
+                "model_purpose": model_purpose,
                 "candidate_count": len(candidates),
             },
         )
@@ -94,6 +112,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 final = result(
                     "TIMED_OUT",
                     analysis_date,
+                    model_purpose,
                     stage="portal",
                     process_run_id=accepted["process_run_id"],
                     daily_analysis_id=portal_analysis["daily_analysis_id"],
@@ -115,6 +134,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
         final = result(
             state,
             analysis_date,
+            model_purpose,
             process_run_id=accepted["process_run_id"],
             daily_analysis_id=portal_analysis["daily_analysis_id"],
             submitted_candidates=len(candidates),
@@ -131,6 +151,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
         final = result(
             "FAILED",
             analysis_date,
+            model_purpose,
             stage="orchestrator",
             reason=type(error).__name__,
         )
