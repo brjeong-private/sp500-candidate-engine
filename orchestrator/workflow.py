@@ -44,6 +44,8 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 skipped=True,
                 reason="not_exchange_session",
             )
+        if not session["data_complete"]:
+            raise RuntimeError("exchange session data is not complete at the decision cutoff")
 
         preflight = yield context.call_activity("readiness_preflight", None)
         yield context.call_activity(

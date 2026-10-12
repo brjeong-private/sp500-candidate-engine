@@ -1,9 +1,14 @@
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 
 from backend.app.dependencies import get_database, require_api_key
-from backend.app.schemas.execution import PipelineRunAccepted, PipelineRunRequest
+from backend.app.schemas.execution import (
+    PipelineRunAccepted,
+    PipelineRunRequest,
+    PipelineSessionEligibility,
+)
 from backend.app.services.pipeline_execution import PipelineConflict, PipelineExecutionService
 from sp500_candidate_engine.database import Database
 
@@ -17,6 +22,23 @@ def get_execution_service(
     if service is not None:
         return service
     return PipelineExecutionService(database, request.app.state.engine_settings)
+
+
+@router.get(
+    "/pipeline-runs/eligibility",
+    response_model=PipelineSessionEligibility,
+    dependencies=[Depends(require_api_key)],
+)
+def get_pipeline_session_eligibility(
+    target_date: Annotated[date, Query(alias="date")],
+    service: Annotated[PipelineExecutionService, Depends(get_execution_service)],
+) -> PipelineSessionEligibility:
+    is_session, data_complete = service.session_eligibility(target_date)
+    return PipelineSessionEligibility(
+        date=target_date,
+        is_session=is_session,
+        data_complete=data_complete,
+    )
 
 
 @router.post(

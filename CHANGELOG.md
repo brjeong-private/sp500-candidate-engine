@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Pipeline API | 저장된 calendar row와 분리된 XNYS 거래일·cutoff eligibility endpoint를 추가해 오케스트레이터 gate가 실제 운영 규칙을 사용하도록 수정했다.
+
 - 2026-10-13 | Orchestrator Runtime | 비실행 Durable instance 상태를 active로 오인하지 않고 동일 deterministic ID로 재시작하도록 수동 trigger를 수정했다.
 
 - 2026-10-13 | Orchestrator Runtime | Azure Functions Python activity binding이 인식하도록 Candidate activity 입력 annotation을 plain dict로 교정했다.

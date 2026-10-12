@@ -102,6 +102,15 @@ class PipelineExecutionService:
             raise ValueError("Session data is not complete before the engine cutoff")
         return plan.sessions
 
+    def session_eligibility(
+        self, target: date, *, now: datetime | None = None
+    ) -> tuple[bool, bool]:
+        now = now or datetime.now(UTC)
+        calendar = exchange_calendars.get_calendar("XNYS")
+        sessions = calendar.sessions_in_range(target, target)
+        is_session = len(sessions) == 1 and sessions[0].date() == target
+        return is_session, is_session and backfill_cutoff(target) <= now
+
     def accept(self, request: PipelineRunRequest, idempotency_key: str) -> PipelineRunAccepted:
         if IDEMPOTENCY_KEY_PATTERN.fullmatch(idempotency_key) is None:
             raise ValueError("Invalid Idempotency-Key")

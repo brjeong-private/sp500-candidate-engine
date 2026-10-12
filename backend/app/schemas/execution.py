@@ -42,3 +42,10 @@ class PipelineRunAccepted(BaseModel):
     status: Literal["PENDING"] = "PENDING"
     status_url: str
     _is_replay: bool = PrivateAttr(default=False)
+
+
+class PipelineSessionEligibility(BaseModel):
+    date: Date
+    exchange_mic: Literal["XNYS"] = "XNYS"
+    is_session: bool
+    data_complete: bool

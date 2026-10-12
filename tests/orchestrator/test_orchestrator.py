@@ -780,7 +780,7 @@ def test_started_email_contains_only_safe_preflight_summary():
 
     event = next(generator)
     events.append(event)
-    event = generator.send({"is_session": True})
+    event = generator.send({"is_session": True, "data_complete": True})
     events.append(event)
     event = generator.send(preflight)
     events.append(event)
@@ -804,7 +804,7 @@ def test_preflight_failure_occurs_before_started_email_and_pipeline_submission()
         name, payload = event[1], event[2]
         activities.append((name, payload))
         if name == "check_exchange_session":
-            return {"is_session": True}
+            return {"is_session": True, "data_complete": True}
         if name == "readiness_preflight":
             raise clients.ExternalServiceError("candidate PostgreSQL is not READY")
         if name == "send_email":
@@ -846,7 +846,7 @@ def test_portal_batch_partial_failure_is_preserved_without_stock_retries():
         assert event[0] == "activity"
         name, payload = event[1], event[2]
         if name == "check_exchange_session":
-            return {"is_session": True}
+            return {"is_session": True, "data_complete": True}
         if name in {"readiness_preflight", "send_email"}:
             return {"status": "ok"}
         if name == "submit_candidate_daily":

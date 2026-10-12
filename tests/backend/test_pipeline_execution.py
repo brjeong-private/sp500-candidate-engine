@@ -194,6 +194,21 @@ def test_session_completion_future_and_provider_boundaries(service):
         service.validate_request(daily(), now=datetime(2026, 10, 9, 2, tzinfo=UTC))
 
 
+def test_session_eligibility_uses_exchange_calendar_and_cutoff(service):
+    assert service.session_eligibility(
+        date(2026, 10, 9),
+        now=datetime(2026, 10, 10, 10, tzinfo=UTC),
+    ) == (True, True)
+    assert service.session_eligibility(
+        date(2026, 10, 10),
+        now=datetime(2026, 10, 11, 10, tzinfo=UTC),
+    ) == (False, False)
+    assert service.session_eligibility(
+        date(2026, 10, 9),
+        now=datetime(2026, 10, 10, 8, tzinfo=UTC),
+    ) == (True, False)
+
+
 def test_acceptance_persists_same_id_then_executes_daily_and_candidates(service, monkeypatch):
     run = service.accept(daily(), "daily-2026-10-08")
     assert service.database.runs[run.process_run_id]["status"] == "PENDING"

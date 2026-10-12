@@ -141,24 +141,22 @@ def check_exchange_session(analysis_date: str) -> dict[str, Any]:
     settings = Settings.from_env()
     payload = request_json(
         "GET",
-        f"{settings.candidate_base_url}/api/v1/collection-data/exchange-sessions",
+        f"{settings.candidate_base_url}/api/v1/pipeline-runs/eligibility",
         headers=_candidate_headers(settings),
-        params={"start_date": analysis_date, "end_date": analysis_date, "limit": 100},
+        params={"date": analysis_date},
     )
-    items = payload.get("items")
-    if not isinstance(items, list):
-        raise ExternalServiceError("exchange-session response is invalid")
-    matching = [
-        item
-        for item in items
-        if isinstance(item, dict)
-        and item.get("session_date") == analysis_date
-        and item.get("exchange_mic") == settings.exchange_mic
-    ]
+    if (
+        payload.get("date") != analysis_date
+        or payload.get("exchange_mic") != settings.exchange_mic
+        or not isinstance(payload.get("is_session"), bool)
+        or not isinstance(payload.get("data_complete"), bool)
+    ):
+        raise ExternalServiceError("pipeline eligibility response is invalid")
     return {
         "analysis_date": analysis_date,
         "exchange_mic": settings.exchange_mic,
-        "is_session": bool(matching),
+        "is_session": payload["is_session"],
+        "data_complete": payload["data_complete"],
     }
 
 
