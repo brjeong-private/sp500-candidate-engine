@@ -1,6 +1,6 @@
 # 후보 선정 모델 아키텍처
 
-갱신일: 2026-10-11
+갱신일: 2026-10-12
 
 이 문서는 point-in-time 원천 데이터가 Qlib 특징, label, 모델 평가, 일일 score와 5~10개 후보로 변환되는 계약을 정의한다. 후보는 후속 상세 분석 대상이며 매수 신호나 수익 보장이 아니다.
 
@@ -34,15 +34,17 @@ flowchart LR
     Source --> Adjust["Split Adjustment<br/>Price Factor Volume"]
     Adjust --> Export["Qlib Export<br/>Calendar Spans Binaries"]
     Export --> Features["Alpha158 RAW<br/>158 Features"]
-    Adjust --> Label["Raw 5 Session Return<br/>D plus 1 Open to D plus 5 Close"]
+    Adjust --> ShortLabel["SHORT 5D Raw Return<br/>D plus 1 Open to D plus 5 Close"]
+    Adjust --> MediumLabel["MEDIUM 20D Raw Return<br/>D plus 1 Open to D plus 20 Close"]
     Features --> Split["Purged Walk Forward<br/>Train Valid Test"]
-    Label --> Split
+    ShortLabel --> Split
+    MediumLabel --> Split
     Split --> Baseline["Momentum and Ridge"]
     Split --> LightGBM["Qlib LightGBM"]
     Baseline --> Evaluate["IC Rank IC<br/>Top 5 and 10 Return<br/>Cost and Drawdown"]
     LightGBM --> Evaluate
     Evaluate --> Registry["Model Registry<br/>Artifact Hash SHADOW"]
-    Registry --> Score["Daily Prediction<br/>Predicted 5D Return"]
+    Registry --> Score["Daily Prediction<br/>Predicted 5D or 20D Return"]
     Score --> Rank["Overall Rank<br/>Sector Rank Percentile"]
     Rank --> Select["Full Universe Selection<br/>Issuer and Sector Limits"]
     Select --> Candidates["Five to Ten Candidates<br/>Reasons and Temporal Identity"]
@@ -449,7 +451,9 @@ score·rank·percentile은 scoring run에, 후보 position·선정 사유는 sel
 
 저장 계약은 기간별 독립 model·scoring·selection run을 사용한다. 후보 API의
 기본 목적은 `MEDIUM_20D`이며 `model_purpose=SHORT_5D`로 기존 모델을
-조회한다. 한 목적의 결과가 없으면 다른 모델로 자동 대체하지 않는다.
+조회한다. 일일 Durable 오케스트레이터와 Portal 제출도 기본적으로 `MEDIUM_20D`를
+사용한다. `SHORT_5D`는 이전 5거래일 모델을 보존한 명시적 one-off 실행·조회 경로다.
+한 목적의 결과가 없으면 다른 모델로 자동 대체하지 않는다.
 
 | 필드 | 추가 목적 |
 |---|---|

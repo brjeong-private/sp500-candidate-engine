@@ -1,8 +1,11 @@
 # 프로젝트 전체 아키텍처
 
-갱신일: 2026-10-11
+갱신일: 2026-10-12
 
-이 문서는 개발과 함께 갱신하는 후보 선정 엔진의 기준 아키텍처다. 실선은 현재 구현 또는 이번 재설계에서 선택한 경로, 점선은 아직 구현하지 않은 경로다.
+이 문서는 개발과 함께 갱신하는 후보 선정 엔진과 운영 자동화의 기준 아키텍처다.
+Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents의 분석·리포트는
+외부 시스템의 책임이다. 실선은 구현된 애플리케이션 계약 또는 Bicep에 정의된
+리소스 관계이고, 점선은 외부 시스템 내부의 논리 관계다.
 
 ## 설계 전제
 
@@ -14,6 +17,101 @@
 - Alpha Vantage earnings calendar는 ticker별 호출이 아니라 전체 목록을 하루 1회 받는다.
 - SEC는 JSON API와 nightly bulk ZIP을 사용하고, 재무 fact는 정규화 후에만 분석 입력으로 사용한다.
 - 현재 Wikipedia·Yahoo 경로는 prototype 이력 재현용으로만 남기며 신규 운영 경로에서는 Massive·SEC·Alpha Vantage를 사용한다.
+- Candidate API의 기본 모델 목적은 `MEDIUM_20D`이고 `SHORT_5D`는 명시적 one-off
+  실행·조회에만 사용한다. 모델 간 자동 fallback은 없다.
+- 운영 스케줄은 Python Durable Functions가 담당한다. Candidate Engine은 포털이나
+  TradingAgents의 분석 결과를 저장하지 않는다.
+
+## 전체 Azure 운영 아키텍처
+
+<!-- mermaid-checked: no braces in labels, all subgraphs closed, unique ids -->
+```mermaid
+flowchart TB
+    subgraph DataSources["Market and Reference Sources"]
+        MassiveAzure["Massive"]
+        SecAzure["SEC EDGAR"]
+        AlphaAzure["Alpha Vantage"]
+        CalendarAzure["XNYS Calendar"]
+    end
+
+    subgraph CandidatePlane["Candidate Plane"]
+        CandidateApp["Candidate API<br/>Python App Service"]
+        CandidateEngine["Collection to Candidate Selection"]
+        CandidateDb[("PostgreSQL Flexible Server<br/>candidate source of truth")]
+    end
+
+    subgraph OrchestrationPlane["Orchestration Plane defined by infra orchestrator bicep"]
+        FunctionApp["Python Durable Functions<br/>Linux Flex Consumption FC1"]
+        DurableState["Storage Account<br/>Durable state and code package"]
+        Vault["Key Vault<br/>API keys and email settings"]
+        Insights["Application Insights<br/>Log Analytics and alerts"]
+        Email["Azure Communication Services Email"]
+    end
+
+    subgraph ExternalPlane["External Analysis Plane"]
+        PortalApi["Portal Service API<br/>App Service"]
+        PortalDb[("MySQL Flexible Server<br/>analysis jobs and results")]
+        TradingApp["TradingAgents<br/>Azure Container App"]
+        FoundryModel["Microsoft Foundry<br/>model deployments"]
+        ReportBlob["Blob Storage<br/>analysis reports"]
+    end
+
+    MassiveAzure --> CandidateEngine
+    SecAzure --> CandidateEngine
+    AlphaAzure --> CandidateEngine
+    CalendarAzure --> CandidateEngine
+    CandidateApp --> CandidateEngine
+    CandidateEngine --> CandidateDb
+
+    DurableState --> FunctionApp
+    Vault --> FunctionApp
+    FunctionApp --> Insights
+    FunctionApp -->|"start and terminal notification"| Email
+    FunctionApp -->|"idempotent DAILY request"| CandidateApp
+    CandidateApp -->|"candidate and run status"| FunctionApp
+    FunctionApp -->|"selection run batch"| PortalApi
+    PortalApi -->|"aggregate status"| FunctionApp
+
+    PortalApi -->|"persist external analysis state"| PortalDb
+    PortalApi -.->|"dispatch analysis"| TradingApp
+    TradingApp -.->|"inference"| FoundryModel
+    TradingApp -.->|"write report"| ReportBlob
+```
+
+### 05:30 ET 실행 계약
+
+1. Functions timer는 UTC 매시 30분 실행되지만 뉴욕 현지 시각이 정확히 05:30일
+   때만 `candidate-daily-YYYY-MM-DD` Durable instance를 시작한다. DST는
+   `America/New_York` 변환으로 처리한다.
+2. 대상은 직전 달력 날짜이며 Candidate의 XNYS session API에서 거래일을 확인한다.
+   비거래일은 외부 실행 없이 `SUCCEEDED`와 `skipped=true`로 끝난다.
+3. Candidate·Portal App Service의 ARM 상태와 Candidate `/health/ready`, Portal 및
+   TradingAgents `/readyz`를 확인한다.
+4. Candidate 실행은 날짜 기반 `Idempotency-Key`로 한 번 접수하고 durable timer로
+   polling한다. 완료 후보가 같은 date·selection run·model purpose에 속하는지와
+   5~10개·순위·식별자 중복을 검증한다.
+5. Portal service API에는 후보 row를 복제하지 않고 `analysis_date`,
+   `selection_run_id`, `model_purpose`를 일괄 제출한다. Portal이 MySQL에 외부 분석
+   job·결과를 저장하고 TradingAgents Container App 실행을 중개한다.
+6. 외부 I/O와 ACS Email은 activity에서만 실행한다. 종결 상태는 `SUCCEEDED`,
+   `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다.
+
+### Candidate API 멱등성
+
+`POST /api/v1/pipeline-runs`는 `X-API-Key`와 `Idempotency-Key`를 요구한다. API는
+null을 제외하고 key를 정렬한 canonical JSON의 SHA-256을 PostgreSQL에 저장한다.
+같은 key와 같은 hash는 원래 `process_run_id`를 반환해 gateway 또는 activity replay가
+중복 수집·후보 생성을 만들지 않는다. 같은 key를 다른 payload에 재사용하면 `409`다.
+이 계약은 API 접수 멱등성이고 Durable instance ID의 날짜별 중복 방지와 별개로 함께
+적용된다.
+
+### FC1 Bicep 경계
+
+`infra/orchestrator.bicep`은 Linux FC1 Function App, 관리 ID 기반 Durable Storage,
+배포 Blob container, Key Vault, Application Insights·Log Analytics, ACS Email,
+예외·실패 alert를 만든다. API key와 email 주소 값은 만들지 않고 배포 후 Key Vault
+secret으로 주입한다. 기존 Candidate·Portal App Service에는 Reader 역할을 별도로
+부여하며, Portal·TradingAgents·PostgreSQL·MySQL 자체는 이 Bicep의 소유 범위가 아니다.
 
 ## 전체 애플리케이션 흐름
 
@@ -293,6 +391,6 @@ flowchart LR
 - 공식 calendar·halt collector
 - dataset checkpoint 실제 전진 로직
 - staging COPY·set-based merge 최적화
-- 양의 Rank IC champion과 20-session live shadow
+- 양의 Rank IC를 충족하는 champion 승격
 
 후보 저장이 이 저장소의 마지막 단계다. 후보 이후 분석, agent 실행, report, 비용과 재평가는 별도 프로젝트에서 관리한다.

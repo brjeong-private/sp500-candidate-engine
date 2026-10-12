@@ -1,6 +1,6 @@
 # 일 1회 후보 선정 수집 파이프라인
 
-갱신일: 2026-10-09
+갱신일: 2026-10-12
 
 ## 목표와 범위
 
@@ -30,6 +30,20 @@
 2. SEC nightly bulk ZIP이 약 03:00 ET에 갱신된 이후다.
 3. fallback 503 ticker 수집이 약 101분 걸려도 다음 정규장 09:30 ET 전에 완료 가능하다.
 4. 한국 시간은 서머타임에 따라 변하므로 고정 KST가 아니라 ET schedule을 사용한다.
+
+### 운영 trigger와 재실행
+
+구현된 운영 trigger는 `orchestrator/`의 Python Durable Functions다. Azure Functions
+timer는 UTC 매시 30분 깨어나 `America/New_York` 05:30 게이트를 통과할 때만 직전
+달력 날짜를 처리한다. Candidate `exchange-sessions` 조회에서 XNYS 거래일이 아니면
+Candidate 파이프라인을 시작하지 않는다. 따라서 위 표의 주말·휴장일 reference refresh는
+수집 CLI의 설계 동작이며 현재 외부 Durable trigger가 자동 호출하는 경로는 아니다.
+
+거래일에는 `orchestrator-daily-YYYY-MM-DD`를 Candidate API의 `Idempotency-Key`로
+사용한다. Candidate API는 canonical 요청 hash를 함께 영속화하므로 같은 날짜·같은
+payload 재시도는 기존 run을 반환하고, 같은 key의 다른 payload는 충돌로 실패한다.
+Durable instance도 `candidate-daily-YYYY-MM-DD`로 고정해 timer 중복과 API 중복을
+각 계층에서 독립적으로 차단한다.
 
 ## 공급자 하네스
 
@@ -179,6 +193,13 @@ optional dataset 실패는 해당 signal을 비활성화하고 stale/failed 상�
 4. quantitative·event·history 정책으로 5~10개 후보
 
 후보 저장이 이 프로젝트의 마지막 단계다. 후보 이후 분석·에이전트 실행은 별도 시스템의 책임이다.
+
+운영 Durable 실행은 기본적으로 `MEDIUM_20D`를 사용한다. `SHORT_5D`는 명시적으로
+설정하거나 API에 `model_purpose=SHORT_5D`를 전달하는 one-off 경로이며, 중기 결과가
+없을 때 자동 선택되는 fallback이 아니다. 검증된 5~10개 후보의
+`selection_run_id`와 `model_purpose`만 Portal service API에 전달한다. Portal의
+MySQL 분석 상태·결과와 TradingAgents Container App 실행은 이 수집 파이프라인 및
+Candidate PostgreSQL 범위 밖이다.
 
 ## API 호출 예산
 

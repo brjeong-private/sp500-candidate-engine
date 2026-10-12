@@ -10,6 +10,8 @@
 
 ## 2026-10-12
 
+- 2026-10-12 | Architecture Documentation | Candidate Engine, FC1 Durable Functions, Portal service API, TradingAgents Container App, PostgreSQL·MySQL과 ACS Email의 전체 Azure 경계와 데이터 흐름을 문서화했다.
+- 2026-10-12 | Pipeline Documentation | 05:30 ET 거래일 trigger, Candidate API 멱등 계약과 MEDIUM_20D 기본·SHORT_5D one-off 실행 정책을 수집·모델·오케스트레이터 문서에 반영했다.
 - 2026-10-12 | Orchestrator Infrastructure | 운영 FC1 배포에서 TradingAgents URL을 필수 파라미터로 강제해 readiness 사전 점검이 생략되지 않도록 수정했다.
 - 2026-10-12 | Orchestrator Portal Contract | 포털 연동을 Bearer 기반 후보 분석 일괄 제출·집계 조회로 수정하고 5~10개 작업의 부분 실패 요약을 보존했다.
 - 2026-10-12 | Orchestrator Readiness | 포털 readiness를 `/readyz`로 수정하고 TradingAgents `/readyz`도 배포 전 점검하도록 추가했다.

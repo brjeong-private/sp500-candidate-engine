@@ -5,6 +5,27 @@
 선정 내부 계약은 변경하지 않으며, 외부 분석 결과나 상태를 Candidate 데이터베이스에
 저장하지 않는다.
 
+## Azure 구성
+
+```mermaid
+flowchart LR
+    Timer["05:30 ET gate"] --> Function["Python Durable Functions<br/>Linux FC1"]
+    Storage["Storage<br/>Durable state and package"] --> Function
+    Vault["Key Vault<br/>server credentials"] --> Function
+    Function -->|"idempotent DAILY"| Candidate["Candidate API"]
+    Candidate --> PostgreSQL[("PostgreSQL<br/>candidate source of truth")]
+    Function -->|"selection run batch"| Portal["Portal service API"]
+    Portal --> MySQL[("MySQL<br/>analysis jobs and results")]
+    Portal --> Trading["TradingAgents<br/>Container App"]
+    Function --> Email["ACS Email"]
+    Function --> Insights["Application Insights"]
+```
+
+`infra/orchestrator.bicep`은 FC1 Function App과 Storage·Key Vault·Application
+Insights·Log Analytics·ACS Email 및 alert만 소유한다. Candidate·Portal App Service,
+TradingAgents Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이
+템플릿이 생성하거나 수정하지 않는다.
+
 ## 실행 흐름
 
 1. 타이머는 매시 30분(UTC)에 실행되고 `America/New_York` 현지 시각 05:30에만
@@ -15,7 +36,9 @@
    `TRADINGAGENTS_API_URL`을 필수로 설정하며 TradingAgents `/readyz`도
    `status=ready`인지 확인한다.
 4. 날짜 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
-   timer로 상태를 확인한다. 완료 후 5~10개 후보의 날짜·순위·식별자·중복을 검증한다.
+   timer로 상태를 확인한다. Candidate API는 canonical 요청 hash를 저장해 같은
+   key·payload에는 원래 run을 반환하고 다른 payload에는 `409`를 반환한다. 완료 후
+   5~10개 후보의 날짜·순위·식별자·중복을 검증한다.
 5. 검증된 후보 5~10개가 공유하는 `selection_run_id`와 `model_purpose`를 포털 자동화
    API에 한 번 제출한다. 포털 집계의 개별 작업은 재제출하지 않으며 일부 실패는
    `PARTIAL_FAILED`, 전부 실패는 `FAILED`가 된다.
@@ -24,6 +47,11 @@
 
 종결 상태는 `SUCCEEDED`, `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다. 비거래일은
 `SUCCEEDED`와 `skipped=true`로 기록한다.
+
+기본 모델 목적은 `MEDIUM_20D`다. `SHORT_5D`는 Bicep parameter 또는 로컬 설정에서
+명시적으로 선택하는 one-off 호환 경로이며, 중기 후보 부재 시 자동 fallback하지 않는다.
+Candidate 후보 row는 PostgreSQL에만 남고 Portal에는 복제하지 않는다. Portal MySQL은
+외부 분석의 일괄 실행, 개별 job 상태와 결과만 영속화한다.
 
 ## 외부 포털 계약
 
