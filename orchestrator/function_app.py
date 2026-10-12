@@ -184,7 +184,7 @@ def readiness_preflight(_unused):
 
 @app.function_name(name="submit_candidate_daily")
 @app.activity_trigger(input_name="request")
-def submit_candidate_daily(request: dict[str, str]):
+def submit_candidate_daily(request: dict):
     return submit_candidate_daily_client(request)
 
 
@@ -196,7 +196,7 @@ def candidate_run_status(process_run_id: str):
 
 @app.function_name(name="fetch_and_verify_candidates")
 @app.activity_trigger(input_name="request")
-def fetch_and_verify_candidates(request: dict[str, str]):
+def fetch_and_verify_candidates(request: dict):
     return fetch_and_verify_candidates_client(request)
 
 
