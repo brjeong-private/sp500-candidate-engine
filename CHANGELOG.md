@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Orchestrator Deployment | FC1 deployment content traffic이 Storage private endpoint를 사용하도록 vnetContentShareEnabled를 활성화했다.
+
 - 2026-10-13 | Orchestrator Preflight | STARTED 알림 전에 App Service·PostgreSQL·MySQL·TradingAgents·Storage를 제한적으로 복구하고 lock을 원상 복원한 뒤 ARM·data plane·HTTP readiness를 재검증하도록 강화했다.
 
 - 2026-10-13 | Orchestrator Infrastructure | Durable Functions backend를 관리 ID 기반 표준 Azure Storage로 되돌리고 DTS 리소스·설정·RBAC를 템플릿에서 제거했으며 Storage endpoint 정책 점검 절차를 문서화했다.
