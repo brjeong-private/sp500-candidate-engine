@@ -1020,6 +1020,27 @@ def test_manual_start_reuses_existing_instance(monkeypatch):
     assert client.started == []
 
 
+def test_manual_start_restarts_non_running_instance(monkeypatch):
+    monkeypatch.setattr(function_app, "_positive_int", lambda *_args: 60)
+    request = FakeRequest(
+        {
+            "target_date": "2026-10-09",
+            "model_purpose": "SHORT_5D",
+        }
+    )
+    client = FakeDurableClient(existing={"runtime_status": "Terminated"})
+
+    response = asyncio.run(
+        function_app._manual_orchestration_start(
+            request,
+            client,
+        )
+    )
+
+    assert response.status_code == 202
+    assert client.started[0][1] == "candidate-daily-2026-10-09-short_5d"
+
+
 def test_manual_start_rejects_unexpected_fields():
     client = FakeDurableClient()
     response = asyncio.run(

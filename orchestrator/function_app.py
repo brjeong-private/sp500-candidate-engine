@@ -101,6 +101,22 @@ def _safe_management_response(response: func.HttpResponse) -> func.HttpResponse:
     )
 
 
+def _is_active_instance(status: object) -> bool:
+    if status is None:
+        return False
+    if isinstance(status, dict):
+        runtime_status = status.get("runtime_status", status.get("runtimeStatus"))
+    else:
+        runtime_status = getattr(status, "runtime_status", None)
+    runtime_value = getattr(runtime_status, "value", runtime_status)
+    return str(runtime_value).casefold() in {
+        "running",
+        "pending",
+        "continuedasnew",
+        "suspended",
+    }
+
+
 @app.function_name(name="manual_orchestration_start")
 @app.route(
     route="orchestrations/manual",
@@ -131,7 +147,7 @@ async def _manual_orchestration_start(
         return _error_response(str(error))
 
     instance_id = orchestration_instance_id(analysis_date, model_purpose)
-    if await client.get_status(instance_id) is None:
+    if not _is_active_instance(await client.get_status(instance_id)):
         await client.start_new(
             "daily_orchestrator",
             instance_id,

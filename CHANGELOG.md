@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Orchestrator Runtime | 비실행 Durable instance 상태를 active로 오인하지 않고 동일 deterministic ID로 재시작하도록 수동 trigger를 수정했다.
+
 - 2026-10-13 | Orchestrator Runtime | Azure Functions Python activity binding이 인식하도록 Candidate activity 입력 annotation을 plain dict로 교정했다.
 
 - 2026-10-13 | Orchestrator Deployment | FC1 deployment content traffic이 Storage private endpoint를 사용하도록 vnetContentShareEnabled를 활성화했다.
