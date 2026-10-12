@@ -108,8 +108,8 @@ flowchart TB
         Timer["Python Durable Functions<br/>Linux FC1<br/>05:30 America New York"]
         Durable["Replay-safe orchestrator<br/>activity와 durable timer"]
         ACS["Azure Communication Services<br/>시작·종결 Email"]
-        State["Durable Task Scheduler<br/>history·task state"]
-        Runtime["Storage·Key Vault<br/>FC1 runtime·package·secrets"]
+        State["Azure Storage<br/>history·task state·FC1 runtime·package"]
+        Runtime["Key Vault<br/>secrets"]
     end
 
     subgraph External["외부 분석 시스템 - 이 저장소 범위 밖"]
@@ -160,9 +160,9 @@ flowchart TB
 
 오케스트레이터는 Candidate Engine과 외부 분석 시스템 사이의 control plane이다.
 Candidate PostgreSQL이나 Portal MySQL에 직접 접근하지 않으며 API 계약만 사용한다.
-Durable Task Scheduler에는 후보나 분석 결과가 아니라 orchestration history와 task
-state를 저장한다. 별도 Storage Account는 FC1 host runtime과 코드 배포 컨테이너에만
-사용하며 Durable orchestration backend로 사용하지 않는다.
+표준 Durable Azure Storage backend에는 후보나 분석 결과가 아니라 orchestration
+history와 task state를 저장한다. 같은 Storage Account가 FC1 host runtime과 코드
+배포 컨테이너도 제공하며 공유 키 없이 system-assigned identity로 접근한다.
 
 ```mermaid
 flowchart TD
@@ -188,9 +188,10 @@ flowchart TD
 - Candidate는 `SUCCEEDED`일 때만 진행하며 `PARTIAL_SUCCESS`는 실패로 종료한다.
 - 후보는 대상일·모델 목적·position·중복·단일 selection run·5~10개 조건을 검증한다.
 - Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
-- system-assigned 관리 ID는 DTS의 `Durable Task Data Contributor`, FC1 runtime
-  Storage·Key Vault·App Insights·ACS와 ARM 조회에 사용하고, 서버 간 API credential은
-  Key Vault reference로 주입한다.
+- system-assigned 관리 ID는 Durable/FC1 Storage의 Blob·Queue·Table, Key Vault·App
+  Insights·ACS와 ARM 조회에 사용하고, 서버 간 API credential은 Key Vault reference로
+  주입한다. 조직 Policy가 Storage public endpoint를 닫을 수 있으므로 preflight와 운영
+  점검은 Blob·Queue·Table data plane 연결을 확인하고 실패 시 실행을 차단해야 한다.
 
 상태 전이, 멱등성 계층, 외부 API, RBAC, timeout과 관측성의 기준 설계는
 [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를

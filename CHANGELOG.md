@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-13 | Orchestrator Infrastructure | Durable Functions backend를 관리 ID 기반 표준 Azure Storage로 되돌리고 DTS 리소스·설정·RBAC를 템플릿에서 제거했으며 Storage endpoint 정책 점검 절차를 문서화했다.
 사용자 요청에 따른 변경을 한 항목당 한 줄로 기록한다.
 
 형식:

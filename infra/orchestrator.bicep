@@ -63,8 +63,6 @@ var appInsightsName = take('${namePrefix}-appi-${suffix}', 63)
 var vaultName = take('${compactPrefix}kv${suffix}', 24)
 var communicationName = take('${namePrefix}-acs-${suffix}', 63)
 var emailServiceName = take('${namePrefix}-email-${suffix}', 63)
-var schedulerName = take('${namePrefix}-dts-${suffix}', 64)
-var taskHubName = 'CandidateDailyOrchestrator'
 var deploymentContainerName = 'function-releases'
 var keyVaultReferencePrefix = '@Microsoft.KeyVault(VaultName=${vaultName};SecretName='
 var tags = {
@@ -217,26 +215,6 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   }
 }
 
-resource durableTaskScheduler 'Microsoft.DurableTask/schedulers@2025-11-01' = {
-  name: schedulerName
-  location: location
-  tags: tags
-  properties: {
-    sku: {
-      name: 'Consumption'
-    }
-    ipAllowlist: [
-      '0.0.0.0/0'
-    ]
-  }
-}
-
-resource durableTaskHub 'Microsoft.DurableTask/schedulers/taskHubs@2025-11-01' = {
-  parent: durableTaskScheduler
-  name: taskHubName
-  properties: {}
-}
-
 resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   name: functionAppName
   location: location
@@ -285,10 +263,6 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'AzureWebJobsStorage__credential'
           value: 'managedidentity'
-        }
-        {
-          name: 'DURABLE_TASK_SCHEDULER_CONNECTION_STRING'
-          value: 'Endpoint=${durableTaskScheduler.properties.endpoint};TaskHub=${durableTaskHub.name};Authentication=ManagedIdentity'
         }
         {
           name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
@@ -383,11 +357,6 @@ var communicationEmailSenderRole = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '09976791-48a7-449e-bb21-39d1a415f350'
 )
-var durableTaskDataContributorRole = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  '0ad04412-c4d5-4796-b79c-f76d14c8d402'
-)
-
 resource storageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storage.id, functionApp.id, storageBlobDataOwnerRole)
   scope: storage
@@ -445,16 +414,6 @@ resource emailSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     principalId: functionApp.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: communicationEmailSenderRole
-  }
-}
-
-resource durableTaskDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(durableTaskScheduler.id, functionApp.id, durableTaskDataContributorRole)
-  scope: durableTaskScheduler
-  properties: {
-    principalId: functionApp.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: durableTaskDataContributorRole
   }
 }
 
@@ -537,5 +496,3 @@ output deploymentContainerUri string = '${storage.properties.primaryEndpoints.bl
 output keyVaultName string = vault.name
 output communicationServiceName string = communicationService.name
 output managedDomainResourceId string = managedDomain.id
-output durableTaskSchedulerEndpoint string = durableTaskScheduler.properties.endpoint
-output durableTaskHubName string = durableTaskHub.name

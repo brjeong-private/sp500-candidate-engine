@@ -267,34 +267,36 @@ def test_bicep_requires_and_configures_tradingagents_url():
     assert "value: tradingAgentsApiUrl" in template
 
 
-def test_bicep_uses_durable_task_scheduler_state_backend():
+def test_bicep_uses_identity_based_storage_durable_backend():
     template = (INFRA_ROOT / "orchestrator.bicep").read_text(encoding="utf-8")
-    host_config = json.loads((ORCHESTRATOR_ROOT / "host.json").read_text(encoding="utf-8"))
-    assert "Microsoft.DurableTask/schedulers@2025-11-01" in template
-    assert "Microsoft.DurableTask/schedulers/taskHubs@2025-11-01" in template
-    assert f"var taskHubName = '{host_config['extensions']['durableTask']['hubName']}'" in template
-    assert "name: 'Consumption'" in template
-    assert "ipAllowlist: [\n      '0.0.0.0/0'" in template
-    assert "name: 'DURABLE_TASK_SCHEDULER_CONNECTION_STRING'" in template
-    assert (
-        "Endpoint=${durableTaskScheduler.properties.endpoint};"
-        "TaskHub=${durableTaskHub.name};Authentication=ManagedIdentity"
-    ) in template
-    assert "ClientID=" not in template
-    assert "0ad04412-c4d5-4796-b79c-f76d14c8d402" in template
-    assert "scope: durableTaskScheduler" in template
+    assert "Microsoft.DurableTask/" not in template
+    assert "DURABLE_TASK_SCHEDULER_CONNECTION_STRING" not in template
+    assert "0ad04412-c4d5-4796-b79c-f76d14c8d402" not in template
+    assert "name: 'AzureWebJobsStorage__accountName'" in template
+    assert "value: storage.name" in template
+    assert "name: 'AzureWebJobsStorage__credential'" in template
+    assert "value: 'managedidentity'" in template
+    assert "b7e6dc6d-f1e8-4753-8033-0f276bb0955b" in template
+    assert "974c5e8b-45b9-4653-ba55-5f855dd0fb88" in template
+    assert "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3" in template
+    assert template.count("scope: storage") == 3
+    assert "allowSharedKeyAccess: false" in template
+    assert "allowBlobPublicAccess: false" in template
+    assert "supportsHttpsTrafficOnly: true" in template
+    assert "minimumTlsVersion: 'TLS1_2'" in template
+    assert "publicNetworkAccess: 'Enabled'" in template
+    assert "defaultAction: 'Allow'" in template
     assert "type: 'SystemAssigned'" in template
     assert "name: 'FC1'" in template
     assert "type: 'blobContainer'" in template
 
 
-def test_local_settings_use_dts_emulator_task_hub():
+def test_local_settings_use_storage_emulator_for_durable_backend():
     local_settings = json.loads(
         (ORCHESTRATOR_ROOT / "local.settings.example.json").read_text(encoding="utf-8")
     )
-    assert local_settings["Values"]["DURABLE_TASK_SCHEDULER_CONNECTION_STRING"] == (
-        "Endpoint=http://localhost:8080;Authentication=None;TaskHub=CandidateDailyOrchestrator"
-    )
+    assert local_settings["Values"]["AzureWebJobsStorage"] == "UseDevelopmentStorage=true"
+    assert "DURABLE_TASK_SCHEDULER_CONNECTION_STRING" not in local_settings["Values"]
 
 
 class FakeContext:

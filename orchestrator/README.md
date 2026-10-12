@@ -14,8 +14,7 @@
 ```mermaid
 flowchart LR
     Timer["05:30 ET gate"] --> Function["Python Durable Functions<br/>Linux FC1"]
-    DTS["Durable Task Scheduler<br/>orchestration history and task state"] --> Function
-    Storage["Storage<br/>FC1 host runtime and deployment package"] --> Function
+    Storage["Azure Storage<br/>Durable history·task state<br/>FC1 runtime·deployment package"] --> Function
     Vault["Key Vault<br/>server credentials"] --> Function
     Function -->|"idempotent DAILY"| Candidate["Candidate API"]
     Candidate --> PostgreSQL[("PostgreSQL<br/>candidate source of truth")]
@@ -26,10 +25,10 @@ flowchart LR
     Function --> Insights["Application Insights"]
 ```
 
-`infra/orchestrator.bicep`은 FC1 Function App, Consumption Durable Task Scheduler와
-task hub, FC1 host/runtime·배포용 Storage, Key Vault·Application Insights·Log
-Analytics·ACS Email 및 alert를 소유한다. Durable orchestration history와 task state는
-Storage가 아니라 DTS에 저장한다. Candidate·Portal App Service, TradingAgents
+`infra/orchestrator.bicep`은 FC1 Function App, Durable state와 FC1 host/runtime·배포에
+사용하는 Storage, Key Vault·Application Insights·Log Analytics·ACS Email 및 alert를
+소유한다. Durable orchestration history와 task state는 표준 Azure Storage backend에
+저장한다. Candidate·Portal App Service, TradingAgents
 Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템플릿이 생성하거나
 수정하지 않는다.
 
@@ -40,8 +39,12 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
    `candidate-daily-YYYY-MM-DD-{model_purpose}` 형식이므로 날짜가 같아도
    `SHORT_5D` one-off와 충돌하지 않는다.
 2. Candidate `exchange-sessions` 조회로 XNYS 거래일인지 확인한다.
-3. `DefaultAzureCredential`로 Candidate/Portal App Service ARM 상태를 확인한 뒤
-   Candidate `/health/ready`, Portal `/readyz`를 확인한다. 배포 인프라는
+3. `DefaultAzureCredential`로 Candidate/Portal App Service가 `RUNNING`인지,
+   Candidate PostgreSQL·Portal MySQL이 `READY`인지와 각 DB의 public network 설정이
+   배포 계약과 같은지 확인한다. 오케스트레이터 Storage는 provisioning 완료,
+   HTTPS/TLS 1.2, 공유 키·익명 Blob 차단, OAuth 기본값, public network 계약 및
+   관리 ID의 Blob·Queue·Table data plane 접근을 확인한다. 그 뒤 Candidate
+   `/health/ready`, Portal `/readyz`를 확인한다. 배포 인프라는
    `TRADINGAGENTS_API_URL`을 필수로 설정하며 TradingAgents `/readyz`도
    `status=ready`인지 확인한다.
 4. 날짜와 모델 목적 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
@@ -99,9 +102,11 @@ Invoke-RestMethod `
   `candidateApiKeySecretName`, `portalApiKeySecretName`, `emailSenderSecretName`,
   `emailRecipientsSecretName`에 해당하는 secret을 별도 보안 절차로 넣어야 한다.
   발신자와 쉼표 구분 수신자 주소는 설정/Key Vault에만 존재해야 한다.
-- Candidate와 Portal App Service의 정확한 HTTPS URL과 ARM resource ID를 입력한다.
-  오케스트레이터 관리 ID에 두 기존 App Service 범위의 `Reader`를 별도로 부여해야
-  한다. 템플릿이 소유하지 않는 다른 resource group의 역할 할당은 자동화하지 않는다.
+- Candidate와 Portal App Service, Candidate PostgreSQL flexible server, Portal MySQL
+  flexible server의 정확한 HTTPS URL·ARM resource ID와 각 DB의 배포된
+  `publicNetworkAccess`(`Enabled` 또는 `Disabled`)를 입력한다. 오케스트레이터 관리
+  ID에 네 기존 리소스 범위의 `Reader`를 별도로 부여해야 한다. 템플릿이 소유하지
+  않는 다른 resource group의 역할 할당은 자동화하지 않는다.
 - 포털 자동화 API와 멱등 계약은 포털 배포에서 먼저 제공해야 한다.
 - 운영 배포에서는 비어 있지 않은 HTTPS `tradingAgentsApiUrl` 파라미터가 필수다.
   로컬 격리 테스트에서만 `TRADINGAGENTS_API_URL`을 생략할 수 있다.
@@ -110,18 +115,20 @@ Invoke-RestMethod `
   코드를 배포한다. 현재 구독에는 더 좁은 Email Sender built-in role이 제공되지 않아
   배포 가능한 Communication 전용 built-in role을 사용한다.
 - FC1 코드 ZIP은 출력된 배포 컨테이너에 업로드해야 한다. 저장소는 공유 키와 익명
-  Blob 접근을 막고 관리 ID RBAC를 사용한다. 이 Storage는 FC1 code/runtime용이며
-  Durable state backend가 아니다. private endpoint를 강제하는 조직은 FC1 VNet
-  통합과 DNS를 별도로 설계해야 한다.
-- Bicep은 `Microsoft.DurableTask/schedulers@2025-11-01` Consumption scheduler와
-  `CandidateDailyOrchestrator` task hub를 만들고, 실제 scheduler endpoint와 task hub로
-  `DURABLE_TASK_SCHEDULER_CONNECTION_STRING`을 구성한다. Function의 system-assigned
-  identity에는 scheduler 범위의 `Durable Task Data Contributor`를 부여하므로
-  connection string에 `ClientID`를 넣지 않는다. `ipAllowlist`는 비어 있으면 모든
-  DTS 호출을 차단하므로 현재 public FC1 구성에서는 `0.0.0.0/0`을 명시한다.
-- 배포 전에 대상 subscription의 `Microsoft.DurableTask` resource provider를
-  등록해야 한다. `2025-11-01` scheduler/task hub API와 Korea Central·West US 3
-  location 제공 여부를 확인한 뒤 배포한다.
+  Blob 접근을 막고 `AzureWebJobsStorage__accountName`과 `managedidentity` credential을
+  사용한다. Function의 system-assigned identity에는 Storage Blob·Queue·Table data
+  역할이 있으며, 같은 Storage가 표준 Durable backend와 FC1 runtime·배포에 사용된다.
+- FC1 Storage는 `publicNetworkAccess=Enabled`, `defaultAction=Allow`를 유지한다.
+  조직 Azure Policy가 배포 후 public endpoint 또는 기본 동작을 닫을 수 있으므로,
+  배포 전 preflight와 일상 운영 점검은 control plane 설정뿐 아니라 Function에서
+  Blob·Queue·Table data plane 연결이 실제로 가능한지 확인하고 불가하면 fail closed
+  해야 한다. `ORCHESTRATOR_STORAGE_RESOURCE_ID`,
+  `ORCHESTRATOR_STORAGE_CONTAINER_NAME`, `ORCHESTRATOR_STORAGE_PUBLIC_NETWORK_ACCESS`
+  설정은 실제 배포 리소스와 같아야 한다. private endpoint를 강제한다면 FC1 VNet
+  통합과 DNS를 먼저 설계한다.
+- 템플릿은 더 이상 Durable Task Scheduler와 task hub를 관리하지 않는다. 이미 배포된
+  DTS 리소스는 이 변경에서 삭제하지 않으며 사용 중이 아님을 확인한 뒤 별도 승인된
+  정리 작업으로 폐기한다.
 - `alertActionGroupResourceId`는 운영팀이 소유한 기존 Action Group의 전체 resource
   ID다. 주소를 이 템플릿이나 소스에 기록하지 않는다.
 
@@ -129,6 +136,6 @@ Invoke-RestMethod `
 
 `local.settings.example.json`을 `local.settings.json`으로 복사해 로컬 값만 넣은 뒤
 `orchestrator` 디렉터리에서 의존성을 설치하고 Azure Functions Core Tools v4의
-`func start`를 실행한다. 먼저 DTS emulator를 `localhost:8080`에 실행해야 하며,
-예제 설정은 Azure Storage emulator를 Functions host runtime용으로, DTS emulator의
-`CandidateDailyOrchestrator` task hub를 Durable state backend로 사용한다.
+`func start`를 실행한다. 먼저 Azurite를 실행해야 하며, 예제의
+`AzureWebJobsStorage=UseDevelopmentStorage=true`가 Functions host runtime과
+`host.json`의 `CandidateDailyOrchestrator` task hub 상태를 함께 저장한다.
