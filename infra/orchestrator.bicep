@@ -381,7 +381,7 @@ var monitoringMetricsPublisherRole = subscriptionResourceId(
 )
 var communicationEmailSenderRole = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
-  '3a69bfc6-0483-44e7-9176-0054a05ed4d0'
+  '09976791-48a7-449e-bb21-39d1a415f350'
 )
 var durableTaskDataContributorRole = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',

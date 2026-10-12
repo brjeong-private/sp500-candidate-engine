@@ -106,7 +106,9 @@ Invoke-RestMethod `
 - 운영 배포에서는 비어 있지 않은 HTTPS `tradingAgentsApiUrl` 파라미터가 필수다.
   로컬 격리 테스트에서만 `TRADINGAGENTS_API_URL`을 생략할 수 있다.
 - Azure Managed Domain과 Communication Service 연결은 Bicep이 생성한다. 관리 ID의
-  Email Sender 역할 전파와 Key Vault secret 생성이 끝난 뒤 코드를 배포한다.
+  Communication and Email Service Owner 역할 전파와 Key Vault secret 생성이 끝난 뒤
+  코드를 배포한다. 현재 구독에는 더 좁은 Email Sender built-in role이 제공되지 않아
+  배포 가능한 Communication 전용 built-in role을 사용한다.
 - FC1 코드 ZIP은 출력된 배포 컨테이너에 업로드해야 한다. 저장소는 공유 키와 익명
   Blob 접근을 막고 관리 ID RBAC를 사용한다. 이 Storage는 FC1 code/runtime용이며
   Durable state backend가 아니다. private endpoint를 강제하는 조직은 FC1 VNet
