@@ -1,6 +1,6 @@
 # Azure Deployment Plan
 
-Status: Validated
+Status: Deployed
 
 ## Active preparation update: private FC1 storage network (2026-10-13)
 
@@ -48,6 +48,28 @@ Status: Validated
   FC1 ZIP directly to the deployment container. Package upload must run from a
   VNet-connected private-DNS-capable runner (or use an approved private path), before
   the Function app consumes the blob through its system-assigned identity.
+
+### Deployment verification
+
+- Function App: `https://sp500-orch-f4djpkceudqgy.azurewebsites.net`, Running,
+  11 indexed functions.
+- Storage public network, shared key and anonymous Blob access are Disabled.
+  Blob/Queue/Table private endpoints are Approved and private DNS links Completed.
+- Candidate deployment `cf6145f7-14fd-4b6d-8b73-a565ad776ba8` completed and
+  `/health/ready` returned `ready`.
+- Migration `020_backend_pipeline_idempotency` was applied while the original
+  PostgreSQL ReadOnly lock was restored.
+- Durable instance `candidate-daily-2026-10-09-short_5d` completed `SUCCEEDED`.
+- Candidate process `f52dcc13-3d5f-4dc6-a2d8-35d0ad5e846b` completed one date
+  with no failed dates.
+- Existing market/event/filing/fact revisions produced zero new persisted rows;
+  the versioned universe contract returned 503 members.
+- SHORT_5D selection `639490fb-67cd-566a-aa3d-5bce2ade1015` returned ten
+  five-session candidates.
+- Portal `DailyAnalysis #10` is terminal with ten completed jobs, ten reports and
+  zero failed jobs.
+- ACS Email activities for the successful run completed at
+  2026-10-12T19:01:31Z and 2026-10-12T19:22:00Z with no failures.
 
 ## Active deployment update: MEDIUM_20D backend (2026-10-11)
 

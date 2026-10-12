@@ -1,5 +1,9 @@
 # Change Log
 
+- 2026-10-13 | Orchestrator Deployment | FC1 Function, private Storage networking, managed identity RBAC, ACS Email과 수동 SHORT_5D trigger를 Azure에 배포했다.
+- 2026-10-13 | End-to-End Verification | 2026-10-09 기존 데이터 재사용, SHORT_5D 후보 10개, Portal DailyAnalysis와 TradingAgents 분석 10건, 시작·종료 메일을 검증했다.
+- 2026-10-13 | Resource Remediation | 실행 전 App·PostgreSQL·MySQL·TradingAgents·Storage 상태를 제한적으로 복구하고 lock을 원상 복원하는 운영 계약을 배포했다.
+
 - 2026-10-13 | Portal Integration | 후보 5~10개 job의 최초 dispatch를 기다릴 수 있도록 Portal batch 제출 timeout을 5분으로 분리했다.
 
 - 2026-10-13 | Pipeline API | static eligibility route를 UUID 동적 route보다 먼저 등록해 `/pipeline-runs/eligibility`의 422 충돌을 제거했다.
