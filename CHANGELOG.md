@@ -10,6 +10,7 @@
 
 ## 2026-10-12
 
+- 2026-10-12 | Orchestrator Deployment | Flex Consumption runtime과 충돌하는 중복 FUNCTIONS_WORKER_RUNTIME 앱 설정을 제거했다.
 - 2026-10-12 | Orchestrator Infrastructure | Durable Functions 상태 backend를 Consumption Durable Task Scheduler와 task hub, system-assigned identity RBAC로 전환하고 FC1 Storage는 runtime·배포 용도로 분리했다.
 - 2026-10-12 | Orchestrator Manual Trigger | Function 인증 수동 HTTP starter에 날짜·모델 목적 검증, 목적별 Durable ID·Candidate 멱등 key와 secret 없는 관리 응답을 추가했다.
 - 2026-10-12 | Orchestrator Model Purpose | 모델 목적을 orchestration 입력에서 후보 조회와 포털 batch까지 전달하고 타이머 기본값을 MEDIUM_20D로 고정했다.
