@@ -103,10 +103,10 @@ Invoke-RestMethod `
 
 ## 배포 전제 조건
 
-- `infra/orchestrator.bicep`은 secret 값 없이 Key Vault와 참조만 만든다. 배포 후
-  `candidateApiKeySecretName`, `portalApiKeySecretName`, `emailSenderSecretName`,
-  `emailRecipientsSecretName`에 해당하는 secret을 별도 보안 절차로 넣어야 한다.
-  발신자와 쉼표 구분 수신자 주소는 설정/Key Vault에만 존재해야 한다.
+- 조직 정책이 Key Vault public access를 차단하고 Function에는 Key Vault private
+  endpoint가 없으므로 runtime secret은 Bicep `@secure()` parameter로 전달해 encrypted
+  Function App Settings에 저장한다. parameter 파일은 ignored 임시 파일로 만들고 배포 직후
+  삭제한다. 발신자와 쉼표 구분 수신자 주소를 소스·로그에 기록하지 않는다.
 - Candidate와 Portal App Service, Candidate PostgreSQL flexible server, Portal MySQL
   flexible server의 정확한 HTTPS URL·ARM resource ID와 각 DB의 배포된
   `publicNetworkAccess`(`Enabled` 또는 `Disabled`)를 입력한다. 오케스트레이터 관리

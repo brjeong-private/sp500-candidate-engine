@@ -55,17 +55,21 @@ param tradingAgentsMinReplicas int = 1
 @description('Existing Action Group resource ID. Notification addresses remain outside this template.')
 param alertActionGroupResourceId string
 
-@description('Key Vault secret name populated after deployment with the Candidate API key.')
-param candidateApiKeySecretName string = 'candidate-api-key'
+@secure()
+@description('Candidate API key stored as an encrypted Function App setting.')
+param candidateApiKey string
 
-@description('Key Vault secret name populated after deployment with the portal automation API key.')
-param portalApiKeySecretName string = 'portal-automation-api-key'
+@secure()
+@description('Portal automation API key stored as an encrypted Function App setting.')
+param portalAutomationApiKey string
 
-@description('Key Vault secret name populated after deployment with the ACS sender address.')
-param emailSenderSecretName string = 'orchestrator-email-sender'
+@secure()
+@description('ACS sender address stored as an encrypted Function App setting.')
+param emailSender string
 
-@description('Key Vault secret name populated after deployment with comma-separated recipient addresses.')
-param emailRecipientsSecretName string = 'orchestrator-email-recipients'
+@secure()
+@description('Comma-separated ACS recipients stored as an encrypted Function App setting.')
+param emailRecipients string
 
 param exchangeMic string = 'XNYS'
 
@@ -96,7 +100,6 @@ var functionIntegrationSubnetName = 'snet-function-integration'
 var privateEndpointSubnetName = 'snet-private-endpoints'
 var deploymentContainerName = 'function-releases'
 var storageDnsSuffix = environment().suffixes.storage
-var keyVaultReferencePrefix = '@Microsoft.KeyVault(VaultName=${vaultName};SecretName='
 var tags = {
   workload: 'sp500-candidate-orchestrator'
   component: 'durable-functions'
@@ -543,7 +546,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         }
         {
           name: 'CANDIDATE_API_KEY'
-          value: '${keyVaultReferencePrefix}${candidateApiKeySecretName})'
+          value: candidateApiKey
         }
         {
           name: 'CANDIDATE_RESOURCE_ID'
@@ -563,7 +566,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         }
         {
           name: 'PORTAL_AUTOMATION_API_KEY'
-          value: '${keyVaultReferencePrefix}${portalApiKeySecretName})'
+          value: portalAutomationApiKey
         }
         {
           name: 'PORTAL_RESOURCE_ID'
@@ -611,11 +614,11 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         }
         {
           name: 'ORCHESTRATOR_EMAIL_SENDER'
-          value: '${keyVaultReferencePrefix}${emailSenderSecretName})'
+          value: emailSender
         }
         {
           name: 'ORCHESTRATOR_EMAIL_RECIPIENTS'
-          value: '${keyVaultReferencePrefix}${emailRecipientsSecretName})'
+          value: emailRecipients
         }
         {
           name: 'ORCHESTRATOR_EXCHANGE_MIC'
