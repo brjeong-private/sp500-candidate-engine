@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Portal Integration | 후보 5~10개 job의 최초 dispatch를 기다릴 수 있도록 Portal batch 제출 timeout을 5분으로 분리했다.
+
 - 2026-10-13 | Pipeline API | static eligibility route를 UUID 동적 route보다 먼저 등록해 `/pipeline-runs/eligibility`의 422 충돌을 제거했다.
 
 - 2026-10-13 | Pipeline API | 저장된 calendar row와 분리된 XNYS 거래일·cutoff eligibility endpoint를 추가해 오케스트레이터 gate가 실제 운영 규칙을 사용하도록 수정했다.

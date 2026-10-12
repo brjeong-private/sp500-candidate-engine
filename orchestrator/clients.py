@@ -13,6 +13,7 @@ from settings import Settings
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+PORTAL_SUBMIT_TIMEOUT = httpx.Timeout(300.0, connect=5.0)
 CANDIDATE_TERMINAL = {"SUCCEEDED", "PARTIAL_SUCCESS", "FAILED"}
 PORTAL_JOB_TERMINAL = {"completed", "failed"}
 ARM_ENDPOINT = "https://management.azure.com"
@@ -83,12 +84,13 @@ def request_json(
     params: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
     expected_statuses: Iterable[int] = (200,),
+    timeout: httpx.Timeout = HTTP_TIMEOUT,
 ) -> dict[str, Any]:
     """리디렉션과 대용량 응답을 거부하는 단일 HTTP 요청을 수행한다."""
     _validate_https_url(url)
     try:
         with (
-            httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False) as client,
+            httpx.Client(timeout=timeout, follow_redirects=False) as client,
             client.stream(
                 method,
                 url,
@@ -627,6 +629,7 @@ def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
             "with_candidates": True,
         },
         expected_statuses=(202,),
+        timeout=PORTAL_SUBMIT_TIMEOUT,
     )
     run_id = payload.get("process_run_id")
     if not isinstance(run_id, str) or not run_id:
