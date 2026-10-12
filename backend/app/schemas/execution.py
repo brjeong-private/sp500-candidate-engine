@@ -4,7 +4,7 @@ from datetime import date as Date
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, PrivateAttr, StrictBool, model_validator
 
 
 class PipelineRunRequest(BaseModel):
@@ -41,3 +41,4 @@ class PipelineRunAccepted(BaseModel):
     process_run_id: UUID
     status: Literal["PENDING"] = "PENDING"
     status_url: str
+    _is_replay: bool = PrivateAttr(default=False)

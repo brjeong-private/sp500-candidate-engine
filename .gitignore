@@ -40,3 +40,4 @@
 /logs/
 /infra/*
 !/infra/backend-appservice.bicep
+!/infra/orchestrator.bicep

@@ -76,10 +76,15 @@ NYSE/Nasdaq 공식 원천은 거래 달력·조기 폐장·거래정지를 서�
 
 상세 내용은 [데이터 원천·라이선스 카탈로그](.github/modernize/assessment/engines/facts/data-source-license-catalog.md)를 참고하세요.
 
-## 전체 아키텍처
+## 운영 Azure 아키텍처
+
+Candidate Engine 이후의 포털·TradingAgents는 외부 시스템이다. 이 저장소에는 후보
+선정까지의 엔진/API와 이들을 호출하는 Python Durable Functions 오케스트레이터만
+있으며, 포털의 분석 상태·결과는 포털 MySQL에 저장된다. 후보 원본과 파이프라인 실행
+기록은 계속 Candidate PostgreSQL이 단일 원본이다.
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Sources["데이터 원천"]
         Massive["Massive<br/>가격·기업행위·뉴스"]
         SEC["SEC EDGAR<br/>식별자·공시·재무"]
@@ -87,36 +92,118 @@ flowchart LR
         Reference["Wikipedia·거래 달력<br/>참조 데이터"]
     end
 
-    subgraph Engine["Candidate Engine - 구현"]
-        Scheduler["05:30 ET<br/>스케줄·세션 결정"]
+    subgraph Candidate["Candidate Engine"]
+        CandidateApi["Candidate API<br/>Python App Service"]
         Collectors["Provider별 수집<br/>quota 제어"]
         Raw["Raw snapshot<br/>hash·provenance"]
         Normalize["병렬 정규화"]
         Gates["Point-in-time<br/>품질 gate"]
-        Database[("Azure PostgreSQL 16")]
-    end
-
-    subgraph Analytics["Analytics - 구현"]
-        Features["Qlib 특징"]
+        Features["Qlib Alpha158"]
         Scores["모델 점수·순위"]
         Candidates["5~10개 후보"]
+        PostgreSQL[("Azure PostgreSQL 16<br/>후보 단일 원본")]
+    end
+
+    subgraph Automation["Daily Automation - 이 저장소"]
+        Timer["Python Durable Functions<br/>Linux FC1<br/>05:30 America New York"]
+        Durable["Replay-safe orchestrator<br/>activity와 durable timer"]
+        ACS["Azure Communication Services<br/>시작·종결 Email"]
+        State["Durable Task Scheduler<br/>history·task state"]
+        Runtime["Storage·Key Vault<br/>FC1 runtime·package·secrets"]
+    end
+
+    subgraph External["외부 분석 시스템 - 이 저장소 범위 밖"]
+        Portal["Portal service API<br/>App Service"]
+        MySQL[("MySQL Flexible Server<br/>분석 작업·결과")]
+        TradingAgents["TradingAgents<br/>Azure Container App"]
+        Foundry["Microsoft Foundry<br/>모델 배포"]
+        Reports["Azure Blob Storage<br/>분석 보고서"]
     end
 
     Massive --> Collectors
     SEC --> Collectors
     Alpha --> Collectors
     Reference --> Collectors
-    Scheduler --> Collectors
-    Collectors --> Raw --> Normalize --> Gates --> Database
-    Database --> Features --> Scores --> Candidates
+    CandidateApi --> Collectors
+    Collectors --> Raw --> Normalize --> Gates --> PostgreSQL
+    PostgreSQL --> Features --> Scores --> Candidates --> PostgreSQL
+
+    Timer --> Durable
+    State --> Timer
+    Runtime --> Timer
+    Durable -->|"멱등 DAILY 요청"| CandidateApi
+    CandidateApi -->|"MEDIUM_20D 기본 후보"| Durable
+    Durable -->|"selection run 일괄 제출"| Portal
+    Portal -->|"작업 실행"| TradingAgents
+    Portal -->|"분석 상태·결과"| MySQL
+    TradingAgents --> Foundry
+    TradingAgents --> Reports
+    Durable --> ACS
 ```
+
+운영 순서는 다음과 같다.
+
+1. UTC 매시 30분 timer가 `America/New_York` 05:30인지 확인하고, 날짜 기반 Durable
+   instance ID로 직전 달력 날짜의 실행을 한 번만 시작한다.
+2. XNYS 거래일과 Candidate·Portal·TradingAgents readiness를 확인한다.
+3. `Idempotency-Key: orchestrator-daily-YYYY-MM-DD`로 Candidate `DAILY` 실행을
+   요청한다. 같은 key와 canonical payload는 기존 실행을 반환하고, 같은 key의 다른
+   payload는 `409`로 거부한다.
+4. 기본 `MEDIUM_20D` 후보 5~10개를 검증해 Portal service API에 selection run 단위로
+   제출한다. `SHORT_5D`는 명시적으로 선택하는 one-off 호환 경로이며 자동 fallback이
+   아니다.
+5. Portal은 TradingAgents Container App 실행을 중개하고 분석 작업·결과를 MySQL에
+   저장한다. 오케스트레이터는 집계를 polling하고 시작·성공·부분 실패·실패·timeout을
+   ACS Email로 알린다.
+
+### 오케스트레이터 아키텍처
+
+오케스트레이터는 Candidate Engine과 외부 분석 시스템 사이의 control plane이다.
+Candidate PostgreSQL이나 Portal MySQL에 직접 접근하지 않으며 API 계약만 사용한다.
+Durable Task Scheduler에는 후보나 분석 결과가 아니라 orchestration history와 task
+state를 저장한다. 별도 Storage Account는 FC1 host runtime과 코드 배포 컨테이너에만
+사용하며 Durable orchestration backend로 사용하지 않는다.
+
+```mermaid
+flowchart TD
+    Timer["UTC 매시 30분"] --> LocalGate["05:30 America New York gate"]
+    LocalGate --> Instance["candidate-daily-date<br/>단일 Durable instance"]
+    Instance --> Session["Candidate XNYS session 조회"]
+    Session --> Preflight["Candidate·Portal ARM 상태<br/>3개 서비스 readiness"]
+    Preflight --> StartMail["ACS 시작 알림"]
+    StartMail --> Submit["Candidate DAILY<br/>날짜 기반 Idempotency-Key"]
+    Submit --> CandidateWait["Candidate durable polling<br/>기본 timeout 120분"]
+    CandidateWait --> Verify["MEDIUM_20D 기본<br/>후보 5~10개 계약 검증"]
+    Verify --> Portal["analysis date·selection run<br/>model purpose 일괄 제출"]
+    Portal --> PortalWait["Portal aggregate polling<br/>기본 timeout 360분"]
+    PortalWait --> Result["SUCCEEDED·PARTIAL_FAILED<br/>TIMED_OUT·FAILED"]
+    Result --> EndMail["ACS 종결 요약"]
+```
+
+핵심 운영 계약:
+
+- timer는 DST를 고려해 뉴욕 현지 05:30에만 직전 달력 날짜를 시작한다.
+- 비거래일은 외부 실행 없이 `SUCCEEDED`, `skipped=true`로 종료한다.
+- orchestration code는 외부 I/O를 하지 않고 activity와 durable timer만 예약한다.
+- Candidate는 `SUCCEEDED`일 때만 진행하며 `PARTIAL_SUCCESS`는 실패로 종료한다.
+- 후보는 대상일·모델 목적·position·중복·단일 selection run·5~10개 조건을 검증한다.
+- Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
+- system-assigned 관리 ID는 DTS의 `Durable Task Data Contributor`, FC1 runtime
+  Storage·Key Vault·App Insights·ACS와 ARM 조회에 사용하고, 서버 간 API credential은
+  Key Vault reference로 주입한다.
+
+상태 전이, 멱등성 계층, 외부 API, RBAC, timeout과 관측성의 기준 설계는
+[오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를
+참고하세요.
 
 상세 설계:
 
 - [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
+- [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)
 - [일 1회 수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)
 - [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)
 - [모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md)
+- [Durable Functions 구현·배포](orchestrator/README.md)
 - [프로젝트 공통 하네스](PROJECT-HARNESS.md)
 
 ## 일일 파이프라인
@@ -177,13 +264,15 @@ flowchart LR
     Context["Manifest and Cutoff"] --> Adjust["Split Adjusted OHLCV"]
     Adjust --> Qlib["Qlib Binary Export"]
     Qlib --> Features["Alpha158 RAW<br/>158 Features"]
-    Adjust --> Label["Raw 5D Return<br/>D plus 1 Open to D plus 5 Close"]
+    Adjust --> ShortLabel["SHORT 5D Return<br/>D plus 1 Open to D plus 5 Close"]
+    Adjust --> MediumLabel["MEDIUM 20D Return<br/>D plus 1 Open to D plus 20 Close"]
     Features --> Split["Purged Walk Forward"]
-    Label --> Split
+    ShortLabel --> Split
+    MediumLabel --> Split
     Split --> Models["Momentum Ridge LightGBM"]
     Models --> Eval["IC Rank IC<br/>Top 5 and 10<br/>Cost Drawdown"]
     Eval --> Registry["Model Registry<br/>SHADOW or CHAMPION"]
-    Registry --> Score["Predicted 5D Return<br/>Rank Percentile"]
+    Registry --> Score["Predicted 5D or 20D Return<br/>Rank Percentile"]
     Score --> Select["Hard Gates<br/>Issuer and Sector Limits"]
     Select --> Candidates["Five to Ten Candidates"]
 ```
@@ -191,12 +280,15 @@ flowchart LR
 핵심 계약:
 
 - 특징: Qlib Alpha158 RAW 158차원, 최대 lookback 60 sessions
-- Label v2: `D+5 adjusted close / D+1 adjusted open - 1`
+- Label: `SHORT_5D`는 D+5, `MEDIUM_20D`는 D+20 adjusted close를 각각
+  `D+1 adjusted open`과 비교한 raw 수익률
 - SPY: optional 평가 series, label 생성과 선정의 필수 입력이 아님
 - 학습: expanding train, validation/test 시간 분할, label-exit purge
 - 모델: Momentum·Ridge baseline과 Qlib LightGBM
 - 평가: IC·Rank IC, Top-5/10 raw·net return, 양의 비율, 5개 중첩 cohort MDD
-- Score: `PREDICTED_5D_RETURN`; 확률이나 confidence가 아님
+- Score: `PREDICTED_5D_RETURN` 또는 `PREDICTED_20D_RETURN`; 확률이나
+  confidence가 아님
+- 운영 기본: `MEDIUM_20D`; `SHORT_5D`는 명시적 one-off이며 자동 fallback 없음
 - 후보: 양수 threshold 없이 전체 적격 universe를 순회하고 issuer·sector 제약 적용
 
 상세 설계는 [후보 선정 모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md), 모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)를 참고하세요.

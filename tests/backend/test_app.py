@@ -71,12 +71,13 @@ def test_preflight_and_api_key(app):
             headers={
                 "Origin": PORTAL_ORIGIN,
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "x-api-key,content-type",
+                "Access-Control-Request-Headers": "x-api-key,content-type,idempotency-key",
             },
         )
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == PORTAL_ORIGIN
         assert "x-api-key" in response.headers["access-control-allow-headers"].lower()
+        assert "idempotency-key" in response.headers["access-control-allow-headers"].lower()
         denied = client.options(
             "/api/v1/pipeline-runs",
             headers={
