@@ -12,7 +12,8 @@
 
 - 2026-10-12 | Orchestrator Infrastructure | 운영 FC1 배포에서 TradingAgents URL을 필수 파라미터로 강제해 readiness 사전 점검이 생략되지 않도록 수정했다.
 - 2026-10-12 | Orchestrator Portal Contract | 포털 연동을 Bearer 기반 후보 분석 일괄 제출·집계 조회로 수정하고 5~10개 작업의 부분 실패 요약을 보존했다.
-- 2026-10-12 | Orchestrator Readiness | 포털 readiness를 `/readyz`로 수정하고 TradingAgents `/readyz`도 배포 전 점검하도록 추가했다.- 2026-10-12 | Durable Orchestrator | 05:30 ET 거래일 게이트부터 Candidate 멱등 실행·후보 검증·포털 부분 실패 처리·ACS Email까지 replay-safe activity와 durable timer로 구현했다.
+- 2026-10-12 | Orchestrator Readiness | 포털 readiness를 `/readyz`로 수정하고 TradingAgents `/readyz`도 배포 전 점검하도록 추가했다.
+- 2026-10-12 | Durable Orchestrator | 05:30 ET 거래일 게이트부터 Candidate 멱등 실행·후보 검증·포털 부분 실패 처리·ACS Email까지 replay-safe activity와 durable timer로 구현했다.
 - 2026-10-12 | Orchestrator Infrastructure | Linux FC1, 관리 ID 기반 Storage·Key Vault·Application Insights·ACS Email과 운영 알림을 구성하는 독립 Bicep을 추가했다.
 - 2026-10-12 | Orchestrator Verification | DST·HTTPS 제한·응답 크기·5~10개 후보 검증·종목별 무재시도 부분 실패를 격리 단위 테스트로 추가했다.
 - 2026-10-12 | Pipeline Planning | Candidate 일일 실행과 외부 포털·TradingAgents 분석을 Durable Function, 멱등 API, readiness, ACS Email로 연결하는 자동화 계획을 구체화했다.
