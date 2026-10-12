@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 
 from backend.app.dependencies import get_database, require_api_key
 from backend.app.schemas.execution import PipelineRunAccepted, PipelineRunRequest
@@ -29,12 +29,22 @@ def create_pipeline_run(
     payload: PipelineRunRequest,
     background_tasks: BackgroundTasks,
     service: Annotated[PipelineExecutionService, Depends(get_execution_service)],
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        ),
+    ],
 ) -> PipelineRunAccepted:
     try:
-        accepted = service.accept(payload)
+        accepted = service.accept(payload, idempotency_key)
     except PipelineConflict as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    background_tasks.add_task(service.execute_background, accepted.process_run_id)
+    if not accepted._is_replay:
+        background_tasks.add_task(service.execute_background, accepted.process_run_id)
     return accepted

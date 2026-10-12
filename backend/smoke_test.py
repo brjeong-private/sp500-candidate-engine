@@ -110,14 +110,18 @@ def main() -> None:
             headers={
                 "Origin": PORTAL_ORIGIN,
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type,x-api-key",
+                "Access-Control-Request-Headers": "content-type,x-api-key,idempotency-key",
             },
         )
         check(
             "portal_POST_preflight",
             preflight.status_code == 200
             and preflight.headers.get("access-control-allow-origin") == PORTAL_ORIGIN
-            and "x-api-key" in preflight.headers.get("access-control-allow-headers", "").lower(),
+            and "x-api-key" in preflight.headers.get("access-control-allow-headers", "").lower()
+            and (
+                "idempotency-key"
+                in preflight.headers.get("access-control-allow-headers", "").lower()
+            ),
         )
         denied = client.options(
             "/api/v1/pipeline-runs",
@@ -143,7 +147,10 @@ def main() -> None:
                 raise ValueError("Local backend/.env must contain BACKEND_API_KEY")
             invalid = client.post(
                 "/api/v1/pipeline-runs",
-                headers={"X-API-Key": key},
+                headers={
+                    "X-API-Key": key,
+                    "Idempotency-Key": "smoke-invalid-future-date",
+                },
                 json={"mode": "DAILY", "date": "2099-01-01", "with_candidates": True},
             )
             check("authenticated_future_date_rejected", invalid.status_code == 422)
@@ -163,7 +170,10 @@ def main() -> None:
             else:
                 started = client.post(
                     "/api/v1/pipeline-runs",
-                    headers={"X-API-Key": key},
+                    headers={
+                        "X-API-Key": key,
+                        "Idempotency-Key": f"smoke:{mode.lower()}:{args.date}",
+                    },
                     json=payload,
                 )
                 check("authenticated_execution_accepted", started.status_code == 202)

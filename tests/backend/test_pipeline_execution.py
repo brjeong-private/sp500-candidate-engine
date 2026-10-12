@@ -56,6 +56,11 @@ class MemoryDatabase:
         self.statements.append(statement)
         if statement.startswith("SELECT pg_advisory"):
             return Result()
+        if statement.startswith("SELECT process_run_id, request_hash"):
+            for key, row in self.requests.items():
+                if row["idempotency_key"] == params[0]:
+                    return Result([{"process_run_id": key, "request_hash": row["request_hash"]}])
+            return Result()
         if statement.startswith("SELECT process_run_id FROM ops.backend_pipeline_request"):
             active = [
                 key for key, row in self.requests.items() if row["status"] in {"PENDING", "RUNNING"}
@@ -79,8 +84,14 @@ class MemoryDatabase:
                 status="PENDING",
             )
         elif statement.startswith("INSERT INTO ops.backend_pipeline_request"):
-            key, mode, payload = params
-            self.requests[key] = dict(mode=mode, request_payload=payload, status="PENDING")
+            key, mode, payload, idempotency_key, request_hash = params
+            self.requests[key] = dict(
+                mode=mode,
+                request_payload=payload,
+                status="PENDING",
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
         elif "RETURNING request_payload" in statement:
             row = self.requests.get(params[0])
             if row is None or row["status"] != "PENDING":
@@ -132,6 +143,18 @@ def daily():
     return PipelineRunRequest(mode="DAILY", date=date(2026, 10, 8), with_candidates=True)
 
 
+def test_idempotency_migration_is_expand_compatible():
+    migration = (
+        Path(__file__).parents[2] / "sql" / "020_backend_pipeline_idempotency.sql"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(migration.split())
+    assert "ALTER COLUMN idempotency_key DROP NOT NULL" in normalized
+    assert "ALTER COLUMN request_hash DROP NOT NULL" in normalized
+    assert "(idempotency_key IS NULL) = (request_hash IS NULL)" in normalized
+    assert "WHERE idempotency_key IS NOT NULL" in normalized
+    assert "SET NOT NULL" not in normalized
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -172,7 +195,7 @@ def test_session_completion_future_and_provider_boundaries(service):
 
 
 def test_acceptance_persists_same_id_then_executes_daily_and_candidates(service, monkeypatch):
-    run = service.accept(daily())
+    run = service.accept(daily(), "daily-2026-10-08")
     assert service.database.runs[run.process_run_id]["status"] == "PENDING"
     assert service.database.requests[run.process_run_id]["status"] == "PENDING"
     runner = AsyncMock(
@@ -191,8 +214,50 @@ def test_acceptance_persists_same_id_then_executes_daily_and_candidates(service,
     assert service.database.requests[run.process_run_id]["status"] == "SUCCEEDED"
 
 
+def test_same_idempotency_key_and_canonical_payload_reuses_run(service):
+    first = service.accept(daily(), "daily-2026-10-08")
+    replay = service.accept(
+        PipelineRunRequest.model_validate(
+            {
+                "with_candidates": True,
+                "date": "2026-10-08",
+                "mode": "DAILY",
+                "auto_retry": None,
+            }
+        ),
+        "daily-2026-10-08",
+    )
+    assert replay.process_run_id == first.process_run_id
+    assert replay.status_url == first.status_url
+    assert replay._is_replay is True
+    assert len(service.database.requests) == 1
+
+
+def test_same_idempotency_key_with_different_payload_conflicts(service):
+    service.accept(daily(), "pipeline-request")
+    different = PipelineRunRequest(
+        mode="RANGE",
+        start_date=date(2026, 10, 8),
+        end_date=date(2026, 10, 8),
+        with_candidates=False,
+    )
+    with pytest.raises(execution.PipelineConflict, match="different request"):
+        service.accept(different, "pipeline-request")
+    assert len(service.database.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["", " leading", "contains space", "é", "x" * 129, "/path", "line\nbreak"],
+)
+def test_service_rejects_unsafe_idempotency_keys(service, key):
+    with pytest.raises(ValueError, match="Invalid Idempotency-Key"):
+        service.accept(daily(), key)
+    assert not service.database.requests
+
+
 def test_background_failure_is_persisted_and_not_swallowed(service, monkeypatch):
-    run = service.accept(daily())
+    run = service.accept(daily(), "daily-2026-10-08")
     monkeypatch.setattr(service, "candidate_history_start", lambda _: date(2025, 12, 1))
     monkeypatch.setattr(
         execution, "run_daily_process", AsyncMock(side_effect=RuntimeError("failed"))
@@ -205,7 +270,7 @@ def test_background_failure_is_persisted_and_not_swallowed(service, monkeypatch)
 
 
 def test_collection_failure_status_is_not_success(service, monkeypatch):
-    run = service.accept(daily())
+    run = service.accept(daily(), "daily-2026-10-08")
     monkeypatch.setattr(service, "candidate_history_start", lambda _: date(2025, 12, 1))
     monkeypatch.setattr(
         execution, "run_daily_process", AsyncMock(return_value={"status": "FAILED"})
@@ -215,7 +280,7 @@ def test_collection_failure_status_is_not_success(service, monkeypatch):
 
 
 def test_missing_or_stale_candidate_cannot_succeed(service, monkeypatch):
-    run = service.accept(daily())
+    run = service.accept(daily(), "daily-2026-10-08")
     monkeypatch.setattr(service, "candidate_history_start", lambda _: date(2025, 12, 1))
     monkeypatch.setattr(
         execution,
@@ -239,7 +304,7 @@ def test_global_atomic_acceptance_blocks_across_modes_and_duplicate_pending(serv
 
     def accept(request):
         try:
-            return service.accept(request)
+            return service.accept(request, f"{request.mode.lower()}-request")
         except execution.PipelineConflict:
             return None
 
@@ -249,14 +314,14 @@ def test_global_atomic_acceptance_blocks_across_modes_and_duplicate_pending(serv
     assert len(service.database.requests) == 1
     assert any("pg_advisory_xact_lock" in sql for sql in service.database.statements)
     with pytest.raises(execution.PipelineConflict):
-        service.accept(daily())
+        service.accept(daily(), "another-request")
 
 
 def test_running_conflict_and_claim_cannot_execute_twice(service, monkeypatch):
-    run = service.accept(daily())
+    run = service.accept(daily(), "daily-2026-10-08")
     service.database.requests[run.process_run_id]["status"] = "RUNNING"
     with pytest.raises(execution.PipelineConflict):
-        service.accept(daily())
+        service.accept(daily(), "another-request")
     with pytest.raises(execution.PipelineConflict):
         service.execute_background(run.process_run_id)
     assert service.database.requests[run.process_run_id]["status"] == "RUNNING"
@@ -269,7 +334,7 @@ def test_range_explicit_parent_child_ids_and_trading_sessions(service, monkeypat
         end_date=date(2026, 10, 10),
         with_candidates=False,
     )
-    run = service.accept(request)
+    run = service.accept(request, "range-2026-10-08-10")
     runner = AsyncMock(return_value={"status": "SUCCEEDED"})
     monkeypatch.setattr(execution, "run_daily_process", runner)
     service.execute_background(run.process_run_id)
@@ -288,7 +353,7 @@ def test_backfill_reuses_accepted_id_and_retry_policy(service, monkeypatch):
         end_date=date(2026, 10, 9),
         auto_retry=False,
     )
-    run = service.accept(request)
+    run = service.accept(request, "backfill-2026-10-08-09")
     runner = AsyncMock(return_value={"status": "SUCCEEDED"})
     monkeypatch.setattr(execution, "run_backfill_process", runner)
     service.execute_background(run.process_run_id)
@@ -298,7 +363,7 @@ def test_backfill_reuses_accepted_id_and_retry_policy(service, monkeypatch):
 
 @pytest.mark.parametrize("status", ["PENDING", "RUNNING"])
 def test_interrupted_pending_and_running_reconcile_only_api_owned(service, status):
-    run = service.accept(daily())
+    run = service.accept(daily(), "daily-2026-10-08")
     service.database.requests[run.process_run_id]["status"] = status
     cli_id = uuid.uuid4()
     child_id = uuid.uuid4()
@@ -323,7 +388,9 @@ def test_api_authentication_and_202(service, monkeypatch):
         for headers in ({}, {"X-API-Key": "wrong"}):
             assert (
                 client.post(
-                    "/api/v1/pipeline-runs", json=daily().model_dump(mode="json"), headers=headers
+                    "/api/v1/pipeline-runs",
+                    json=daily().model_dump(mode="json"),
+                    headers={**headers, "Idempotency-Key": "daily-2026-10-08"},
                 ).status_code
                 == 401
             )
@@ -331,13 +398,78 @@ def test_api_authentication_and_202(service, monkeypatch):
         response = client.post(
             "/api/v1/pipeline-runs",
             json=daily().model_dump(mode="json"),
-            headers={"X-API-Key": "test-only-key"},
+            headers={
+                "X-API-Key": "test-only-key",
+                "Idempotency-Key": "daily-2026-10-08",
+            },
         )
     assert response.status_code == 202
     key = uuid.UUID(response.json()["process_run_id"])
     assert key in service.database.requests
     background.assert_called_once_with(key)
     assert response.json()["status_url"].endswith(str(key))
+
+
+def test_api_requires_valid_idempotency_key_and_replay_does_not_reschedule(service, monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    app.state.backend_settings = SimpleNamespace(api_key="test-only-key")
+    app.dependency_overrides[get_execution_service] = lambda: service
+    background = MagicMock()
+    monkeypatch.setattr(service, "execute_background", background)
+    payload = daily().model_dump(mode="json")
+    auth = {"X-API-Key": "test-only-key"}
+    with TestClient(app) as client:
+        assert client.post("/api/v1/pipeline-runs", json=payload, headers=auth).status_code == 422
+        invalid = client.post(
+            "/api/v1/pipeline-runs",
+            json=payload,
+            headers={**auth, "Idempotency-Key": "contains space"},
+        )
+        assert invalid.status_code == 422
+        first = client.post(
+            "/api/v1/pipeline-runs",
+            json=payload,
+            headers={**auth, "Idempotency-Key": "daily-2026-10-08"},
+        )
+        replay = client.post(
+            "/api/v1/pipeline-runs",
+            json=payload,
+            headers={**auth, "Idempotency-Key": "daily-2026-10-08"},
+        )
+    assert first.status_code == replay.status_code == 202
+    assert replay.json() == first.json()
+    background.assert_called_once()
+
+
+def test_api_same_key_different_payload_returns_409(service, monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    app.state.backend_settings = SimpleNamespace(api_key="test-only-key")
+    app.dependency_overrides[get_execution_service] = lambda: service
+    monkeypatch.setattr(service, "execute_background", MagicMock())
+    headers = {
+        "X-API-Key": "test-only-key",
+        "Idempotency-Key": "pipeline-request",
+    }
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/v1/pipeline-runs",
+            json=daily().model_dump(mode="json"),
+            headers=headers,
+        )
+        conflict = client.post(
+            "/api/v1/pipeline-runs",
+            json={
+                "mode": "RANGE",
+                "start_date": "2026-10-08",
+                "end_date": "2026-10-08",
+                "with_candidates": False,
+            },
+            headers=headers,
+        )
+    assert first.status_code == 202
+    assert conflict.status_code == 409
 
 
 def test_candidate_history_covers_inference_warmup_without_training_window(service):
@@ -364,7 +496,10 @@ def test_sync_background_wrapper_does_not_use_callers_event_loop(service, monkey
         response = client.post(
             "/api/v1/pipeline-runs",
             json=daily().model_dump(mode="json"),
-            headers={"X-API-Key": "test-only-key"},
+            headers={
+                "X-API-Key": "test-only-key",
+                "Idempotency-Key": "daily-2026-10-08",
+            },
         )
     assert response.status_code == 202
     assert threads and threads[0] != threading.get_ident()

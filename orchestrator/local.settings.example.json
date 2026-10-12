@@ -1,0 +1,22 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "CANDIDATE_API_URL": "https://candidate-host.example",
+    "CANDIDATE_API_KEY": "set-in-local-settings-only",
+    "CANDIDATE_RESOURCE_ID": "/subscriptions/subscription-id/resourceGroups/resource-group/providers/Microsoft.Web/sites/candidate-app",
+    "PORTAL_API_URL": "https://portal-host.example",
+    "PORTAL_AUTOMATION_API_KEY": "set-in-local-settings-only",
+    "PORTAL_RESOURCE_ID": "/subscriptions/subscription-id/resourceGroups/resource-group/providers/Microsoft.Web/sites/portal-app",
+    "TRADINGAGENTS_API_URL": "",
+    "ACS_EMAIL_ENDPOINT": "https://communication-service.communication.azure.com",
+    "ORCHESTRATOR_EMAIL_SENDER": "set-in-local-settings-only",
+    "ORCHESTRATOR_EMAIL_RECIPIENTS": "set-in-local-settings-only",
+    "ORCHESTRATOR_EXCHANGE_MIC": "XNYS",
+    "ORCHESTRATOR_CANDIDATE_MODEL_PURPOSE": "MEDIUM_20D",
+    "ORCHESTRATOR_CANDIDATE_TIMEOUT_MINUTES": "120",
+    "ORCHESTRATOR_PORTAL_TIMEOUT_MINUTES": "360",
+    "ORCHESTRATOR_POLL_SECONDS": "60"
+  }
+}

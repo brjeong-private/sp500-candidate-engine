@@ -30,7 +30,7 @@ OpenAPI and Swagger UI are available at `/openapi.json` and `/docs`.
 |---|---|---|
 | GET | `/health/live` | Process liveness |
 | GET | `/health/ready` | Database and backend migration readiness |
-| POST | `/api/v1/pipeline-runs` | Accept DAILY, RANGE, or BACKFILL; requires `X-API-Key` |
+| POST | `/api/v1/pipeline-runs` | Accept DAILY, RANGE, or BACKFILL; requires `X-API-Key` and `Idempotency-Key` |
 | GET | `/api/v1/pipeline-runs` | Filtered, paginated execution history |
 | GET | `/api/v1/pipeline-runs/{process_run_id}` | Execution status |
 | GET | `/api/v1/pipeline-runs/{process_run_id}/dates` | Date/attempt details |
@@ -114,7 +114,12 @@ currently uses `MEDIUM_20D` with `PREDICTED_20D_RETURN`; this is a raw predicted
 20-session return, not a probability or confidence.
 
 Execution keys are server-side credentials: do not embed them in browser bundles.
-An external Function or trusted server sends `X-API-Key` with the POST request.
+The in-repository orchestrator or another trusted server sends `X-API-Key` and an
+`Idempotency-Key` with each POST request. The idempotency key must be 1–128 ASCII
+letters, digits, `.`, `_`, `:`, or `-`, starting with a letter or digit. Reusing
+the same key and canonical request returns the original `process_run_id` and
+status URL without scheduling duplicate work. Reusing a key with a different
+request returns `409`.
 
 ## CORS
 
@@ -127,7 +132,7 @@ https://web-jongmok-portal-8d0218f4.azurewebsites.net
 `BACKEND_CORS_ORIGINS` accepts comma-separated exact Origins without a trailing
 slash. Wildcards are rejected. Only local `http://localhost`/`http://127.0.0.1`
 Origins may use HTTP. Allowed methods are GET, POST, OPTIONS; allowed headers
-include Content-Type and X-API-Key; credentials/cookies are not enabled.
+include Content-Type, X-API-Key, and Idempotency-Key; credentials/cookies are not enabled.
 
 CORS is a browser policy, **not authentication**: anonymous reads remain accessible
 to non-browser clients. Admin history must therefore never include secrets, raw
@@ -184,8 +189,8 @@ rotate them through an encrypted settings update, not a new source ZIP.
 
 ### Execution integration and candidate prerequisites
 
-Apply migrations `017_backend_requests.sql` and `018_multi_model_support.sql` before
-starting the API. Execution
+Apply migrations through `020_backend_pipeline_idempotency.sql` before starting
+the API. Execution
 ownership and full-stage status live in `ops.backend_pipeline_request`; existing
 engine collection state remains in `ops.process_run`. RANGE children reference
 their parent through `parent_process_run_id`. Main must initialize
@@ -194,8 +199,15 @@ their parent through `parent_process_run_id`. Main must initialize
 Readiness must check `ops.backend_pipeline_request`, not a differently named API
 request table.
 
-Acceptance uses a transaction advisory lock and rejects any active API request
-or conflicting external CLI run to protect shared provider quotas. DAILY keeps
+Migration 020 is an expand-compatible rollout: its idempotency columns remain
+nullable as a pair so an old API instance can continue inserting rows while the
+migration is applied. A partial unique index covers non-null keys. The new API
+always writes both columns; a later contract migration may make them mandatory
+only after all old instances are retired.
+
+Acceptance uses a transaction advisory lock. An exact idempotent replay is
+resolved before the active-run check; a new key still rejects any active API
+request or conflicting external CLI run to protect shared provider quotas. DAILY keeps
 its API request `RUNNING` after collection completes until scoring and candidate
 generation finish. Internal engine results may include scoring/selection run IDs,
 but their arbitrary metadata is not part of the public history response.

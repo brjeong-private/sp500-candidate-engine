@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from sp500_candidate_engine.source_harness import (
 logger = logging.getLogger(__name__)
 ACCEPTANCE_LOCK = 517_017_001
 INTERRUPTED_REASON = "API background execution interrupted by process restart; resubmit explicitly"
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class PipelineConflict(RuntimeError):
@@ -100,14 +102,41 @@ class PipelineExecutionService:
             raise ValueError("Session data is not complete before the engine cutoff")
         return plan.sessions
 
-    def accept(self, request: PipelineRunRequest) -> PipelineRunAccepted:
-        sessions = self.validate_request(request)
-        process_run_id = uuid.uuid4()
-        start = request.date or request.start_date
-        end = request.date or request.end_date
-        assert start is not None and end is not None
+    def accept(self, request: PipelineRunRequest, idempotency_key: str) -> PipelineRunAccepted:
+        if IDEMPOTENCY_KEY_PATTERN.fullmatch(idempotency_key) is None:
+            raise ValueError("Invalid Idempotency-Key")
+        canonical_payload = request.model_dump(mode="json", exclude_none=True)
+        request_hash = hashlib.sha256(
+            json.dumps(
+                canonical_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode()
+        ).hexdigest()
         with self.database.connect() as connection, connection.transaction():
             connection.execute("SELECT pg_advisory_xact_lock(%s)", (ACCEPTANCE_LOCK,))
+            existing = connection.execute(
+                """
+                SELECT process_run_id, request_hash
+                FROM ops.backend_pipeline_request
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_hash"] != request_hash:
+                    raise PipelineConflict(
+                        "Idempotency-Key was already used with a different request"
+                    )
+                accepted = PipelineRunAccepted(
+                    process_run_id=existing["process_run_id"],
+                    status_url=f"/api/v1/pipeline-runs/{existing['process_run_id']}",
+                )
+                accepted._is_replay = True
+                return accepted
+            sessions = self.validate_request(request)
+            process_run_id = uuid.uuid4()
+            start = request.date or request.start_date
+            end = request.date or request.end_date
+            assert start is not None and end is not None
             active = connection.execute(
                 """
                 SELECT process_run_id FROM ops.backend_pipeline_request
@@ -130,10 +159,17 @@ class PipelineExecutionService:
             connection.execute(
                 """
                 INSERT INTO ops.backend_pipeline_request(
-                    process_run_id, mode, status, request_payload
-                ) VALUES (%s, %s, 'PENDING', %s)
+                    process_run_id, mode, status, request_payload,
+                    idempotency_key, request_hash
+                ) VALUES (%s, %s, 'PENDING', %s, %s, %s)
                 """,
-                (process_run_id, request.mode, request.model_dump_json()),
+                (
+                    process_run_id,
+                    request.mode,
+                    request.model_dump_json(),
+                    idempotency_key,
+                    request_hash,
+                ),
             )
         return PipelineRunAccepted(
             process_run_id=process_run_id,

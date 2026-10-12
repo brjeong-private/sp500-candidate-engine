@@ -47,12 +47,13 @@ def test_existing_run_poll_is_bounded_and_persists_evidence(tmp_path, monkeypatc
                 200,
                 headers={
                     "Access-Control-Allow-Origin": smoke_test.PORTAL_ORIGIN,
-                    "Access-Control-Allow-Headers": "x-api-key",
+                    "Access-Control-Allow-Headers": "x-api-key,idempotency-key",
                 },
             )
         if request.method == "POST":
             if "X-API-Key" not in request.headers:
                 return httpx.Response(401)
+            assert "Idempotency-Key" in request.headers
             payload = json.loads(request.content)
             if payload.get("date") == "2099-01-01":
                 return httpx.Response(422)

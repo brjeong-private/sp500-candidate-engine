@@ -17,6 +17,9 @@ def test_source_package_excludes_secrets_and_outputs(tmp_path, monkeypatch):
     (tmp_path / "sql" / "018_multi_model_support.sql").write_text(
         "SELECT '018_multi_model_support';", encoding="utf-8"
     )
+    (tmp_path / "sql" / "020_backend_pipeline_idempotency.sql").write_text(
+        "SELECT '020_backend_pipeline_idempotency';", encoding="utf-8"
+    )
     (tmp_path / "backend" / ".env").write_text(
         "BACKEND_API_KEY=test-backend-token", encoding="utf-8"
     )
@@ -43,6 +46,7 @@ def test_source_package_excludes_secrets_and_outputs(tmp_path, monkeypatch):
         assert "requirements.txt" in archive.namelist()
         assert "backend/app.py" in archive.namelist()
         assert "sql/018_multi_model_support.sql" in archive.namelist()
+        assert "sql/020_backend_pipeline_idempotency.sql" in archive.namelist()
         assert not any(".env" in name for name in archive.namelist())
         assert not any(b"test-provider-token" in archive.read(name) for name in archive.namelist())
     parameters = json.loads(
