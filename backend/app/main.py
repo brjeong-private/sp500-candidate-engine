@@ -145,8 +145,8 @@ def create_app(
     for router in (
         candidates.router,
         collection_data.router,
-        pipeline_runs.router,
         execution.router,
+        pipeline_runs.router,
     ):
         app.include_router(router)
     return app
