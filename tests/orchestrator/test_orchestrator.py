@@ -647,6 +647,7 @@ def test_bicep_requires_and_configures_tradingagents_url():
 
 def test_bicep_uses_identity_based_storage_durable_backend():
     template = (INFRA_ROOT / "orchestrator.bicep").read_text(encoding="utf-8")
+    assert "param location string = 'westus3'" in template
     assert "Microsoft.DurableTask/" not in template
     assert "DURABLE_TASK_SCHEDULER_CONNECTION_STRING" not in template
     assert "0ad04412-c4d5-4796-b79c-f76d14c8d402" not in template

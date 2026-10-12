@@ -42,6 +42,8 @@ Status: Validated
   existing orchestrator resources Deploy, all unrelated resources Ignore, no Delete.
 - Private-network update validation: Bicep build passed without warnings, 38 focused
   orchestrator tests passed, and Ruff passed.
+- Azure Resource Graph confirmed the selected subscription currently uses
+  `10.20.0.0/16` and `10.82.0.0/16`; the new `10.203.0.0/16` does not overlap.
 - Deployment/package implication: a runner outside the VNet can no longer upload the
   FC1 ZIP directly to the deployment container. Package upload must run from a
   VNet-connected private-DNS-capable runner (or use an approved private path), before

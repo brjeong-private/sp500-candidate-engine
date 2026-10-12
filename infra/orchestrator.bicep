@@ -1,7 +1,10 @@
 targetScope = 'resourceGroup'
 
-@description('Azure region that supports Linux Flex Consumption.')
-param location string = resourceGroup().location
+@allowed([
+  'westus3'
+])
+@description('West US 3 region used by the Linux Flex Consumption app and its integration VNet.')
+param location string = 'westus3'
 
 @minLength(3)
 @maxLength(20)
