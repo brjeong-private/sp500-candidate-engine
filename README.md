@@ -154,13 +154,52 @@ flowchart TB
    저장한다. 오케스트레이터는 집계를 polling하고 시작·성공·부분 실패·실패·timeout을
    ACS Email로 알린다.
 
+### 오케스트레이터 아키텍처
+
+오케스트레이터는 Candidate Engine과 외부 분석 시스템 사이의 control plane이다.
+Candidate PostgreSQL이나 Portal MySQL에 직접 접근하지 않으며 API 계약만 사용한다.
+Durable Storage에는 후보나 분석 결과가 아니라 orchestration history와 task state를
+저장한다.
+
+```mermaid
+flowchart TD
+    Timer["UTC 매시 30분"] --> LocalGate["05:30 America New York gate"]
+    LocalGate --> Instance["candidate-daily-date<br/>단일 Durable instance"]
+    Instance --> Session["Candidate XNYS session 조회"]
+    Session --> Preflight["Candidate·Portal ARM 상태<br/>3개 서비스 readiness"]
+    Preflight --> StartMail["ACS 시작 알림"]
+    StartMail --> Submit["Candidate DAILY<br/>날짜 기반 Idempotency-Key"]
+    Submit --> CandidateWait["Candidate durable polling<br/>기본 timeout 120분"]
+    CandidateWait --> Verify["MEDIUM_20D 기본<br/>후보 5~10개 계약 검증"]
+    Verify --> Portal["analysis date·selection run<br/>model purpose 일괄 제출"]
+    Portal --> PortalWait["Portal aggregate polling<br/>기본 timeout 360분"]
+    PortalWait --> Result["SUCCEEDED·PARTIAL_FAILED<br/>TIMED_OUT·FAILED"]
+    Result --> EndMail["ACS 종결 요약"]
+```
+
+핵심 운영 계약:
+
+- timer는 DST를 고려해 뉴욕 현지 05:30에만 직전 달력 날짜를 시작한다.
+- 비거래일은 외부 실행 없이 `SUCCEEDED`, `skipped=true`로 종료한다.
+- orchestration code는 외부 I/O를 하지 않고 activity와 durable timer만 예약한다.
+- Candidate는 `SUCCEEDED`일 때만 진행하며 `PARTIAL_SUCCESS`는 실패로 종료한다.
+- 후보는 대상일·모델 목적·position·중복·단일 selection run·5~10개 조건을 검증한다.
+- Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
+- 관리 ID는 Durable Storage·Key Vault·App Insights·ACS와 ARM 조회에 사용하고, 서버 간
+  API credential은 Key Vault reference로 주입한다.
+
+상태 전이, 멱등성 계층, 외부 API, RBAC, timeout과 관측성의 기준 설계는
+[오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를
+참고하세요.
+
 상세 설계:
 
 - [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
+- [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)
 - [일 1회 수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)
 - [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)
 - [모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md)
-- [Durable Functions 오케스트레이터](orchestrator/README.md)
+- [Durable Functions 구현·배포](orchestrator/README.md)
 - [프로젝트 공통 하네스](PROJECT-HARNESS.md)
 
 ## 일일 파이프라인

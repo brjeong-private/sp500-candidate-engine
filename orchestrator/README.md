@@ -5,6 +5,10 @@
 선정 내부 계약은 변경하지 않으며, 외부 분석 결과나 상태를 Candidate 데이터베이스에
 저장하지 않는다.
 
+상태 전이, 멱등성, 외부 계약, RBAC와 배포 경계의 기준 설계는
+[오케스트레이터 아키텍처](../.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를
+따른다.
+
 ## Azure 구성
 
 ```mermaid

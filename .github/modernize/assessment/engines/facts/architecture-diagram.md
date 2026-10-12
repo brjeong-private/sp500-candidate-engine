@@ -7,6 +7,9 @@ Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents�
 외부 시스템의 책임이다. 실선은 구현된 애플리케이션 계약 또는 Bicep에 정의된
 리소스 관계이고, 점선은 외부 시스템 내부의 논리 관계다.
 
+오케스트레이터의 replay·멱등성·상태 전이·보안·배포 상세는
+[Durable Functions 오케스트레이터 아키텍처](orchestrator-architecture.md)를 기준으로 한다.
+
 ## 설계 전제
 
 - 스케줄러는 매일 한 번 `05:30 America/New_York`에 실행한다.
@@ -112,6 +115,33 @@ null을 제외하고 key를 정렬한 canonical JSON의 SHA-256을 PostgreSQL에
 예외·실패 alert를 만든다. API key와 email 주소 값은 만들지 않고 배포 후 Key Vault
 secret으로 주입한다. 기존 Candidate·Portal App Service에는 Reader 역할을 별도로
 부여하며, Portal·TradingAgents·PostgreSQL·MySQL 자체는 이 Bicep의 소유 범위가 아니다.
+
+### 오케스트레이터 제어 흐름
+
+```mermaid
+flowchart LR
+    Timer["UTC 매시 30분 timer"] --> Gate["05:30 ET gate"]
+    Gate --> Instance["날짜별 Durable instance"]
+    Instance --> Session["XNYS session 확인"]
+    Session --> Ready["ARM·runtime readiness"]
+    Ready --> CandidateSubmit["Candidate DAILY 멱등 접수"]
+    CandidateSubmit --> CandidatePoll["Durable timer polling"]
+    CandidatePoll --> Verify["5~10개·단일 selection run 검증"]
+    Verify --> PortalSubmit["Portal batch 참조 제출"]
+    PortalSubmit --> PortalPoll["집계 polling"]
+    PortalPoll --> Terminal["SUCCEEDED·PARTIAL_FAILED<br/>TIMED_OUT·FAILED"]
+    Terminal --> Email["ACS terminal 알림"]
+```
+
+오케스트레이터는 control plane이며 Candidate PostgreSQL이나 Portal MySQL에 직접
+연결하지 않는다. Candidate API가 파이프라인과 후보 원본을 소유하고 Portal API가 외부
+분석 job을 소유한다. Durable Storage에는 업무 데이터가 아니라 orchestration history와
+task state만 저장한다.
+
+Candidate 단계의 `PARTIAL_SUCCESS`는 terminal이지만 다음 단계로 진행할 수 있는 성공이
+아니다. Portal 단계는 모든 job이 terminal일 때 `has_result`를 함께 확인해 전체 성공,
+부분 실패, 전체 실패를 구분한다. 상세 상태도와 재실행 계약은
+[오케스트레이터 아키텍처](orchestrator-architecture.md)에 정의한다.
 
 ## 전체 애플리케이션 흐름
 
@@ -361,7 +391,11 @@ flowchart LR
 
 | 계층 | 선택 기술 |
 |---|---|
-| 스케줄·CLI | Python 3.13, 일 1회 |
+| 엔진 스케줄·CLI | Python 3.13, 일 1회 |
+| 운영 조정 | Python 3.11 Azure Durable Functions, Linux FC1 |
+| 실행 상태 | Azure Storage Blob·Queue·Table, 관리 ID 인증 |
+| secret·알림 | Key Vault reference, ACS Email |
+| 운영 관측 | Application Insights, Log Analytics, metric alert |
 | 비동기 HTTP | HTTPX |
 | Massive 제한 | shared token bucket, 5 req/min |
 | SEC 제한 | global limiter 5 req/s, 최대 동시 2 bulk downloads |
