@@ -30,7 +30,13 @@
 
 후보 결과는 **후속 분석 대상 목록**이며 매수 추천이나 포트폴리오 주문이 아니다. 외부 시스템 연동은 이 저장소 밖에서 별도로 구현한다. 이 저장소는 특정 외부 소비자에 종속된 스키마나 실행 상태를 만들지 않는다.
 
+오케스트레이터는 Candidate 실행과 외부 소비자 연계를 조정하는 control plane이며,
+Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않는다.
+
 ## 2. 규칙의 적용 우선순위
+
+`.local/PROJECT-HARNESS.local.md`가 존재하면 개발 머신에만 필요한 추가 규칙으로
+선택 적용한다. 로컬 하네스는 이 공통 하네스의 범위와 불변식을 완화하거나 대체할 수 없다.
 
 1. 이 문서의 공통 불변식
 2. 승인된 schema와 versioned 설정
@@ -195,6 +201,9 @@ Qlib `TopkDropoutStrategy` 결과를 본 프로젝트의 일일 후보 정책과
 - 승인된 fallback이 있다면 별도 policy/version과 `fallback_used=true`를 기록한다.
 - 동일 idempotency key와 동일 payload는 재사용하고, 같은 key의 다른 payload는 충돌로 실패한다.
 - 로그에 secret, token, password, 원문 payload를 기록하지 않는다.
+- SKU 하향, 리소스 중지, replica 축소는 비용 절감 목적이라도 실행 전에 사용자 승인을 받는다.
+- PostgreSQL, MySQL, Candidate App Service, Portal App Service, TradingAgents,
+  orchestrator는 항상 실행 상태를 유지하는 운영 리소스다.
 
 ## 10. 필수 검증
 

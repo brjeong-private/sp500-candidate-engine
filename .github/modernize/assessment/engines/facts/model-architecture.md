@@ -451,9 +451,19 @@ score·rank·percentile은 scoring run에, 후보 position·선정 사유는 sel
 
 저장 계약은 기간별 독립 model·scoring·selection run을 사용한다. 후보 API의
 기본 목적은 `MEDIUM_20D`이며 `model_purpose=SHORT_5D`로 기존 모델을
-조회한다. 일일 Durable 오케스트레이터와 Portal 제출도 기본적으로 `MEDIUM_20D`를
-사용한다. `SHORT_5D`는 이전 5거래일 모델을 보존한 명시적 one-off 실행·조회 경로다.
+조회한다. API 기본 조회와 별개로 일일 Durable control plane은 날짜별 부모에서
+`SHORT_5D` child를 terminal까지 실행한 다음 `MEDIUM_20D` child를 실행한다. 두
+child는 각자 Candidate 제출, scoring/selection identity, Portal batch를 가진다.
 한 목적의 결과가 없으면 다른 모델로 자동 대체하지 않는다.
+
+같은 `analysis_date + model_purpose`의 완전한 terminal selection이 이미 있으면 해당
+child는 `SKIPPED_EXISTING`으로 끝난다. 이는 모델 결과 재계산이나 fallback이 아니며
+Candidate POST와 Portal/TradingAgents 신규 분석을 모두 생략한다. 단일 모델 수동
+endpoint는 one-off 진단·호환 경로로 유지된다.
+
+이 순차 실행과 외부 Portal 전달은 orchestration control-plane 계약이다. 모델 학습,
+점수, 후보 저장까지가 Candidate Engine의 범위이고 외부 분석·리포트·비용·재평가는
+모델 아키텍처와 Candidate PostgreSQL의 범위 밖이다.
 
 | 필드 | 추가 목적 |
 |---|---|

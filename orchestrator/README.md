@@ -8,6 +8,13 @@
 상태 전이, 멱등성, 외부 계약, RBAC와 배포 경계의 기준 설계는
 [오케스트레이터 아키텍처](../.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를
 따른다.
+Application Insights/Log Analytics 운영 조회는
+[텔레메트리 KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을
+따른다.
+
+private Storage 기반 FC1 기준선은 배포돼 있다. 아래 dual parent, guardian,
+`SKIPPED_EXISTING`, 모델별 Email, telemetry는 현재 코드 계약이며 전체 회귀/Bicep
+검증과 비파괴 배포, KQL·dual·정시 E2E는 아직 남아 있다.
 
 ## Azure 구성
 
@@ -37,15 +44,16 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
 ## 실행 흐름
 
 1. 타이머는 매시 30분(UTC)에 실행되고 `America/New_York` 현지 시각 05:30에만
-   직전 달력 날짜를 `MEDIUM_20D`로 시작한다. 모든 Durable 인스턴스 ID는
-   `candidate-daily-YYYY-MM-DD-{model_purpose}` 형식이므로 날짜가 같아도
-   `SHORT_5D` one-off와 충돌하지 않는다.
+   직전 달력 날짜의 `candidate-dual-YYYY-MM-DD` 부모를 시작한다. 부모는 기존
+   `daily_orchestrator`를 결정적 `candidate-daily-YYYY-MM-DD-{model_purpose}`
+   child로 재사용해 `SHORT_5D`를 terminal까지 실행한 뒤 `MEDIUM_20D`를 실행한다.
+   동일 날짜의 부모 history가 있으면 다시 시작하지 않는다.
 2. Candidate `exchange-sessions` 조회로 XNYS 거래일인지 확인한다.
 3. `DefaultAzureCredential`로 Candidate/Portal App Service, Candidate PostgreSQL,
    Portal MySQL을 읽고 중지 상태이면 `start`한다. TradingAgents Container App은
    배포 설정의 최소 replica와 실행 상태를 복원한다. 오케스트레이터 Storage는
-   public endpoint, 공유 키·익명 Blob 차단, network default action을 배포 계약으로
-   복원한다. 허용된 변경이 resource-level `ReadOnly` lock에 막힌 경우에만 해당
+   public network access 차단, 공유 키·익명 Blob 차단, `defaultAction=Deny`를 배포
+   계약으로 복원한다. 허용된 변경이 resource-level `ReadOnly` lock에 막힌 경우에만 해당
    lock을 제거하고 동일한 level·notes·owners로 `finally`에서 복원한다. 이후 모든
    ARM 상태와 Storage Blob·Queue·Table data plane, Candidate `/health/ready`,
    Portal·TradingAgents `/readyz`를 다시 확인한다. 복구가 끝나지 않으면 STARTED
@@ -53,20 +61,31 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
    `TRADINGAGENTS_API_URL`을 필수로 설정하며 TradingAgents `/readyz`도
    `status=ready`인지 확인한다.
 4. 날짜와 모델 목적 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
-   timer로 상태를 확인한다. Candidate API는 canonical 요청 hash를 저장해 같은
-   key·payload에는 원래 run을 반환하고 다른 payload에는 `409`를 반환한다. 완료 후
-   5~10개 후보의 날짜·순위·식별자·중복을 검증한다.
+   timer로 상태를 확인한다. 제출 전 같은 날짜·모델의 완전한 terminal selection을
+   조회하며, 있으면 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와 Portal batch를
+   모두 생략한다. Candidate API는 canonical 요청 hash를 저장해 같은 key·payload에는
+   원래 run을 반환하고 다른 payload에는 `409`를 반환한다. 완료 후 5~10개 후보의
+   날짜·순위·식별자·중복을 검증한다.
 5. 검증된 후보 5~10개가 공유하는 `selection_run_id`와 `model_purpose`를 포털 자동화
    API에 한 번 제출한다. 포털 집계의 개별 작업은 재제출하지 않으며 일부 실패는
    `PARTIAL_FAILED`, 전부 실패는 `FAILED`가 된다.
-6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. 외부 I/O와 이메일은
+6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. SHORT의 core 또는
+   preflight가 `FAILED`/`TIMED_OUT`이면 부모가 중단되고, `PARTIAL_FAILED`,
+   `SKIPPED_EXISTING` 및 Portal 단계 실패·timeout은 MEDIUM 실행을 계속한다. 부모
+   결과는 모델별 child ID, 상태와 terminal 결과를 보존한다. 외부 I/O와 이메일은
    activity에서만 실행되어 orchestrator replay가 부작용을 반복하지 않는다.
+7. `resource_guardian_timer`는 15분마다 같은 readiness와 승인된 start/replica/private
+   Storage 복구 계약을 독립 실행한다. 실패 시 제한된 guardian Email과 telemetry를
+   남기지만 Durable 부모를 시작하거나 기존 terminal 실행을 재시작하지 않는다.
 
-종결 상태는 `SUCCEEDED`, `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다. 비거래일은
-`SUCCEEDED`와 `skipped=true`로 기록한다.
+모델 종결 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`, `PARTIAL_FAILED`, `TIMED_OUT`,
+`FAILED`다. 비거래일은 `SUCCEEDED`와 `skipped=true`로 기록한다.
+신규 실행은 모델별 `STARTED`와 terminal Email을 보내며 제목은
+`[candidate-orchestrator] {MODEL_PURPOSE} {YYYY-MM-DD} {STATE}`다.
+`SKIPPED_EXISTING`은 STARTED 없이 terminal Email만 보낸다.
 
-타이머의 모델 목적은 항상 `MEDIUM_20D`다. `SHORT_5D`는 아래 인증된 수동 HTTP
-starter에서 명시적으로 선택하는 one-off 경로이며, 중기 후보 부재 시 자동 fallback하지 않는다.
+아래 인증된 수동 HTTP starter는 단일 모델 진단·one-off 호환 경로로 유지되며,
+`SHORT_5D` 또는 `MEDIUM_20D`를 명시적으로 선택한다. 모델 간 fallback은 수행하지 않는다.
 Candidate 후보 row는 PostgreSQL에만 남고 Portal에는 복제하지 않는다. Portal MySQL은
 외부 분석의 일괄 실행, 개별 job 상태와 결과만 영속화한다.
 
@@ -89,6 +108,9 @@ Invoke-RestMethod `
 `code` query secret은 제거되므로 이후 요청도 key를 URL이나 body에 넣지 말고
 `x-functions-key` header로 전달해야 한다. 같은 날짜·모델 목적 요청은 기존
 인스턴스를 재사용한다.
+
+날짜별 dual 수동 endpoint는 아직 구현되지 않았다. 전체 dual 실행은 배포된 05:30 ET
+timer 경로가 기준이며, 위 endpoint는 모델별 진단·호환 경로다.
 
 ## 외부 포털 계약
 
@@ -155,9 +177,9 @@ Invoke-RestMethod `
   Storage data plane 확인에는 기존 Storage Blob Data Owner, Storage Queue Data
   Contributor, Storage Table Data Contributor를 유지한다. custom role은 `assignableScopes`
   를 위 리소스 또는 공통 resource group보다 넓게 잡지 않는다.
-- 템플릿은 더 이상 Durable Task Scheduler와 task hub를 관리하지 않는다. 이미 배포된
-  DTS 리소스는 이 변경에서 삭제하지 않으며 사용 중이 아님을 확인한 뒤 별도 승인된
-  정리 작업으로 폐기한다.
+- 템플릿과 Function 설정은 Durable Task Scheduler를 사용하지 않는다. 표준 Storage
+  backend와 `host.json` task hub를 사용한다. 과거 DTS 리소스가 남아 있다면 이 작업에서
+  삭제하지 않고 사용 중이 아님을 확인한 뒤 별도 승인된 정리 작업으로만 폐기한다.
 - `alertActionGroupResourceId`는 운영팀이 소유한 기존 Action Group의 전체 resource
   ID다. 주소를 이 템플릿이나 소스에 기록하지 않는다.
 
@@ -168,3 +190,16 @@ Invoke-RestMethod `
 `func start`를 실행한다. 먼저 Azurite를 실행해야 하며, 예제의
 `AzureWebJobsStorage=UseDevelopmentStorage=true`가 Functions host runtime과
 `host.json`의 `CandidateDailyOrchestrator` task hub 상태를 함께 저장한다.
+
+## Telemetry와 KQL
+
+orchestrator와 guardian은 allowlist된 correlation/lifecycle 필드만 JSON trace로
+기록한다. Durable workflow의 event는 `emit_pipeline_telemetry` activity를 통해
+기록하므로 replay가 logging side effect를 반복하지 않는다. `pipeline.parent.*`,
+`pipeline.model.*`, `pipeline.model.skipped_existing`, `pipeline.guardian.*`,
+`pipeline.email.terminal`을 `parent_instance_id`, `model_instance_id`,
+`target_session`, `model_purpose`와 함께 조회할 수 있다.
+
+배포 후 dual 상태, 실행 시간, 중복 skip, guardian 복구, 실패, Email 전달을 확인하는
+KQL은 [텔레메트리 KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)에
+있다. KQL 검증과 dual E2E는 아직 배포 후 운영 검증 항목이다.

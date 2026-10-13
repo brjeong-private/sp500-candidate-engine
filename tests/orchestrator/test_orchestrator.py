@@ -759,6 +759,9 @@ def _run(generator, responder):
     try:
         event = next(generator)
         while True:
+            if event[:2] == ("activity", "emit_pipeline_telemetry"):
+                event = generator.send({"emitted": True})
+                continue
             try:
                 response = responder(event)
             except Exception as error:
@@ -779,15 +782,20 @@ def test_started_email_contains_only_safe_preflight_summary():
     generator = workflow.daily_orchestrator(FakeContext())
 
     event = next(generator)
+    assert event[1] == "emit_pipeline_telemetry"
+    event = generator.send({"emitted": True})
     events.append(event)
     event = generator.send({"is_session": True, "data_complete": True})
     events.append(event)
     event = generator.send(preflight)
     events.append(event)
+    event = generator.send({"process_run_id": "run-id", "status": "PENDING"})
+    events.append(event)
 
     assert [item[1] for item in events] == [
         "check_exchange_session",
         "readiness_preflight",
+        "submit_candidate_daily",
         "send_email",
     ]
     payload = events[-1][2]
@@ -814,7 +822,7 @@ def test_preflight_failure_occurs_before_started_email_and_pipeline_submission()
     outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
 
     assert outcome["state"] == "FAILED"
-    assert outcome["reason"] == "ExternalServiceError"
+    assert outcome["reason"] == "PREFLIGHT_FAILED"
     assert [name for name, _ in activities] == [
         "check_exchange_session",
         "readiness_preflight",

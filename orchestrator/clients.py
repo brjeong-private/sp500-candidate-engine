@@ -616,6 +616,13 @@ def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
     settings = Settings.from_env()
     analysis_date = request["analysis_date"]
     model_purpose = request["model_purpose"]
+    existing_candidates = fetch_and_verify_candidates({**request, "existing_only": True})
+    if existing_candidates:
+        return {
+            "status": "SKIPPED_EXISTING",
+            "selection_run_id": existing_candidates[0]["selection_run_id"],
+            "candidate_count": len(existing_candidates),
+        }
     payload = request_json(
         "POST",
         f"{settings.candidate_base_url}/api/v1/pipeline-runs",
@@ -656,10 +663,11 @@ def candidate_run_status(process_run_id: str) -> dict[str, Any]:
     }
 
 
-def fetch_and_verify_candidates(request: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_and_verify_candidates(request: dict[str, Any]) -> list[dict[str, Any]]:
     settings = Settings.from_env()
     analysis_date = request["analysis_date"]
     model_purpose = request["model_purpose"]
+    existing_only = request.get("existing_only") is True
     cursor: str | None = None
     seen_cursors: set[str] = set()
     items: list[dict[str, Any]] = []
@@ -679,15 +687,39 @@ def fetch_and_verify_candidates(request: dict[str, str]) -> list[dict[str, Any]]
         )
         page_items = page.get("items")
         if not isinstance(page_items, list):
+            if existing_only:
+                return []
             raise ExternalServiceError("Candidate list response is invalid")
         items.extend(item for item in page_items if isinstance(item, dict))
         cursor = page.get("next_cursor")
         if cursor is None:
             break
         if not isinstance(cursor, str) or cursor in seen_cursors:
+            if existing_only:
+                return []
             raise ExternalServiceError("Candidate cursor is invalid")
         seen_cursors.add(cursor)
 
+    try:
+        return _verify_candidate_items(
+            items,
+            analysis_date=analysis_date,
+            model_purpose=model_purpose,
+            allowed_statuses={"SUCCEEDED"} if existing_only else {"SUCCEEDED", "SHORTFALL"},
+        )
+    except ExternalServiceError:
+        if existing_only:
+            return []
+        raise
+
+
+def _verify_candidate_items(
+    items: list[dict[str, Any]],
+    *,
+    analysis_date: str,
+    model_purpose: str,
+    allowed_statuses: set[str],
+) -> list[dict[str, Any]]:
     if not 5 <= len(items) <= 10:
         raise ExternalServiceError("Candidate selection must contain 5 to 10 items")
     tickers: set[str] = set()
@@ -700,7 +732,7 @@ def fetch_and_verify_candidates(request: dict[str, str]) -> list[dict[str, Any]]
         selection_run_id = item.get("selection_run_id")
         if (
             item.get("price_session_date") != analysis_date
-            or item.get("status") not in {"SUCCEEDED", "SHORTFALL"}
+            or item.get("status") not in allowed_statuses
             or item.get("model_purpose") != model_purpose
             or item.get("selected_count") != len(items)
             or item.get("requested_count") not in range(5, 11)

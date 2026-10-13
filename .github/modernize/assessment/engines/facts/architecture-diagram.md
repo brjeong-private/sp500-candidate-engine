@@ -1,6 +1,6 @@
 # 프로젝트 전체 아키텍처
 
-갱신일: 2026-10-12
+갱신일: 2026-10-13
 
 이 문서는 개발과 함께 갱신하는 후보 선정 엔진과 운영 자동화의 기준 아키텍처다.
 Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents의 분석·리포트는
@@ -12,7 +12,8 @@ Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents�
 
 ## 설계 전제
 
-- 스케줄러는 매일 한 번 `05:30 America/New_York`에 실행한다.
+- 05:30 ET timer는 날짜별 dual 부모를 시작하고, 별도 resource guardian은 15분마다
+  readiness와 승인된 제한 복구를 수행한다.
 - 거래일에는 직전 완료 세션을 처리하고, 비거래일에는 reference·event refresh만 수행한다.
 - 시장 데이터는 Massive Stocks Basic을 사용한다.
 - Massive 호출은 전체 collector가 공유하는 단일 limiter에서 분당 5회로 제한한다.
@@ -20,8 +21,9 @@ Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents�
 - Alpha Vantage earnings calendar는 ticker별 호출이 아니라 전체 목록을 하루 1회 받는다.
 - SEC는 JSON API와 nightly bulk ZIP을 사용하고, 재무 fact는 정규화 후에만 분석 입력으로 사용한다.
 - 현재 Wikipedia·Yahoo 경로는 prototype 이력 재현용으로만 남기며 신규 운영 경로에서는 Massive·SEC·Alpha Vantage를 사용한다.
-- Candidate API의 기본 모델 목적은 `MEDIUM_20D`이고 `SHORT_5D`는 명시적 one-off
-  실행·조회에만 사용한다. 모델 간 자동 fallback은 없다.
+- Candidate API의 기본 조회 모델은 `MEDIUM_20D`다. 일일 Durable 부모는
+  `SHORT_5D` child 종료 후 `MEDIUM_20D` child를 시작한다. 단일 모델 endpoint는
+  one-off 진단 경로이며 모델 간 자동 fallback은 없다.
 - 운영 스케줄은 Python Durable Functions가 담당한다. Candidate Engine은 포털이나
   TradingAgents의 분석 결과를 저장하지 않는다.
 
@@ -44,8 +46,10 @@ flowchart TB
     end
 
     subgraph OrchestrationPlane["Orchestration Plane defined by infra orchestrator bicep"]
-        FunctionApp["Python Durable Functions<br/>Linux Flex Consumption FC1"]
-        DurableState["Storage Account<br/>Durable state and code package"]
+        FunctionApp["Python Durable Functions<br/>Linux Flex Consumption FC1<br/>05:30 dual parent"]
+        Guardian["15 minute resource guardian"]
+        DurableState["Private Storage Account<br/>Blob Queue Table endpoints<br/>Durable state and code package"]
+        VNet["West US 3 VNet<br/>FC1 integration and private DNS"]
         Vault["Key Vault<br/>API keys and email settings"]
         Insights["Application Insights<br/>Log Analytics and alerts"]
         Email["Azure Communication Services Email"]
@@ -67,10 +71,12 @@ flowchart TB
     CandidateEngine --> CandidateDb
 
     DurableState --> FunctionApp
+    VNet --> FunctionApp
+    Guardian --> FunctionApp
     Vault --> FunctionApp
     FunctionApp --> Insights
-    FunctionApp -->|"start and terminal notification"| Email
-    FunctionApp -->|"idempotent DAILY request"| CandidateApp
+    FunctionApp -->|"model specific notification"| Email
+    FunctionApp -->|"SHORT then MEDIUM idempotent DAILY"| CandidateApp
     CandidateApp -->|"candidate and run status"| FunctionApp
     FunctionApp -->|"selection run batch"| PortalApi
     PortalApi -->|"aggregate status"| FunctionApp
@@ -84,20 +90,27 @@ flowchart TB
 ### 05:30 ET 실행 계약
 
 1. Functions timer는 UTC 매시 30분 실행되지만 뉴욕 현지 시각이 정확히 05:30일
-   때만 `candidate-daily-YYYY-MM-DD` Durable instance를 시작한다. DST는
+   때만 `candidate-dual-YYYY-MM-DD` Durable 부모를 시작한다. DST는
    `America/New_York` 변환으로 처리한다.
 2. 대상은 직전 달력 날짜이며 Candidate의 XNYS session API에서 거래일을 확인한다.
    비거래일은 외부 실행 없이 `SUCCEEDED`와 `skipped=true`로 끝난다.
-3. Candidate·Portal App Service의 ARM 상태와 Candidate `/health/ready`, Portal 및
+3. 부모는 `SHORT_5D` child를 terminal까지 실행하고 허용된 결과에서만
+   `MEDIUM_20D` child를 시작한다. SHORT의 core·preflight 실패/timeout은 sequence를
+   중단하고, Portal 실패/timeout·`PARTIAL_FAILED`·`SKIPPED_EXISTING`은 계속한다.
+4. 각 child는 Candidate·Portal App Service의 ARM 상태와 Candidate `/health/ready`, Portal 및
    TradingAgents `/readyz`를 확인한다.
-4. Candidate 실행은 날짜 기반 `Idempotency-Key`로 한 번 접수하고 durable timer로
-   polling한다. 완료 후보가 같은 date·selection run·model purpose에 속하는지와
-   5~10개·순위·식별자 중복을 검증한다.
-5. Portal service API에는 후보 row를 복제하지 않고 `analysis_date`,
+5. Candidate 제출 전에 날짜·모델별 기존 terminal selection을 확인한다. 있으면
+   `SKIPPED_EXISTING`으로 종료하고 Candidate·Portal·TradingAgents 신규 실행을 하지
+   않는다. 없으면 모델 목적을 포함한 `Idempotency-Key`로 접수하고 durable timer로
+   polling한다.
+6. Portal service API에는 후보 row를 복제하지 않고 `analysis_date`,
    `selection_run_id`, `model_purpose`를 일괄 제출한다. Portal이 MySQL에 외부 분석
    job·결과를 저장하고 TradingAgents Container App 실행을 중개한다.
-6. 외부 I/O와 ACS Email은 activity에서만 실행한다. 종결 상태는 `SUCCEEDED`,
-   `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다.
+7. 외부 I/O, 모델별 ACS Email, 구조화 telemetry는 activity에서만 실행한다. 모델
+   종결 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`, `PARTIAL_FAILED`, `TIMED_OUT`,
+   `FAILED`다.
+8. `resource_guardian_timer`는 15분마다 readiness와 제한 복구를 수행하지만 부모
+   orchestration을 시작하거나 terminal 실행을 재시작하지 않는다.
 
 ### Candidate API 멱등성
 
@@ -110,27 +123,34 @@ null을 제외하고 key를 정렬한 canonical JSON의 SHA-256을 PostgreSQL에
 
 ### FC1 Bicep 경계
 
-`infra/orchestrator.bicep`은 Linux FC1 Function App, 관리 ID 기반 Durable Storage,
-배포 Blob container, Key Vault, Application Insights·Log Analytics, ACS Email,
-예외·실패 alert를 만든다. API key와 email 주소 값은 만들지 않고 배포 후 Key Vault
-secret으로 주입한다. 기존 Candidate·Portal App Service에는 Reader 역할을 별도로
-부여하며, Portal·TradingAgents·PostgreSQL·MySQL 자체는 이 Bicep의 소유 범위가 아니다.
+`infra/orchestrator.bicep`은 Linux FC1 Function App, 관리 ID 기반 표준 Durable
+Storage, 배포 Blob container, FC1 VNet 통합, Blob·Queue·Table private endpoint와
+private DNS, Key Vault, Application Insights·Log Analytics, ACS Email, 예외·실패
+alert를 만든다. Storage public network/shared key/anonymous Blob access는 차단한다.
+Durable Task Scheduler는 사용하지 않는다. API key와 email 주소 값은 만들지 않고
+배포 후 안전한 앱 설정 경로로 주입한다. 기존 Candidate·Portal App Service에는 Reader
+역할을 별도로 부여하며, Portal·TradingAgents·PostgreSQL·MySQL 자체는 이 Bicep의
+소유 범위가 아니다.
 
 ### 오케스트레이터 제어 흐름
 
 ```mermaid
 flowchart LR
     Timer["UTC 매시 30분 timer"] --> Gate["05:30 ET gate"]
-    Gate --> Instance["날짜별 Durable instance"]
-    Instance --> Session["XNYS session 확인"]
-    Session --> Ready["ARM·runtime readiness"]
-    Ready --> CandidateSubmit["Candidate DAILY 멱등 접수"]
-    CandidateSubmit --> CandidatePoll["Durable timer polling"]
-    CandidatePoll --> Verify["5~10개·단일 selection run 검증"]
-    Verify --> PortalSubmit["Portal batch 참조 제출"]
-    PortalSubmit --> PortalPoll["집계 polling"]
-    PortalPoll --> Terminal["SUCCEEDED·PARTIAL_FAILED<br/>TIMED_OUT·FAILED"]
-    Terminal --> Email["ACS terminal 알림"]
+    Gate --> Parent["candidate-dual-date"]
+    Parent --> Short["SHORT_5D child"]
+    Short --> Continue{"SHORT core와<br/>preflight 통과?"}
+    Continue -->|"Yes"| Medium["MEDIUM_20D child"]
+    Continue -->|"No"| ParentTerminal["Parent terminal"]
+    Short --> Existing["기존 모델 selection 확인"]
+    Medium --> Existing
+    Existing -->|"Exists"| Skip["SKIPPED_EXISTING"]
+    Existing -->|"Missing"| CandidateSubmit["Candidate DAILY·poll·검증"]
+    CandidateSubmit --> Portal["Portal batch·poll"]
+    Skip --> Email["모델별 terminal Email"]
+    Portal --> Email
+    Email --> ParentTerminal
+    Guardian["15분 guardian"] --> Ready["readiness·제한 복구"]
 ```
 
 오케스트레이터는 control plane이며 Candidate PostgreSQL이나 Portal MySQL에 직접
@@ -395,7 +415,7 @@ flowchart LR
 | 운영 조정 | Python 3.11 Azure Durable Functions, Linux FC1 |
 | 실행 상태 | Azure Storage Blob·Queue·Table, 관리 ID 인증 |
 | secret·알림 | Key Vault reference, ACS Email |
-| 운영 관측 | Application Insights, Log Analytics, metric alert |
+| 운영 관측 | Application Insights, Log Analytics, allowlist JSON trace, KQL runbook |
 | 비동기 HTTP | HTTPX |
 | Massive 제한 | shared token bucket, 5 req/min |
 | SEC 제한 | global limiter 5 req/s, 최대 동시 2 bulk downloads |
@@ -419,6 +439,10 @@ flowchart LR
 - raw snapshot 7종, final manifest와 operational execution context
 - Yahoo/Wikipedia prototype, temporal fence, 변경분 upsert와 JSONL 로그
 - XNYS backfill, range action/news, SEC fact cutoff, 자동·수동 재처리와 process 진행 로그
+- private Storage 기반 FC1 Durable Functions와 managed identity data plane
+- `SHORT_5D` 후 `MEDIUM_20D` 순차 부모, 모델별 결정적 child ID
+- 날짜·모델별 `SKIPPED_EXISTING` short circuit와 Portal 미제출
+- 15분 resource guardian, 모델별 Email, replay-safe telemetry와 KQL runbook
 
 아직 미구현 또는 운영 검증 대기:
 
@@ -426,5 +450,6 @@ flowchart LR
 - dataset checkpoint 실제 전진 로직
 - staging COPY·set-based merge 최적화
 - 양의 Rank IC를 충족하는 champion 승격
+- dual 코드의 Bicep/전체 회귀 검증, 비파괴 배포, 수동·정시 E2E와 KQL 확인
 
 후보 저장이 이 저장소의 마지막 단계다. 후보 이후 분석, agent 실행, report, 비용과 재평가는 별도 프로젝트에서 관리한다.

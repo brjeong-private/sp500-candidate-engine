@@ -1,6 +1,6 @@
 # 일 1회 후보 선정 수집 파이프라인
 
-갱신일: 2026-10-12
+갱신일: 2026-10-13
 
 ## 목표와 범위
 
@@ -33,17 +33,23 @@
 
 ### 운영 trigger와 재실행
 
-구현된 운영 trigger는 `orchestrator/`의 Python Durable Functions다. Azure Functions
-timer는 UTC 매시 30분 깨어나 `America/New_York` 05:30 게이트를 통과할 때만 직전
-달력 날짜를 처리한다. Candidate `exchange-sessions` 조회에서 XNYS 거래일이 아니면
-Candidate 파이프라인을 시작하지 않는다. 따라서 위 표의 주말·휴장일 reference refresh는
-수집 CLI의 설계 동작이며 현재 외부 Durable trigger가 자동 호출하는 경로는 아니다.
+구현된 운영 trigger는 private Storage backend를 사용하는 `orchestrator/`의 Python
+Durable Functions다. Azure Functions timer는 UTC 매시 30분 깨어나
+`America/New_York` 05:30 게이트를 통과할 때만 직전 달력 날짜의
+`candidate-dual-YYYY-MM-DD` 부모를 시작한다. 부모는
+`candidate-daily-YYYY-MM-DD-short_5d`를 terminal까지 실행한 뒤 허용된 결과에서
+`candidate-daily-YYYY-MM-DD-medium_20d`를 시작한다. Candidate `exchange-sessions`
+조회에서 XNYS 거래일이 아니면 Candidate 파이프라인을 시작하지 않는다. 따라서 위
+표의 주말·휴장일 reference refresh는 수집 CLI의 설계 동작이며 현재 외부 Durable
+trigger가 자동 호출하는 경로는 아니다.
 
-거래일에는 `orchestrator-daily-YYYY-MM-DD`를 Candidate API의 `Idempotency-Key`로
-사용한다. Candidate API는 canonical 요청 hash를 함께 영속화하므로 같은 날짜·같은
-payload 재시도는 기존 run을 반환하고, 같은 key의 다른 payload는 충돌로 실패한다.
-Durable instance도 `candidate-daily-YYYY-MM-DD`로 고정해 timer 중복과 API 중복을
-각 계층에서 독립적으로 차단한다.
+각 모델 child는 Candidate 제출 전에 같은 날짜·모델의 완전한 terminal selection을
+확인한다. 있으면 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와 Portal batch를
+생략한다. 신규 실행은 날짜와 모델 목적을 포함한 `Idempotency-Key`를 사용한다.
+Candidate API는 canonical 요청 hash를 함께 영속화하므로 같은 key·payload 재시도는
+기존 run을 반환하고, 같은 key의 다른 payload는 충돌로 실패한다. 부모·child ID와 API
+key가 각 계층에서 중복을 독립 차단한다. 별도 resource guardian은 15분마다 readiness와
+승인된 제한 복구를 수행하지만 파이프라인을 시작하거나 재실행하지 않는다.
 
 ## 공급자 하네스
 
@@ -194,12 +200,17 @@ optional dataset 실패는 해당 signal을 비활성화하고 stale/failed 상�
 
 후보 저장이 이 프로젝트의 마지막 단계다. 후보 이후 분석·에이전트 실행은 별도 시스템의 책임이다.
 
-운영 Durable 실행은 기본적으로 `MEDIUM_20D`를 사용한다. `SHORT_5D`는 명시적으로
-설정하거나 API에 `model_purpose=SHORT_5D`를 전달하는 one-off 경로이며, 중기 결과가
-없을 때 자동 선택되는 fallback이 아니다. 검증된 5~10개 후보의
-`selection_run_id`와 `model_purpose`만 Portal service API에 전달한다. Portal의
-MySQL 분석 상태·결과와 TradingAgents Container App 실행은 이 수집 파이프라인 및
-Candidate PostgreSQL 범위 밖이다.
+Candidate API의 기본 조회는 `MEDIUM_20D`지만 운영 Durable 부모는 `SHORT_5D` 다음
+`MEDIUM_20D`를 각각 독립 model/scoring/selection run으로 실행한다. 한 모델 결과를
+다른 목적의 fallback으로 사용하지 않는다. 검증된 5~10개 후보의 `selection_run_id`와
+`model_purpose`만 Portal service API에 전달한다. Portal의 MySQL 분석 상태·결과와
+TradingAgents Container App 실행은 이 수집 파이프라인 및 Candidate PostgreSQL 범위
+밖이며, 오케스트레이터는 이를 조정하는 control plane일 뿐 Candidate Engine의
+`수집 -> 전처리 -> 모델 점수 -> 후보 선정` 범위를 확장하지 않는다.
+
+모델별 시작·terminal Email과 guardian/부모/child/Candidate/Portal lifecycle trace는
+activity에서만 발생한다. 운영 KQL은
+[오케스트레이터 telemetry runbook](orchestrator-telemetry-runbook.md)을 따른다.
 
 ## API 호출 예산
 

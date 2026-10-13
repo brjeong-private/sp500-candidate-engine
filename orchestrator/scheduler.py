@@ -7,7 +7,6 @@ from zoneinfo import ZoneInfo
 
 NEW_YORK = ZoneInfo("America/New_York")
 MODEL_PURPOSES = frozenset({"SHORT_5D", "MEDIUM_20D"})
-TIMER_MODEL_PURPOSE = "MEDIUM_20D"
 
 
 def scheduled_analysis_date(now_utc: datetime) -> date | None:
@@ -45,3 +44,8 @@ def orchestration_instance_id(analysis_date: date, model_purpose: str) -> str:
     """날짜와 모델 목적 조합별 결정적 Durable 인스턴스 ID를 반환한다."""
     validated_purpose = validate_model_purpose(model_purpose)
     return f"candidate-daily-{analysis_date.isoformat()}-{validated_purpose.lower()}"
+
+
+def parent_orchestration_instance_id(analysis_date: date) -> str:
+    """날짜별 듀얼 모델 부모 Durable 인스턴스 ID를 반환한다."""
+    return f"candidate-dual-{analysis_date.isoformat()}"

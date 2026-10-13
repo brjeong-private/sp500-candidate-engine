@@ -21,6 +21,7 @@
 # Local environment and Python artifacts
 /.env
 /backend/.env
+/.local/PROJECT-HARNESS.local.md
 /.venv/
 /.venv-alpha158/
 /.pytest_cache/

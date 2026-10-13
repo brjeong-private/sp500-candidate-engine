@@ -33,14 +33,17 @@ from clients import (
 from clients import (
     submit_portal_candidate_analysis as submit_portal_candidate_analysis_client,
 )
+from guardian import run_guardian
 from scheduler import (
-    TIMER_MODEL_PURPOSE,
     orchestration_instance_id,
+    parent_orchestration_instance_id,
     scheduled_analysis_date,
     validate_model_purpose,
     validate_target_date,
 )
+from telemetry import emit_pipeline_telemetry as emit_pipeline_telemetry_client
 from workflow import daily_orchestrator as daily_orchestrator_generator
+from workflow import dual_model_parent as dual_model_parent_generator
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -59,6 +62,19 @@ def _orchestration_input(analysis_date, model_purpose: str) -> dict[str, object]
         "candidate_timeout_minutes": _positive_int("ORCHESTRATOR_CANDIDATE_TIMEOUT_MINUTES", 120),
         "portal_timeout_minutes": _positive_int("ORCHESTRATOR_PORTAL_TIMEOUT_MINUTES", 360),
         "poll_seconds": _positive_int("ORCHESTRATOR_POLL_SECONDS", 60),
+    }
+
+
+def _parent_orchestration_input(analysis_date) -> dict[str, object]:
+    return {
+        "analysis_date": analysis_date.isoformat(),
+        "candidate_timeout_minutes": _positive_int("ORCHESTRATOR_CANDIDATE_TIMEOUT_MINUTES", 120),
+        "portal_timeout_minutes": _positive_int("ORCHESTRATOR_PORTAL_TIMEOUT_MINUTES", 360),
+        "poll_seconds": _positive_int("ORCHESTRATOR_POLL_SECONDS", 60),
+        "child_instance_ids": {
+            model_purpose: orchestration_instance_id(analysis_date, model_purpose)
+            for model_purpose in ("SHORT_5D", "MEDIUM_20D")
+        },
     }
 
 
@@ -166,23 +182,45 @@ async def _manual_orchestration_start(
 @app.durable_client_input(client_name="client")
 async def hourly_timer(timer: func.TimerRequest, client: df.DurableOrchestrationClient) -> None:
     del timer
+    await _hourly_timer(client)
+
+
+async def _hourly_timer(client: df.DurableOrchestrationClient) -> None:
     analysis_date = scheduled_analysis_date(datetime.now(UTC))
     if analysis_date is None:
         return
-    instance_id = orchestration_instance_id(analysis_date, TIMER_MODEL_PURPOSE)
+    instance_id = parent_orchestration_instance_id(analysis_date)
     if await client.get_status(instance_id) is not None:
         return
     await client.start_new(
-        "daily_orchestrator",
+        "dual_model_parent",
         instance_id,
-        _orchestration_input(analysis_date, TIMER_MODEL_PURPOSE),
+        _parent_orchestration_input(analysis_date),
     )
+
+
+@app.function_name(name="resource_guardian_timer")
+@app.timer_trigger(
+    schedule="0 */15 * * * *",
+    arg_name="timer",
+    run_on_startup=False,
+    use_monitor=True,
+)
+def resource_guardian_timer(timer: func.TimerRequest) -> None:
+    del timer
+    run_guardian()
 
 
 @app.function_name(name="daily_orchestrator")
 @app.orchestration_trigger(context_name="context")
 def daily_orchestrator(context: df.DurableOrchestrationContext):
     return daily_orchestrator_generator(context)
+
+
+@app.function_name(name="dual_model_parent")
+@app.orchestration_trigger(context_name="context")
+def dual_model_parent(context: df.DurableOrchestrationContext):
+    return dual_model_parent_generator(context)
 
 
 @app.function_name(name="check_exchange_session")
@@ -232,3 +270,9 @@ def portal_candidate_analysis_status(analysis: dict):
 @app.activity_trigger(input_name="payload")
 def send_email(payload: dict):
     return send_email_client(payload)
+
+
+@app.function_name(name="emit_pipeline_telemetry")
+@app.activity_trigger(input_name="payload")
+def emit_pipeline_telemetry(payload: dict):
+    return emit_pipeline_telemetry_client(payload)

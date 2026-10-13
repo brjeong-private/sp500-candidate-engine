@@ -1,5 +1,12 @@
 # Change Log
 
+- 2026-10-13 | Dual-Model Orchestrator | 정기 실행을 SHORT_5D 완료 후 MEDIUM_20D를 순차 실행하는 parent orchestration으로 확장했다.
+- 2026-10-13 | Duplicate Guard | 동일 날짜·동일 모델의 유효한 성공 selection이 있으면 Candidate·Portal·TradingAgents를 재실행하지 않고 SKIPPED_EXISTING으로 종료하도록 추가했다.
+- 2026-10-13 | Resource Guardian | 15분마다 운영 리소스 상태를 점검·안전 복구하고 실패를 경고 메일과 telemetry로 기록하도록 추가했다.
+- 2026-10-13 | Orchestrator Email | 모델·대상일·상태를 포함한 메일 제목, skip 단일 메일과 safe failure code 계약을 적용했다.
+- 2026-10-13 | Pipeline Telemetry | parent/model/guardian correlation telemetry와 Log Analytics KQL 운영 runbook을 추가했다.
+- 2026-10-13 | Documentation | dual-model parent, guardian, private Storage와 중복 skip 기준으로 README·아키텍처·수집·모델 문서를 갱신했다.
+
 - 2026-10-13 | Orchestrator Secrets | private-only Key Vault reference drift를 제거하고 secure Bicep parameter로 encrypted Function App Settings를 배포하도록 정합화했다.
 
 - 2026-10-13 | Orchestrator Deployment | FC1 Function, private Storage networking, managed identity RBAC, ACS Email과 수동 SHORT_5D trigger를 Azure에 배포했다.

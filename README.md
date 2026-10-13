@@ -15,6 +15,11 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 
 2026-10-09 세션을 대상으로 실제 provider key와 Azure PostgreSQL을 사용해 production 수집과 명시적 shadow 후보 실행을 완료했습니다.
 
+운영 오케스트레이터의 Linux FC1과 private Storage(Durable history·Blob·Queue·Table)는
+배포 완료 상태입니다. `SHORT_5D -> MEDIUM_20D` 부모, 15분 resource guardian,
+`SKIPPED_EXISTING`, 모델별 Email, 구조화 telemetry는 코드·문서 구현 완료 상태이며
+전체 회귀/Bicep 검증, 비파괴 배포, KQL·dual·정시 E2E는 남아 있습니다.
+
 | 데이터 | 결과 |
 |---|---:|
 | S&P 500 universe | 503증권, 500기업 |
@@ -50,7 +55,9 @@ medium20_selection_run_id 52d72987-ddf0-5a7f-9be7-1fc11aef5960
 
 배포된 후보 API는 옵션이 없으면 `MEDIUM_20D`를 반환합니다.
 기존 5거래일 결과는 `model_purpose=SHORT_5D`로 조회하며, 한 모델 목적의 결과가
-없을 때 다른 모델로 자동 대체하지 않습니다.
+없을 때 다른 모델로 자동 대체하지 않습니다. API의 기본 조회 모델과 별개로 일일
+Durable control plane은 `SHORT_5D` child가 terminal이 된 뒤 `MEDIUM_20D` child를
+시작하는 날짜별 부모 orchestration을 사용합니다.
 
 ## 데이터 원천
 
@@ -131,8 +138,8 @@ flowchart TB
     Timer --> Durable
     State --> Timer
     Runtime --> Timer
-    Durable -->|"멱등 DAILY 요청"| CandidateApi
-    CandidateApi -->|"MEDIUM_20D 기본 후보"| Durable
+    Durable -->|"SHORT_5D then MEDIUM_20D<br/>멱등 DAILY 요청"| CandidateApi
+    CandidateApi -->|"모델별 selection run"| Durable
     Durable -->|"selection run 일괄 제출"| Portal
     Portal -->|"작업 실행"| TradingAgents
     Portal -->|"분석 상태·결과"| MySQL
@@ -143,18 +150,22 @@ flowchart TB
 
 운영 순서는 다음과 같다.
 
-1. UTC 매시 30분 timer가 `America/New_York` 05:30인지 확인하고, 날짜 기반 Durable
-   instance ID로 직전 달력 날짜의 실행을 한 번만 시작한다.
-2. XNYS 거래일과 Candidate·Portal·TradingAgents readiness를 확인한다.
-3. `Idempotency-Key: orchestrator-daily-YYYY-MM-DD`로 Candidate `DAILY` 실행을
-   요청한다. 같은 key와 canonical payload는 기존 실행을 반환하고, 같은 key의 다른
-   payload는 `409`로 거부한다.
-4. 기본 `MEDIUM_20D` 후보 5~10개를 검증해 Portal service API에 selection run 단위로
-   제출한다. `SHORT_5D`는 명시적으로 선택하는 one-off 호환 경로이며 자동 fallback이
-   아니다.
-5. Portal은 TradingAgents Container App 실행을 중개하고 분석 작업·결과를 MySQL에
+1. UTC 매시 30분 timer가 `America/New_York` 05:30인지 확인하고
+   `candidate-dual-YYYY-MM-DD` 부모를 한 번만 시작한다.
+2. 부모는 결정적 child ID로 `SHORT_5D`를 실행한 뒤 terminal 결과를 보존하고
+   `MEDIUM_20D`를 실행한다. SHORT의 Candidate core·preflight 실패 또는 timeout이면
+   MEDIUM을 시작하지 않으며, SHORT의 Portal 실패·timeout, `PARTIAL_FAILED`,
+   `SKIPPED_EXISTING`에서는 MEDIUM을 계속한다.
+3. 각 child는 XNYS 거래일과 Candidate·Portal·TradingAgents readiness를 확인한다.
+4. Candidate 제출 전에 같은 날짜·모델의 완전한 terminal selection이 있으면
+   `SKIPPED_EXISTING`으로 끝내고 Candidate·Portal·TradingAgents를 새로 실행하지
+   않는다. 그렇지 않으면 모델 목적을 포함한 `Idempotency-Key`로 `DAILY`를 요청한다.
+5. 검증한 모델별 후보 5~10개를 Portal service API에 selection run 단위로 제출한다.
+6. Portal은 TradingAgents Container App 실행을 중개하고 분석 작업·결과를 MySQL에
    저장한다. 오케스트레이터는 집계를 polling하고 시작·성공·부분 실패·실패·timeout을
-   ACS Email로 알린다.
+   모델 목적·날짜·상태가 포함된 ACS Email로 알린다.
+7. 별도 guardian은 15분마다 readiness와 승인된 제한 복구를 수행한다. guardian은
+   Durable 부모를 시작하거나 terminal 실행을 재시작하지 않는다.
 
 ### 오케스트레이터 아키텍처
 
@@ -167,25 +178,29 @@ history와 task state를 저장한다. 같은 Storage Account가 FC1 host runtim
 ```mermaid
 flowchart TD
     Timer["UTC 매시 30분"] --> LocalGate["05:30 America New York gate"]
-    LocalGate --> Instance["candidate-daily-date<br/>단일 Durable instance"]
-    Instance --> Session["Candidate XNYS session 조회"]
-    Session --> Preflight["Candidate·Portal ARM 상태<br/>3개 서비스 readiness"]
-    Preflight --> StartMail["ACS 시작 알림"]
-    StartMail --> Submit["Candidate DAILY<br/>날짜 기반 Idempotency-Key"]
-    Submit --> CandidateWait["Candidate durable polling<br/>기본 timeout 120분"]
-    CandidateWait --> Verify["MEDIUM_20D 기본<br/>후보 5~10개 계약 검증"]
-    Verify --> Portal["analysis date·selection run<br/>model purpose 일괄 제출"]
-    Portal --> PortalWait["Portal aggregate polling<br/>기본 timeout 360분"]
-    PortalWait --> Result["SUCCEEDED·PARTIAL_FAILED<br/>TIMED_OUT·FAILED"]
-    Result --> EndMail["ACS 종결 요약"]
+    LocalGate --> Parent["candidate-dual-date<br/>날짜별 부모 instance"]
+    Parent --> Short["SHORT_5D child"]
+    Short --> MediumGate{"SHORT core와<br/>preflight 통과?"}
+    MediumGate -->|"Yes"| Medium["MEDIUM_20D child"]
+    MediumGate -->|"No"| ParentEnd["부모 terminal"]
+    Short --> Duplicate["날짜·모델 기존 selection 확인"]
+    Medium --> Duplicate
+    Duplicate -->|"존재"| Skip["SKIPPED_EXISTING<br/>신규 제출 없음"]
+    Duplicate -->|"없음"| Candidate["Candidate DAILY·poll·검증"]
+    Candidate --> Portal["Portal batch·aggregate polling"]
+    Skip --> ModelMail["모델별 terminal Email"]
+    Portal --> ModelMail
+    ModelMail --> ParentEnd
+    Guardian["15분 resource guardian"] --> Readiness["readiness·제한 복구<br/>실행 시작 안 함"]
 ```
 
 핵심 운영 계약:
 
-- timer는 DST를 고려해 뉴욕 현지 05:30에만 직전 달력 날짜를 시작한다.
+- timer는 DST를 고려해 뉴욕 현지 05:30에만 직전 달력 날짜의 dual 부모를 시작한다.
 - 비거래일은 외부 실행 없이 `SUCCEEDED`, `skipped=true`로 종료한다.
 - orchestration code는 외부 I/O를 하지 않고 activity와 durable timer만 예약한다.
 - Candidate는 `SUCCEEDED`일 때만 진행하며 `PARTIAL_SUCCESS`는 실패로 종료한다.
+- `SKIPPED_EXISTING`은 오류가 아닌 모델 terminal 상태이며 신규 Candidate/Portal 제출이 없다.
 - 후보는 대상일·모델 목적·position·중복·단일 selection run·5~10개 조건을 검증한다.
 - Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
 - system-assigned 관리 ID는 Durable/FC1 Storage의 Blob·Queue·Table, Key Vault·App
@@ -207,6 +222,7 @@ flowchart TD
 - [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)
 - [모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md)
 - [Durable Functions 구현·배포](orchestrator/README.md)
+- [오케스트레이터 telemetry·KQL runbook](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)
 - [프로젝트 공통 하네스](PROJECT-HARNESS.md)
 
 ## 일일 파이프라인
@@ -291,7 +307,8 @@ flowchart LR
 - 평가: IC·Rank IC, Top-5/10 raw·net return, 양의 비율, 5개 중첩 cohort MDD
 - Score: `PREDICTED_5D_RETURN` 또는 `PREDICTED_20D_RETURN`; 확률이나
   confidence가 아님
-- 운영 기본: `MEDIUM_20D`; `SHORT_5D`는 명시적 one-off이며 자동 fallback 없음
+- 후보 API 기본 조회: `MEDIUM_20D`; 일일 control plane은 `SHORT_5D` 다음
+  `MEDIUM_20D`를 독립 실행하며 모델 간 자동 fallback 없음
 - 후보: 양수 threshold 없이 전체 적격 universe를 순회하고 issuer·sector 제약 적용
 
 상세 설계는 [후보 선정 모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md), 모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)를 참고하세요.
@@ -374,15 +391,23 @@ Migration은 [sql/](sql/)에 있으며 파일명 순서대로 적용됩니다.
 
 Python 3.11 이상이 필요합니다. 현재 개발 환경은 Python 3.13입니다.
 
+<details>
+<summary>개발 환경 설치 명령</summary>
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m ensurepip --upgrade
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
+</details>
+
 해결된 의존성 버전은 [requirements.lock](requirements.lock)에 기록합니다.
 
 ## 환경 설정
+
+<details>
+<summary>로컬 환경 파일 설정</summary>
 
 ```powershell
 Copy-Item .env.example .env
@@ -404,9 +429,14 @@ EARNINGS_CALENDAR_PROVIDER=alpha_vantage
 FUNDAMENTALS_DATA_PROVIDER=sec_edgar
 ```
 
+</details>
+
 `.env`는 Git에서 제외됩니다. 키를 코드, 로그, README에 저장하지 마세요.
 
 ## 명령
+
+<details>
+<summary>CLI 명령 모음</summary>
 
 설정 상태 확인, 실제 키는 출력하지 않습니다.
 
@@ -551,6 +581,8 @@ Cutoff 검증:
   --env-file .env reset-date --date 2026-10-01
 ```
 
+</details>
+
 ## 실행 로그
 
 `logs/<서울 실행일>.log`에 단계별 JSON 한 줄을 기록합니다.
@@ -608,11 +640,16 @@ Process 로그의 날짜별 줄:
 
 ## 테스트
 
+<details>
+<summary>테스트·lint 명령</summary>
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m ruff check src tests
 .\.venv\Scripts\python.exe -m ruff format --check src tests
 ```
+
+</details>
 
 현재 테스트는 provider limit, 미래 데이터 차단, Qlib export·feature·label, walk-forward, scoring, selection, parser, key 비노출, 일자별 로그와 가격 precision을 포함합니다.
 
