@@ -168,9 +168,19 @@ def test_timer_starts_one_deterministic_parent(monkeypatch):
     }
 
 
-def test_timer_does_not_restart_existing_parent(monkeypatch):
+def test_timer_restarts_terminal_parent(monkeypatch):
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
     client = TimerClient(existing={"runtime_status": "Completed"})
+
+    asyncio.run(function_app._hourly_timer(client))
+
+    assert len(client.started) == 1
+    assert client.started[0][1] == "candidate-dual-2026-10-09"
+
+
+def test_timer_does_not_restart_active_parent(monkeypatch):
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
+    client = TimerClient(existing={"runtime_status": "Running"})
 
     asyncio.run(function_app._hourly_timer(client))
 

@@ -190,7 +190,7 @@ async def _hourly_timer(client: df.DurableOrchestrationClient) -> None:
     if analysis_date is None:
         return
     instance_id = parent_orchestration_instance_id(analysis_date)
-    if await client.get_status(instance_id) is not None:
+    if _is_active_instance(await client.get_status(instance_id)):
         return
     await client.start_new(
         "dual_model_parent",

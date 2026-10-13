@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Dual-Model Timer | cutoff 전 terminal parent가 있어도 정기 시각에는 동일 deterministic ID로 재시작하고 active parent만 재사용하도록 수정했다.
+
 - 2026-10-13 | Dual-Model Orchestrator | 정기 실행을 SHORT_5D 완료 후 MEDIUM_20D를 순차 실행하는 parent orchestration으로 확장했다.
 - 2026-10-13 | Duplicate Guard | 동일 날짜·동일 모델의 유효한 성공 selection이 있으면 Candidate·Portal·TradingAgents를 재실행하지 않고 SKIPPED_EXISTING으로 종료하도록 추가했다.
 - 2026-10-13 | Resource Guardian | 15분마다 운영 리소스 상태를 점검·안전 복구하고 실패를 경고 메일과 telemetry로 기록하도록 추가했다.
