@@ -74,6 +74,7 @@ def run_candidate_date(
     repository_root: Path,
     horizon_sessions: int = 5,
     decision_cutoff: datetime | None = None,
+    model_purpose: str | None = None,
 ) -> Phase45Summary:
     root = Path(repository_root)
     try:
@@ -85,6 +86,12 @@ def run_candidate_date(
         raise ValueError(
             f"Unsupported candidate horizon {horizon_sessions}; expected one of {supported}"
         ) from error
+    expected_purpose = {5: "SHORT_5D", 20: "MEDIUM_20D"}[horizon_sessions]
+    model_purpose = model_purpose or expected_purpose
+    if model_purpose != expected_purpose:
+        raise ValueError(
+            "model_purpose and horizon_sessions must be SHORT_5D/5 or MEDIUM_20D/20"
+        )
     required_model_keys = [
         "seed",
         "prediction_semantics",

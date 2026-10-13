@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Multi-Model Inference | Candidate DAILY가 SHORT_5D·MEDIUM_20D별 schema v2 artifact/config/label 계약을 strict 선택하고 교차 fallback을 금지하도록 확장했다.
+
 - 2026-10-13 | Dual-Model Timer | cutoff 전 terminal parent가 있어도 정기 시각에는 동일 deterministic ID로 재시작하고 active parent만 재사용하도록 수정했다.
 
 - 2026-10-13 | Dual-Model Orchestrator | 정기 실행을 SHORT_5D 완료 후 MEDIUM_20D를 순차 실행하는 parent orchestration으로 확장했다.

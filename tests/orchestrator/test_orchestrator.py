@@ -274,8 +274,8 @@ def test_candidate_submission_idempotency_includes_model_purpose(monkeypatch):
         "mode": "DAILY",
         "date": "2026-10-09",
         "with_candidates": True,
+        "model_purpose": "SHORT_5D",
     }
-
 
 def test_preflight_requires_portal_and_configured_tradingagents_ready(monkeypatch):
     configured = _settings(tradingagents_base_url="https://tradingagents.example.test")

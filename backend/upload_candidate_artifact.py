@@ -15,19 +15,27 @@ ROOT = Path(__file__).parents[1]
 
 
 def main() -> None:
-    artifact_dir = ROOT / "data" / "backend-artifacts" / "models"
-    manifest_bytes = (artifact_dir / "manifest.json").read_bytes()
-    manifest = json.loads(manifest_bytes)
-    model_name = manifest["model_file"]
-    if not model_name or Path(model_name).name != model_name or "\\" in model_name:
-        raise ValueError("Manifest model_file must name a file in the artifact directory")
-    model_bytes = (artifact_dir / model_name).read_bytes()
-    if hashlib.sha256(model_bytes).hexdigest() != manifest["model_sha256"]:
-        raise ValueError("Model checksum does not match provisioned manifest")
+    artifacts = {}
+    for purpose in ("SHORT_5D", "MEDIUM_20D"):
+        directory_name = purpose.lower()
+        artifact_dir = ROOT / "data" / "backend-artifacts" / "models" / directory_name
+        manifest_bytes = (artifact_dir / "manifest.json").read_bytes()
+        manifest = json.loads(manifest_bytes)
+        if manifest.get("model_purpose") != purpose:
+            raise ValueError(f"{purpose} artifact manifest purpose mismatch")
+        model_name = manifest["model_file"]
+        if not model_name or Path(model_name).name != model_name or "\\" in model_name:
+            raise ValueError("Manifest model_file must name a file in the artifact directory")
+        model_bytes = (artifact_dir / model_name).read_bytes()
+        if hashlib.sha256(model_bytes).hexdigest() != manifest["model_sha256"]:
+            raise ValueError("Model checksum does not match provisioned manifest")
+        artifacts[directory_name] = (manifest_bytes, manifest, model_name, model_bytes)
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
-        zipped.writestr("manifest.json", manifest_bytes)
-        zipped.writestr(model_name, model_bytes)
+        for directory_name, artifact in artifacts.items():
+            manifest_bytes, _, model_name, model_bytes = artifact
+            zipped.writestr(f"{directory_name}/manifest.json", manifest_bytes)
+            zipped.writestr(f"{directory_name}/{model_name}", model_bytes)
     token_response = subprocess.run(
         [
             "az.cmd",
@@ -54,16 +62,22 @@ def main() -> None:
             headers={"Content-Type": "application/zip"},
         )
         response.raise_for_status()
-        saved = client.get("/api/vfs/candidate-engine/models/manifest.json")
-        saved.raise_for_status()
-        digest = hashlib.sha256(saved.content).hexdigest()
-        if digest != hashlib.sha256(manifest_bytes).hexdigest():
-            raise RuntimeError("Uploaded manifest checksum mismatch")
-        saved_model = client.get(f"/api/vfs/candidate-engine/models/{model_name}")
-        saved_model.raise_for_status()
-        if hashlib.sha256(saved_model.content).hexdigest() != manifest["model_sha256"]:
-            raise RuntimeError("Uploaded model checksum mismatch")
-        print("Persistent model and manifest upload verified:", digest)
+        for directory_name, artifact in artifacts.items():
+            manifest_bytes, manifest, model_name, _ = artifact
+            saved = client.get(
+                f"/api/vfs/candidate-engine/models/{directory_name}/manifest.json"
+            )
+            saved.raise_for_status()
+            digest = hashlib.sha256(saved.content).hexdigest()
+            if digest != hashlib.sha256(manifest_bytes).hexdigest():
+                raise RuntimeError("Uploaded manifest checksum mismatch")
+            saved_model = client.get(
+                f"/api/vfs/candidate-engine/models/{directory_name}/{model_name}"
+            )
+            saved_model.raise_for_status()
+            if hashlib.sha256(saved_model.content).hexdigest() != manifest["model_sha256"]:
+                raise RuntimeError("Uploaded model checksum mismatch")
+            print(f"{directory_name} model and manifest upload verified:", digest)
 
 
 if __name__ == "__main__":

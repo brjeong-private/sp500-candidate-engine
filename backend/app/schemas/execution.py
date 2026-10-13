@@ -16,6 +16,7 @@ class PipelineRunRequest(BaseModel):
     end_date: Date | None = None
     with_candidates: StrictBool | None = None
     auto_retry: StrictBool | None = None
+    model_purpose: Literal["SHORT_5D", "MEDIUM_20D"] | None = None
 
     @model_validator(mode="after")
     def validate_mode(self) -> Self:
@@ -24,7 +25,11 @@ class PipelineRunRequest(BaseModel):
                 raise ValueError("DAILY requires date and forbids start_date/end_date")
             if self.with_candidates is not True or self.auto_retry is not None:
                 raise ValueError("DAILY requires with_candidates=true and forbids auto_retry")
+            if self.model_purpose is None:
+                self.model_purpose = "SHORT_5D"
         else:
+            if self.model_purpose is not None:
+                raise ValueError("model_purpose is allowed only for DAILY")
             if self.date is not None or self.start_date is None or self.end_date is None:
                 raise ValueError("RANGE/BACKFILL require start_date/end_date and forbid date")
             if self.start_date > self.end_date:

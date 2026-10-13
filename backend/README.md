@@ -214,25 +214,30 @@ but their arbitrary metadata is not part of the public history response.
 
 Candidate DAILY is **inference-only**: it never trains a model or fits processors.
 Use the analytics extra on **Python 3.11 or 3.12**, explicitly provision the chosen
-LightGBM model plus a manifest, and configure deployment environment variables
-`BACKEND_CANDIDATE_ARTIFACT_MANIFEST` and
-`BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256`. The hash must pin the manifest's
-exact bytes. `PipelineExecutionService(database, engine_settings)` reads these
-settings; explicit keyword overrides are available for tests. Do not automatically
-bundle `data\output` or select whichever model happens to exist on disk.
+LightGBM model plus a manifest for each model purpose, and configure
+`BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHORT_5D`,
+`BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_SHORT_5D`,
+`BACKEND_CANDIDATE_ARTIFACT_MANIFEST_MEDIUM_20D`, and
+`BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D`. Each hash pins that
+purpose's manifest exact bytes. The legacy unsuffixed pair is accepted only as a
+SHORT_5D compatibility setting; MEDIUM_20D never falls back to it or to another
+purpose. Do not automatically bundle `data\output` or select whichever model
+happens to exist on disk.
 
-The manifest contains `schema_version=1`, `model_version_id`, `model_file`,
+The manifest contains `schema_version=2`, `model_purpose`, `label_semantics`,
+`prediction_semantics`, `horizon_sessions`, `model_version_id`, `model_file`,
 `model_sha256`, ordered `feature_names` (158 strings), `feature_config_hash`, and
-`model_config_hash` (the effective model-plus-label configuration hash). Provision
-only the selected model file, such as `lightgbm.txt`, and its manifest. The API
-validates the registered model, artifact/manifest/config hashes, training cutoff,
-and feature dimension/order. Current inference supports raw, unprocessed Alpha158
-and reuses the pinned registered model.
+`model_config_hash` (the effective model-plus-label configuration hash). The API
+validates these fields against the purpose-specific model and label configs and
+against the registered model, plus artifact/manifest/config hashes, training cutoff,
+and feature dimension/order. Current inference supports raw, unprocessed Alpha158.
+Missing or invalid artifacts fail closed without cross-purpose fallback.
 
 Provision the selected registered artifact before preparing the deployment ZIP:
 
 ```powershell
-python -m backend.prepare_candidate_artifact --model-version-id f75be739-4149-518f-8cbe-1cf6296e619a --source-directory data\output\phase45\e84b93ed6b6365fa23f92dfa --output-directory data\backend-artifacts\models
+python -m backend.prepare_candidate_artifact --model-purpose SHORT_5D --model-version-id <short-model-id> --source-directory <short-source-directory> --output-directory data\backend-artifacts\models\short_5d
+python -m backend.prepare_candidate_artifact --model-purpose MEDIUM_20D --model-version-id <medium-model-id> --source-directory <medium-source-directory> --output-directory data\backend-artifacts\models\medium_20d
 python -m backend.upload_candidate_artifact
 python -m backend.prepare_deployment
 ```

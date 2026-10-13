@@ -28,6 +28,24 @@ logger = logging.getLogger(__name__)
 ACCEPTANCE_LOCK = 517_017_001
 INTERRUPTED_REASON = "API background execution interrupted by process restart; resubmit explicitly"
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+MODEL_PURPOSE_CONTRACTS = {
+    "SHORT_5D": {
+        "model_config": "model_lightgbm_v2.yaml",
+        "label_config": "label_forward_return_5d_v2.yaml",
+        "label_semantics": "RAW_STOCK_5D_RETURN",
+        "score_semantics": "PREDICTED_5D_RETURN",
+        "horizon_sessions": 5,
+        "return_policy": "PRICE_RETURN",
+    },
+    "MEDIUM_20D": {
+        "model_config": "model_lightgbm_20d_v1.yaml",
+        "label_config": "label_forward_return_20d_v1.yaml",
+        "label_semantics": "RAW_STOCK_20D_RETURN",
+        "score_semantics": "PREDICTED_20D_RETURN",
+        "horizon_sessions": 20,
+        "return_policy": "PRICE_RETURN",
+    },
+}
 
 
 class PipelineConflict(RuntimeError):
@@ -54,7 +72,9 @@ class PipelineExecutionService:
             workspace_dir
             or (Path(configured_workspace) if configured_workspace else self.repository_root)
         ).resolve()
-        configured_manifest = os.environ.get("BACKEND_CANDIDATE_ARTIFACT_MANIFEST")
+        configured_manifest = os.environ.get(
+            "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHORT_5D"
+        ) or os.environ.get("BACKEND_CANDIDATE_ARTIFACT_MANIFEST")
         self.candidate_artifact_manifest = candidate_artifact_manifest or (
             Path(configured_manifest) if configured_manifest else None
         )
@@ -67,7 +87,24 @@ class PipelineExecutionService:
             ).resolve()
         self.candidate_artifact_manifest_sha256 = (
             candidate_artifact_manifest_sha256
+            or os.environ.get("BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_SHORT_5D")
             or os.environ.get("BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256")
+        )
+        configured_medium_manifest = os.environ.get(
+            "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_MEDIUM_20D"
+        )
+        self.medium_candidate_artifact_manifest = (
+            Path(configured_medium_manifest) if configured_medium_manifest else None
+        )
+        if (
+            self.medium_candidate_artifact_manifest is not None
+            and not self.medium_candidate_artifact_manifest.is_absolute()
+        ):
+            self.medium_candidate_artifact_manifest = (
+                self.workspace_dir / self.medium_candidate_artifact_manifest
+            ).resolve()
+        self.medium_candidate_artifact_manifest_sha256 = os.environ.get(
+            "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D"
         )
 
     def validate_request(
@@ -255,6 +292,7 @@ class PipelineExecutionService:
                     run_candidates=True,
                     process_run_id=process_run_id,
                     candidate_runner=self.run_candidate_inference,
+                    model_purpose=request.model_purpose,
                 )
                 if result["status"] == "SUCCEEDED":
                     candidate = result.get("candidate_run")
@@ -451,13 +489,29 @@ class PipelineExecutionService:
         return start
 
     def run_candidate_inference(
-        self, settings: Settings, *, target_date: date, repository_root: Path
+        self,
+        settings: Settings,
+        *,
+        target_date: date,
+        repository_root: Path,
+        model_purpose: str = "SHORT_5D",
     ) -> SimpleNamespace:
         """Use a provisioned model without training, fitting processors, or fallback."""
-        if self.candidate_artifact_manifest is None or not self.candidate_artifact_manifest_sha256:
+        try:
+            contract = MODEL_PURPOSE_CONTRACTS[model_purpose]
+        except KeyError as error:
+            raise RuntimeError(f"Unsupported model purpose: {model_purpose}") from error
+        if model_purpose == "SHORT_5D":
+            configured_manifest = self.candidate_artifact_manifest
+            configured_manifest_sha256 = self.candidate_artifact_manifest_sha256
+        else:
+            configured_manifest = self.medium_candidate_artifact_manifest
+            configured_manifest_sha256 = self.medium_candidate_artifact_manifest_sha256
+        if configured_manifest is None or not configured_manifest_sha256:
             raise RuntimeError(
-                "DAILY inference requires an explicitly provisioned candidate artifact manifest "
-                "and its SHA256; API DAILY never trains a model"
+                f"DAILY {model_purpose} inference requires its explicitly provisioned candidate "
+                "artifact manifest and SHA256; API DAILY never trains a model or falls back "
+                "between model purposes"
             )
         from importlib.metadata import version
 
@@ -484,13 +538,24 @@ class PipelineExecutionService:
         from sp500_candidate_engine.selection.service import candidate_result_payload
 
         del settings
-        manifest_path = self.candidate_artifact_manifest.resolve()
+        manifest_path = configured_manifest.resolve()
         manifest_bytes = manifest_path.read_bytes()
-        if hashlib.sha256(manifest_bytes).hexdigest() != self.candidate_artifact_manifest_sha256:
+        if hashlib.sha256(manifest_bytes).hexdigest() != configured_manifest_sha256:
             raise RuntimeError("Candidate artifact manifest SHA256 mismatch")
         manifest = json.loads(manifest_bytes)
-        if manifest.get("schema_version") != 1:
+        if manifest.get("schema_version") != 2:
             raise RuntimeError("Unsupported candidate artifact manifest version")
+        expected_manifest_contract = {
+            "model_purpose": model_purpose,
+            "label_semantics": contract["label_semantics"],
+            "prediction_semantics": contract["score_semantics"],
+            "horizon_sessions": contract["horizon_sessions"],
+        }
+        if any(
+            manifest.get(key) != expected
+            for key, expected in expected_manifest_contract.items()
+        ):
+            raise RuntimeError("Candidate artifact manifest model-purpose contract mismatch")
         model_id = uuid.UUID(manifest["model_version_id"])
         model_path = (manifest_path.parent / manifest["model_file"]).resolve()
         if not model_path.is_relative_to(manifest_path.parent):
@@ -507,11 +572,11 @@ class PipelineExecutionService:
             required_keys=("expected_dimension", "lookback_sessions", "raw_feature_run"),
         )
         model_config = load_versioned_config(
-            root / "config" / "analytics" / "model_lightgbm_v2.yaml",
-            required_keys=("version",),
+            root / "config" / "analytics" / str(contract["model_config"]),
+            required_keys=("version", "prediction_semantics"),
         )
         label_config = load_versioned_config(
-            root / "config" / "analytics" / "label_forward_return_5d_v2.yaml",
+            root / "config" / "analytics" / str(contract["label_config"]),
             required_keys=("horizon_sessions",),
         )
         selection_config = load_versioned_config(
@@ -532,6 +597,9 @@ class PipelineExecutionService:
         if (
             manifest["feature_config_hash"] != feature_config.config_hash
             or manifest["model_config_hash"] != effective_model_hash
+            or model_config.payload["prediction_semantics"] != contract["score_semantics"]
+            or int(label_config.payload["horizon_sessions"])
+            != contract["horizon_sessions"]
         ):
             raise RuntimeError("Provisioned candidate model/config contract mismatch")
         raw_contract = feature_config.payload["raw_feature_run"]
@@ -556,10 +624,12 @@ class PipelineExecutionService:
             or model_row["model_name"] != "lightgbm"
             or str(model_row["version"]) != str(model_config.payload["version"])
             or model_row["config_hash"] != effective_model_hash
-            or model_row["label_semantics"] != "RAW_STOCK_5D_RETURN"
+            or model_row["label_semantics"] != contract["label_semantics"]
+            or model_row["model_purpose"] != model_purpose
+            or model_row["return_policy"] != contract["return_policy"]
             or model_row["processor_version_id"] is not None
             or model_row["promotion_status"] not in {"SHADOW", "CHAMPION"}
-            or model_row["training_export_end"] > target_date
+            or model_row["training_export_end"] >= target_date
         ):
             raise RuntimeError(
                 "Pinned registry model is incompatible or includes future training data"
@@ -663,12 +733,13 @@ class PipelineExecutionService:
                 model_version_id=model_id,
                 universe_version_id=export.universe_version_id,
                 config_hash=effective_model_hash,
-                score_semantics="PREDICTED_5D_RETURN",
+                score_semantics=str(contract["score_semantics"]),
+                prediction_horizon_sessions=int(contract["horizon_sessions"]),
             )
             score_repository.write_scores(
                 scoring_run_id=scoring_run_id,
                 scores=scores,
-                prediction_horizon=5,
+                prediction_horizon=int(contract["horizon_sessions"]),
             )
             selection_run_id = SelectionRepository(connection).persist(
                 price_session_date=target_date,

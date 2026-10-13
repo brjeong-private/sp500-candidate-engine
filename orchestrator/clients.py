@@ -634,6 +634,7 @@ def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
             "mode": "DAILY",
             "date": analysis_date,
             "with_candidates": True,
+            "model_purpose": model_purpose,
         },
         expected_statuses=(202,),
         timeout=PORTAL_SUBMIT_TIMEOUT,

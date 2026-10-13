@@ -143,6 +143,19 @@ def daily():
     return PipelineRunRequest(mode="DAILY", date=date(2026, 10, 8), with_candidates=True)
 
 
+def test_daily_model_purpose_defaults_to_short_and_accepts_medium():
+    assert daily().model_purpose == "SHORT_5D"
+    assert (
+        PipelineRunRequest(
+            mode="DAILY",
+            date=date(2026, 10, 8),
+            with_candidates=True,
+            model_purpose="MEDIUM_20D",
+        ).model_purpose
+        == "MEDIUM_20D"
+    )
+
+
 def test_idempotency_migration_is_expand_compatible():
     migration = (
         Path(__file__).parents[2] / "sql" / "020_backend_pipeline_idempotency.sql"
@@ -172,6 +185,13 @@ def test_idempotency_migration_is_expand_compatible():
             "start_date": "2026-10-08",
             "end_date": "2026-10-09",
             "with_candidates": False,
+        },
+        {
+            "mode": "RANGE",
+            "start_date": "2026-10-08",
+            "end_date": "2026-10-09",
+            "with_candidates": False,
+            "model_purpose": "SHORT_5D",
         },
         {"mode": "DAILY", "date": "2026-10-08", "with_candidates": "true"},
     ],
@@ -225,6 +245,7 @@ def test_acceptance_persists_same_id_then_executes_daily_and_candidates(service,
     assert runner.call_args.kwargs["process_run_id"] == run.process_run_id
     assert runner.call_args.kwargs["run_candidates"] is True
     assert runner.call_args.kwargs["candidate_runner"] == service.run_candidate_inference
+    assert runner.call_args.kwargs["model_purpose"] == "SHORT_5D"
     assert "candidate_history_start" not in runner.call_args.kwargs
     assert service.database.requests[run.process_run_id]["status"] == "SUCCEEDED"
 
@@ -598,12 +619,64 @@ def test_unprovisioned_api_inference_fails_without_training(service):
         )
 
 
+def test_medium_inference_never_falls_back_to_short_artifact(service):
+    service.candidate_artifact_manifest = Path("short-manifest.json")
+    service.candidate_artifact_manifest_sha256 = "short-hash"
+    with pytest.raises(RuntimeError, match="MEDIUM_20D.*never trains.*falls back"):
+        service.run_candidate_inference(
+            service.settings,
+            target_date=date(2026, 10, 8),
+            repository_root=Path(__file__).parents[2],
+            model_purpose="MEDIUM_20D",
+        )
+
+
 @pytest.mark.parametrize(
     "violation",
     [None, "manifest_hash", "model_hash", "future_training", "feature_order", "registry_hash"],
 )
+@pytest.mark.parametrize(
+    (
+        "model_purpose",
+        "model_filename",
+        "label_filename",
+        "label_semantics",
+        "score_semantics",
+        "horizon",
+        "model_version",
+    ),
+    [
+        (
+            "SHORT_5D",
+            "model_lightgbm_v2.yaml",
+            "label_forward_return_5d_v2.yaml",
+            "RAW_STOCK_5D_RETURN",
+            "PREDICTED_5D_RETURN",
+            5,
+            "2",
+        ),
+        (
+            "MEDIUM_20D",
+            "model_lightgbm_20d_v1.yaml",
+            "label_forward_return_20d_v1.yaml",
+            "RAW_STOCK_20D_RETURN",
+            "PREDICTED_20D_RETURN",
+            20,
+            "1",
+        ),
+    ],
+)
 def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_training(
-    service, monkeypatch, violation
+    service,
+    monkeypatch,
+    violation,
+    model_purpose,
+    model_filename,
+    label_filename,
+    label_semantics,
+    score_semantics,
+    horizon,
+    model_version,
 ):
     import numpy as np
     import pandas as pd
@@ -618,10 +691,10 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     target = date(2026, 10, 8)
     root = Path(__file__).parents[2]
     model = load_versioned_config(
-        root / "config" / "analytics" / "model_lightgbm_v2.yaml", required_keys=("version",)
+        root / "config" / "analytics" / model_filename, required_keys=("version",)
     )
     label = load_versioned_config(
-        root / "config" / "analytics" / "label_forward_return_5d_v2.yaml",
+        root / "config" / "analytics" / label_filename,
         required_keys=("horizon_sessions",),
     )
     feature = load_versioned_config(
@@ -640,7 +713,11 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     names = [f"feature-{index}" for index in range(158)]
     manifest = json.dumps(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "model_purpose": model_purpose,
+            "label_semantics": label_semantics,
+            "prediction_semantics": score_semantics,
+            "horizon_sessions": horizon,
             "model_version_id": str(model_id),
             "model_file": "lightgbm.txt",
             "model_sha256": model_hash,
@@ -650,10 +727,17 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
         }
     ).encode()
     manifest_path = root / "test-artifact-store" / "manifest.json"
-    service.candidate_artifact_manifest = manifest_path
-    service.candidate_artifact_manifest_sha256 = hashlib.sha256(manifest).hexdigest()
+    if model_purpose == "SHORT_5D":
+        service.candidate_artifact_manifest = manifest_path
+        service.candidate_artifact_manifest_sha256 = hashlib.sha256(manifest).hexdigest()
+    else:
+        service.medium_candidate_artifact_manifest = manifest_path
+        service.medium_candidate_artifact_manifest_sha256 = hashlib.sha256(manifest).hexdigest()
     if violation == "manifest_hash":
-        service.candidate_artifact_manifest_sha256 = "invalid"
+        if model_purpose == "SHORT_5D":
+            service.candidate_artifact_manifest_sha256 = "invalid"
+        else:
+            service.medium_candidate_artifact_manifest_sha256 = "invalid"
     if violation == "model_hash":
         model_bytes = b"tampered-model"
     monkeypatch.setattr(
@@ -684,9 +768,11 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
                 dict(
                     artifact_hash=model_hash if violation != "registry_hash" else "invalid",
                     model_name="lightgbm",
-                    version="2",
+                    version=model_version,
                     config_hash=config_hash,
-                    label_semantics="RAW_STOCK_5D_RETURN",
+                    label_semantics=label_semantics,
+                    model_purpose=model_purpose,
+                    return_policy="PRICE_RETURN",
                     processor_version_id=None,
                     promotion_status="SHADOW",
                     training_export_end=(
@@ -744,19 +830,26 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     scoring_id, selection_id = uuid.uuid4(), uuid.uuid4()
     create_score = MagicMock(return_value=scoring_id)
     monkeypatch.setattr(ScoreRepository, "create_run", create_score)
-    monkeypatch.setattr(ScoreRepository, "write_scores", MagicMock())
+    write_scores = MagicMock()
+    monkeypatch.setattr(ScoreRepository, "write_scores", write_scores)
     persist = MagicMock(return_value=selection_id)
     monkeypatch.setattr(SelectionRepository, "persist", persist)
     if violation is not None:
         with pytest.raises(RuntimeError):
             service.run_candidate_inference(
-                service.settings, target_date=target, repository_root=root
+                service.settings,
+                target_date=target,
+                repository_root=root,
+                model_purpose=model_purpose,
             )
         train.assert_not_called()
         booster.predict.assert_not_called()
         return
     result = service.run_candidate_inference(
-        service.settings, target_date=target, repository_root=root
+        service.settings,
+        target_date=target,
+        repository_root=root,
+        model_purpose=model_purpose,
     )
     assert result.model_version_id == model_id
     assert result.scoring_run_id == scoring_id
@@ -769,6 +862,9 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     assert compute.call_args.kwargs["start_date"] == target
     assert compute.call_args.kwargs["end_date"] == target
     assert create_score.call_args.kwargs["model_version_id"] == model_id
+    assert create_score.call_args.kwargs["score_semantics"] == score_semantics
+    assert create_score.call_args.kwargs["prediction_horizon_sessions"] == horizon
+    assert write_scores.call_args.kwargs["prediction_horizon"] == horizon
     assert persist.call_args.kwargs["cutoff_at"] == execution.backfill_cutoff(target)
     train.assert_not_called()
     booster.predict.assert_called_once()
@@ -778,12 +874,27 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
 def test_workspace_and_pinned_manifest_environment_keep_code_separate(service, monkeypatch):
     root = Path(__file__).parents[2]
     monkeypatch.setenv("BACKEND_WORKSPACE_DIR", str(root / "persistent-workspace"))
-    monkeypatch.setenv("BACKEND_CANDIDATE_ARTIFACT_MANIFEST", "models/manifest.json")
-    monkeypatch.setenv("BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256", "pinned-checksum")
+    monkeypatch.setenv(
+        "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHORT_5D", "models/short_5d/manifest.json"
+    )
+    monkeypatch.setenv(
+        "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_SHORT_5D", "short-checksum"
+    )
+    monkeypatch.setenv(
+        "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_MEDIUM_20D",
+        "models/medium_20d/manifest.json",
+    )
+    monkeypatch.setenv(
+        "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D", "medium-checksum"
+    )
     configured = execution.PipelineExecutionService(service.database, service.settings)
     assert configured.workspace_dir == root / "persistent-workspace"
     assert configured.repository_root == root
     assert configured.candidate_artifact_manifest == (
-        root / "persistent-workspace" / "models" / "manifest.json"
+        root / "persistent-workspace" / "models" / "short_5d" / "manifest.json"
     )
-    assert configured.candidate_artifact_manifest_sha256 == "pinned-checksum"
+    assert configured.candidate_artifact_manifest_sha256 == "short-checksum"
+    assert configured.medium_candidate_artifact_manifest == (
+        root / "persistent-workspace" / "models" / "medium_20d" / "manifest.json"
+    )
+    assert configured.medium_candidate_artifact_manifest_sha256 == "medium-checksum"

@@ -8,7 +8,8 @@ param postgresDatabase string = 'candidate_engine'
 param tenantId string = subscription().tenantId
 param portalOrigin string = 'https://web-jongmok-portal-8d0218f4.azurewebsites.net'
 param httpUserAgent string
-param candidateManifestSha256 string
+param candidateShortManifestSha256 string
+param candidateMediumManifestSha256 string
 
 @secure()
 param apiKey string
@@ -76,8 +77,10 @@ resource app 'Microsoft.Web/sites@2026-08-01' = {
         { name: 'RAW_DATA_DIR', value: '/home/candidate-engine/data/raw' }
         { name: 'LOG_DIR', value: '/home/candidate-engine/logs' }
         { name: 'BACKEND_WORKSPACE_DIR', value: '/home/candidate-engine' }
-        { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST', value: 'models/manifest.json' }
-        { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256', value: candidateManifestSha256 }
+        { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHORT_5D', value: 'models/short_5d/manifest.json' }
+        { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_SHORT_5D', value: candidateShortManifestSha256 }
+        { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_MEDIUM_20D', value: 'models/medium_20d/manifest.json' }
+        { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D', value: candidateMediumManifestSha256 }
         { name: 'HTTP_USER_AGENT', value: httpUserAgent }
       ]
     }

@@ -36,8 +36,25 @@ def main() -> None:
         "postgresHost": values["PGHOST"],
         "postgresDatabase": values["PGDATABASE"],
         "httpUserAgent": values["HTTP_USER_AGENT"],
-        "candidateManifestSha256": hashlib.sha256(
-            (ROOT / "data" / "backend-artifacts" / "models" / "manifest.json").read_bytes()
+        "candidateShortManifestSha256": hashlib.sha256(
+            (
+                ROOT
+                / "data"
+                / "backend-artifacts"
+                / "models"
+                / "short_5d"
+                / "manifest.json"
+            ).read_bytes()
+        ).hexdigest(),
+        "candidateMediumManifestSha256": hashlib.sha256(
+            (
+                ROOT
+                / "data"
+                / "backend-artifacts"
+                / "models"
+                / "medium_20d"
+                / "manifest.json"
+            ).read_bytes()
         ).hexdigest(),
         "apiKey": values["BACKEND_API_KEY"],
         "massiveApiKey": values["MASSIVE_API_KEY"],

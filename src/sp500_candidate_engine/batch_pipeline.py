@@ -135,6 +135,7 @@ async def run_daily_process(
     process_run_id: uuid.UUID | None = None,
     candidate_history_start: date | None = None,
     candidate_runner: Callable[..., object] | None = None,
+    model_purpose: str = "SHORT_5D",
 ) -> dict[str, object]:
     database = Database(settings)
     accepted_run = process_run_id is not None
@@ -234,6 +235,7 @@ async def run_daily_process(
                 settings,
                 target_date=target_date,
                 repository_root=Path(__file__).parents[2],
+                model_purpose=model_purpose,
             )
             response["candidate_run"] = {
                 "price_session_date": candidate.price_session_date,

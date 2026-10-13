@@ -30,8 +30,12 @@ def test_source_package_excludes_secrets_and_outputs(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(prepare_deployment, "ROOT", tmp_path)
     artifact_dir = tmp_path / "data" / "backend-artifacts" / "models"
-    artifact_dir.mkdir(parents=True)
-    (artifact_dir / "manifest.json").write_text('{"schema_version": 1}', encoding="utf-8")
+    for purpose in ("short_5d", "medium_20d"):
+        purpose_dir = artifact_dir / purpose
+        purpose_dir.mkdir(parents=True)
+        (purpose_dir / "manifest.json").write_text(
+            '{"schema_version": 2}', encoding="utf-8"
+        )
     for name in (
         "PGHOST",
         "PGDATABASE",
@@ -55,6 +59,14 @@ def test_source_package_excludes_secrets_and_outputs(tmp_path, monkeypatch):
     assert parameters["parameters"]["location"]["value"] == "koreacentral"
     assert parameters["parameters"]["apiKey"]["value"] == "test-backend-token"
     assert (
-        parameters["parameters"]["candidateManifestSha256"]["value"]
-        == hashlib.sha256((artifact_dir / "manifest.json").read_bytes()).hexdigest()
+        parameters["parameters"]["candidateShortManifestSha256"]["value"]
+        == hashlib.sha256(
+            (artifact_dir / "short_5d" / "manifest.json").read_bytes()
+        ).hexdigest()
+    )
+    assert (
+        parameters["parameters"]["candidateMediumManifestSha256"]["value"]
+        == hashlib.sha256(
+            (artifact_dir / "medium_20d" / "manifest.json").read_bytes()
+        ).hexdigest()
     )
