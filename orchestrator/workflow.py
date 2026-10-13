@@ -7,7 +7,18 @@ from datetime import timedelta
 from typing import Any
 
 MODEL_SEQUENCE = ("SHORT_5D", "MEDIUM_20D")
-CORE_STAGES = frozenset({"candidate", "core", "orchestrator", "preflight"})
+CORE_STAGES = frozenset(
+    {
+        "eligibility",
+        "preflight",
+        "candidate",
+        "candidate_submit",
+        "candidate_poll",
+        "candidate_fetch",
+        "core",
+        "orchestrator",
+    }
+)
 SAFE_EMAIL_FIELDS = frozenset(
     {
         "analysis_date",

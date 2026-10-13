@@ -96,6 +96,19 @@ def test_parent_stops_after_short_core_failure():
     }
 
 
+def test_parent_stops_for_all_short_candidate_core_stages():
+    for stage in ("eligibility", "candidate_submit", "candidate_poll", "candidate_fetch"):
+        outcome, events = _run(
+            workflow.dual_model_parent(ParentContext()),
+            iter([_child_result("FAILED", "SHORT_5D", stage=stage)]),
+        )
+
+        assert len(events) == 1
+        assert outcome["state"] == "FAILED"
+        assert outcome["stopped_after"] == "SHORT_5D"
+        assert outcome["models"]["MEDIUM_20D"]["state"] == "NOT_STARTED"
+
+
 def test_parent_stops_after_short_preflight_timeout():
     outcome, events = _run(
         workflow.dual_model_parent(ParentContext()),

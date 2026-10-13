@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-13 | Dual-Model Failure Policy | SHORT_5D eligibility·submit·poll·fetch 실패를 core failure로 분류해 MEDIUM_20D 시작을 차단했다.
+
 - 2026-10-13 | Documentation | Candidate 업무 범위와 오케스트레이터 control plane 경계, 모델별 schema v2 artifact, encrypted Function secret 운영 상태를 README·모델 문서에 반영했다.
 
 - 2026-10-13 | Multi-Model Inference | Candidate DAILY가 SHORT_5D·MEDIUM_20D별 schema v2 artifact/config/label 계약을 strict 선택하고 교차 fallback을 금지하도록 확장했다.
