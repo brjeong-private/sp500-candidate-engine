@@ -456,6 +456,11 @@ score·rank·percentile은 scoring run에, 후보 position·선정 사유는 sel
 child는 각자 Candidate 제출, scoring/selection identity, Portal batch를 가진다.
 한 목적의 결과가 없으면 다른 모델로 자동 대체하지 않는다.
 
+DAILY inference도 조회 필터만 바꾸지 않는다. `SHORT_5D`와 `MEDIUM_20D`는 각각
+schema v2 manifest path/hash, model config, label config, prediction semantics와
+horizon을 가진다. backend는 요청의 model purpose와 registry row·artifact hash가 모두
+일치할 때만 해당 모델을 실행하며 다른 purpose의 pinned artifact를 재사용하지 않는다.
+
 같은 `analysis_date + model_purpose`의 완전한 terminal selection이 이미 있으면 해당
 child는 `SKIPPED_EXISTING`으로 끝난다. 이는 모델 결과 재계산이나 fallback이 아니며
 Candidate POST와 Portal/TradingAgents 신규 분석을 모두 생략한다. 단일 모델 수동

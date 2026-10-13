@@ -4,7 +4,11 @@
 
 production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, walk-forward 모델 평가, 일일 점수와 5~10개 후보 선정까지 구현했습니다.
 
-프로젝트의 전체 범위는 `수집 -> 전처리 -> 모델 점수 -> 후보 선정`까지입니다. TradingAgents를 포함한 후보 이후 분석은 별도 프로젝트에서 구현합니다. 공통 무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
+프로젝트의 업무 범위는 `수집 -> 전처리 -> 모델 점수 -> 후보 선정`까지입니다.
+이 저장소에는 이 업무 파이프라인을 시작하고 외부 Portal/TradingAgents 계약을 연결하는
+Durable Functions **control plane 오케스트레이터**도 포함하지만, 후보 이후 분석 구현과
+결과 저장 책임은 별도 종목토론방 프로젝트에 있습니다. 공통 무결성·시점·재현성 규칙은
+[PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
 
 현재 `SHORT_5D` model v2와 `MEDIUM_20D` model v1을 독립 보존합니다.
 두 모델은 각각 `D+1 adjusted open -> D+5/D+20 adjusted close` raw 수익률을
@@ -17,8 +21,9 @@ production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, wa
 
 운영 오케스트레이터의 Linux FC1과 private Storage(Durable history·Blob·Queue·Table)는
 배포 완료 상태입니다. `SHORT_5D -> MEDIUM_20D` 부모, 15분 resource guardian,
-`SKIPPED_EXISTING`, 모델별 Email, 구조화 telemetry는 코드·문서 구현 완료 상태이며
-전체 회귀/Bicep 검증, 비파괴 배포, KQL·dual·정시 E2E는 남아 있습니다.
+`SKIPPED_EXISTING`, 모델별 Email, 구조화 telemetry와 KQL runbook도 배포됐습니다.
+guardian 정시 실행과 one-off dual 실행·cleanup은 검증했으며, 2026-10-12를 대상으로 한
+첫 05:30 ET 정기 dual 실행 검증이 남아 있습니다.
 
 | 데이터 | 결과 |
 |---|---:|
@@ -116,7 +121,7 @@ flowchart TB
         Durable["Replay-safe orchestrator<br/>activity와 durable timer"]
         ACS["Azure Communication Services<br/>시작·종결 Email"]
         State["Azure Storage<br/>history·task state·FC1 runtime·package"]
-        Runtime["Key Vault<br/>secrets"]
+        Runtime["Encrypted Function App Settings<br/>secure deployment parameters"]
     end
 
     subgraph External["외부 분석 시스템 - 이 저장소 범위 밖"]
@@ -167,6 +172,11 @@ flowchart TB
 7. 별도 guardian은 15분마다 readiness와 승인된 제한 복구를 수행한다. guardian은
    Durable 부모를 시작하거나 terminal 실행을 재시작하지 않는다.
 
+Candidate DAILY inference는 모델 목적마다 별도의 schema v2 manifest와 SHA-256을
+요구한다. `SHORT_5D`와 `MEDIUM_20D`는 각자의 model/label config, prediction
+semantics, horizon, registry model version과 artifact hash를 모두 검증하며 다른 모델
+artifact로 fallback하지 않는다.
+
 ### 오케스트레이터 아키텍처
 
 오케스트레이터는 Candidate Engine과 외부 분석 시스템 사이의 control plane이다.
@@ -203,9 +213,10 @@ flowchart TD
 - `SKIPPED_EXISTING`은 오류가 아닌 모델 terminal 상태이며 신규 Candidate/Portal 제출이 없다.
 - 후보는 대상일·모델 목적·position·중복·단일 selection run·5~10개 조건을 검증한다.
 - Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
-- system-assigned 관리 ID는 Durable/FC1 Storage의 Blob·Queue·Table, Key Vault·App
-  Insights·ACS와 ARM 조회에 사용하고, 서버 간 API credential은 Key Vault reference로
-  주입한다. Storage public access는 Disabled이며 West US 3 VNet의 FC1 위임 subnet,
+- system-assigned 관리 ID는 Durable/FC1 Storage의 Blob·Queue·Table, App Insights·ACS와
+  ARM 조회에 사용한다. 조직 정책으로 Key Vault가 private-only인 현재 구성에서는 서버 간
+  credential을 Bicep `@secure()` parameter로 전달해 encrypted Function App Settings에
+  저장한다. Storage public access는 Disabled이며 West US 3 VNet의 FC1 위임 subnet,
   Blob·Queue·Table private endpoint와 private DNS link를 통해서만 접근한다.
   preflight는 public access를 열지 않고 private data plane 연결을 확인해 실패 시
   실행을 차단한다.

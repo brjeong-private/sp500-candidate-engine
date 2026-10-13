@@ -89,6 +89,10 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
 Candidate 후보 row는 PostgreSQL에만 남고 Portal에는 복제하지 않는다. Portal MySQL은
 외부 분석의 일괄 실행, 개별 job 상태와 결과만 영속화한다.
 
+Candidate backend에는 `SHORT_5D`와 `MEDIUM_20D`별 schema v2 manifest path와
+SHA-256을 별도 설정한다. 요청의 model purpose와 artifact purpose, model/label config,
+registry row가 모두 일치해야 하며 다른 purpose의 artifact를 대신 사용하지 않는다.
+
 ## 인증된 수동 실행
 
 `POST /api/orchestrations/manual`은 Function auth key가 필요하며 JSON body는
