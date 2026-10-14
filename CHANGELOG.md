@@ -1,5 +1,14 @@
 # Change Log
 
+- 2026-10-14 | Architecture Documentation | README와 기준 아키텍처를 발표 1장의 candidate_engine·계획 LLM Top 20·외부 TradingAgents 경계로 통일했다.
+
+- 2026-10-14 | Presentation | 중간 발표 4판의 중첩 아키텍처와 LLM 상위 20 병렬 경로를 유지하면서 실제 수집 데이터·에이전트·데이터 계층 명칭을 그레이톤으로 교정한 7판을 추가했다.
+
+- 2026-10-14 | Presentation | 4판 아키텍처 구조 재사용, 수집·스키마 병합, 3계층 하네스와 10월 판정 수익률을 반영한 중간 발표 6판을 추가했다.
+- 2026-10-14 | Evaluation | 2026-10-01~12 MEDIUM_20D 후보와 TradingAgents Hold·Overweight 판정의 D+1 시가 매수·10월 12일 종가 평가 근거를 문서화했다.
+
+- 2026-10-13 | Presentation | 후보 엔진과 종목토론방을 통합하고 실제 수집 필드·Alpha158 샘플·상세 아키텍처를 보강한 그레이톤 중간 발표 5판을 추가했다.
+
 - 2026-10-13 | Dual-Model Failure Policy | SHORT_5D eligibility·submit·poll·fetch 실패를 core failure로 분류해 MEDIUM_20D 시작을 차단했다.
 
 - 2026-10-13 | Documentation | Candidate 업무 범위와 오케스트레이터 control plane 경계, 모델별 schema v2 artifact, encrypted Function secret 운영 상태를 README·모델 문서에 반영했다.

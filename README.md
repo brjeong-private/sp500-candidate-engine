@@ -4,11 +4,17 @@
 
 production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, walk-forward 모델 평가, 일일 점수와 5~10개 후보 선정까지 구현했습니다.
 
-프로젝트의 업무 범위는 `수집 -> 전처리 -> 모델 점수 -> 후보 선정`까지입니다.
+이 프로젝트와 저장소의 제품 범위는 **`candidate_engine`**이며 업무 경계는
+`수집 -> 전처리 -> 모델 점수 -> 후보 통합·검증 -> 5~10개 후보 API`까지입니다.
 이 저장소에는 이 업무 파이프라인을 시작하고 외부 Portal/TradingAgents 계약을 연결하는
-Durable Functions **control plane 오케스트레이터**도 포함하지만, 후보 이후 분석 구현과
-결과 저장 책임은 별도 종목토론방 프로젝트에 있습니다. 공통 무결성·시점·재현성 규칙은
+Durable Functions **control plane 오케스트레이터**도 포함하지만, 후보 이후 분석 실행,
+agent prompt·memory, 최종 rating, MySQL 분석 상태와 Blob 보고서는 별도
+종목토론방 프로젝트의 책임입니다. 공통 무결성·시점·재현성 규칙은
 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
+
+발표 아키텍처의 `LLM 기업·뉴스 평가 상위 20`은 candidate_engine의 **계획된 확장**이다.
+현재 운영 후보는 Qlib Alpha158·LightGBM과 selection policy로 생성하며, LLM 경로는
+하네스·시점 계약·schema·검증 기준을 승인해 versioning하기 전에는 실행 경로가 아니다.
 
 현재 `SHORT_5D` model v2와 `MEDIUM_20D` model v1을 독립 보존합니다.
 두 모델은 각각 `D+1 adjusted open -> D+5/D+20 adjusted close` raw 수익률을
@@ -88,69 +94,89 @@ NYSE/Nasdaq 공식 원천은 거래 달력·조기 폐장·거래정지를 서�
 
 상세 내용은 [데이터 원천·라이선스 카탈로그](.github/modernize/assessment/engines/facts/data-source-license-catalog.md)를 참고하세요.
 
-## 운영 Azure 아키텍처
+## 프로젝트 범위와 전체 아키텍처
 
-Candidate Engine 이후의 포털·TradingAgents는 외부 시스템이다. 이 저장소에는 후보
-선정까지의 엔진/API와 이들을 호출하는 Python Durable Functions 오케스트레이터만
-있으며, 포털의 분석 상태·결과는 포털 MySQL에 저장된다. 후보 원본과 파이프라인 실행
-기록은 계속 Candidate PostgreSQL이 단일 원본이다.
+아래 다이어그램은 중간 발표 1장과 같은 구성이다. **실선 왼쪽
+`PROJECT SCOPE · candidate_engine`이 이 저장소의 구현 범위**다. 오른쪽
+Portal·TradingAgents는 5~10개 후보를 소비하는 외부 시스템이며 연동 계약을 설명하기
+위해 함께 표시한다. 후보 원본과 파이프라인 실행 기록은 Candidate PostgreSQL이 단일
+원본이고, 외부 분석 job·판정·보고서는 Portal MySQL과 private Blob에 저장된다.
+
+| 영역 | 상태 | 저장소 범위 |
+|---|---|---|
+| 원천 수집·Data Spine·Qlib Alpha158·LightGBM·selection·Candidate API | CURRENT | 포함 |
+| LLM 기업·뉴스 평가 상위 20과 수치 Top 20 통합 | PLANNED | 계약 승인 후 포함 예정 |
+| Portal·TradingAgents·외부 분석 data/state·report | EXTERNAL | 제외, API 연동만 유지 |
 
 ```mermaid
-flowchart TB
-    subgraph Sources["데이터 원천"]
-        Massive["Massive<br/>가격·기업행위·뉴스"]
-        SEC["SEC EDGAR<br/>식별자·공시·재무"]
-        Alpha["Alpha Vantage<br/>실적 일정"]
-        Reference["Wikipedia·거래 달력<br/>참조 데이터"]
+flowchart LR
+    subgraph CandidateScope["PROJECT SCOPE · candidate_engine"]
+        subgraph Daily["Daily Orchestration · 05:30 ET"]
+            subgraph Inputs["S&P 500 Universe and Source Data"]
+                Reference["Wikipedia and SEC<br/>S&P 500 · GICS · CIK · ticker · exchange"]
+                Massive["Massive<br/>OHLCV · VWAP · SPY · actions · news"]
+                Sec["SEC EDGAR<br/>filing · submissions · normalized XBRL"]
+                Alpha["Alpha Vantage<br/>earnings calendar · estimate · reported EPS"]
+            end
+
+            DataSpine[("Candidate PostgreSQL<br/>immutable snapshot · manifest · execution context")]
+
+            subgraph Quant["Microsoft Qlib · Numeric Top 20 · CURRENT"]
+                Export["Qlib export<br/>adjusted OHLCV · calendar · span"]
+                Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
+                WalkForward["Purged walk-forward<br/>time split · train-only fit"]
+                LightGBM["LightGBM<br/>SHORT_5D · MEDIUM_20D"]
+                NumericTop["Predicted return rank<br/>numeric top 20"]
+            end
+
+            LlmTop["LLM company and news evaluation<br/>top 20 · PLANNED"]
+            Merge["Candidate merge and validation<br/>deduplication · risk factors · sector diversification"]
+            CandidateApi["Final candidates 5 to 10<br/>Candidate API · not an order"]
+
+            Reference --> DataSpine
+            Massive --> DataSpine
+            Sec --> DataSpine
+            Alpha --> DataSpine
+            DataSpine --> Export --> Features --> WalkForward --> LightGBM --> NumericTop
+            DataSpine -.-> LlmTop
+            NumericTop --> Merge
+            LlmTop -.-> Merge
+            Merge --> CandidateApi
+        end
+
+        Durable["Python Durable Functions<br/>SHORT_5D then MEDIUM_20D · idempotent control plane"]
+        CandidateState["Private Storage · Key Vault · App Insights · ACS Email"]
+        Durable --> Daily
+        CandidateState --> Durable
     end
 
-    subgraph Candidate["Candidate Engine"]
-        CandidateApi["Candidate API<br/>Python App Service"]
-        Collectors["Provider별 수집<br/>quota 제어"]
-        Raw["Raw snapshot<br/>hash·provenance"]
-        Normalize["병렬 정규화"]
-        Gates["Point-in-time<br/>품질 gate"]
-        Features["Qlib Alpha158"]
-        Scores["모델 점수·순위"]
-        Candidates["5~10개 후보"]
-        PostgreSQL[("Azure PostgreSQL 16<br/>후보 단일 원본")]
+    subgraph External["EXTERNAL · jongmok-toronbang and TradingAgents"]
+        Portal["Portal and Analysis API<br/>selection validation · idempotent dispatch"]
+
+        subgraph Agents["Agents Layer"]
+            Analysts["Analysts<br/>market · fundamentals · news · sentiment"]
+            Debate["Bull and Bear<br/>evidence debate"]
+            Research["Research Manager<br/>debate synthesis"]
+            Trader["Trader<br/>proposal"]
+            Risk["Risk and Portfolio<br/>final rating"]
+            Analysts --> Debate --> Research --> Trader --> Risk
+        end
+
+        subgraph ExternalData["Data and State Layer"]
+            YFinance["yfinance<br/>OHLCV · fundamentals · news"]
+            Macro["FRED and Polymarket<br/>macro · prediction"]
+            PortalState[("MySQL and private Blob<br/>job · decision · report")]
+        end
+
+        PortalUi["Portal UI<br/>DailyAnalysis · Job status · report retrieval"]
+        Portal --> Agents
+        YFinance --> Analysts
+        Macro --> Analysts
+        Agents --> PortalState
+        PortalState --> PortalUi
     end
 
-    subgraph Automation["Daily Automation - 이 저장소"]
-        Timer["Python Durable Functions<br/>Linux FC1<br/>05:30 America New York"]
-        Durable["Replay-safe orchestrator<br/>activity와 durable timer"]
-        ACS["Azure Communication Services<br/>시작·종결 Email"]
-        State["Azure Storage<br/>history·task state·FC1 runtime·package"]
-        Runtime["Encrypted Function App Settings<br/>secure deployment parameters"]
-    end
-
-    subgraph External["외부 분석 시스템 - 이 저장소 범위 밖"]
-        Portal["Portal service API<br/>App Service"]
-        MySQL[("MySQL Flexible Server<br/>분석 작업·결과")]
-        TradingAgents["TradingAgents<br/>Azure Container App"]
-        Foundry["Microsoft Foundry<br/>모델 배포"]
-        Reports["Azure Blob Storage<br/>분석 보고서"]
-    end
-
-    Massive --> Collectors
-    SEC --> Collectors
-    Alpha --> Collectors
-    Reference --> Collectors
-    CandidateApi --> Collectors
-    Collectors --> Raw --> Normalize --> Gates --> PostgreSQL
-    PostgreSQL --> Features --> Scores --> Candidates --> PostgreSQL
-
-    Timer --> Durable
-    State --> Timer
-    Runtime --> Timer
-    Durable -->|"SHORT_5D then MEDIUM_20D<br/>멱등 DAILY 요청"| CandidateApi
-    CandidateApi -->|"모델별 selection run"| Durable
-    Durable -->|"selection run 일괄 제출"| Portal
-    Portal -->|"작업 실행"| TradingAgents
-    Portal -->|"분석 상태·결과"| MySQL
-    TradingAgents --> Foundry
-    TradingAgents --> Reports
-    Durable --> ACS
+    CandidateApi -->|"selection run batch"| Portal
 ```
 
 운영 순서는 다음과 같다.

@@ -1,11 +1,20 @@
 # 프로젝트 전체 아키텍처
 
-갱신일: 2026-10-13
+갱신일: 2026-10-14
 
-이 문서는 개발과 함께 갱신하는 후보 선정 엔진과 운영 자동화의 기준 아키텍처다.
-Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents의 분석·리포트는
-외부 시스템의 책임이다. 실선은 구현된 애플리케이션 계약 또는 Bicep에 정의된
-리소스 관계이고, 점선은 외부 시스템 내부의 논리 관계다.
+이 문서는 개발과 함께 갱신하는 `candidate_engine`과 운영 자동화의 기준
+아키텍처다. **이 프로젝트와 저장소의 제품 범위는 아래 다이어그램의
+`candidate_engine` 영역**이며, 원천 수집부터 전처리·점수·후보 통합·검증과
+5~10개 후보 API 제공까지를 책임진다.
+
+포털·TradingAgents·외부 분석 데이터·MySQL·분석 보고서 Blob은 전체 시스템의 연동
+맥락을 보여주기 위해 표시하지만 이 프로젝트의 구현 범위가 아니다. 현재 후보 원본과
+파이프라인 실행 기록의 단일 원본은 Candidate PostgreSQL이다.
+
+다이어그램의 LLM 상위 20 경로는 **candidate_engine의 계획된 확장**이다. 현재 구현된
+운영 후보는 Qlib Alpha158·LightGBM 점수와 selection policy로 생성하며, 현행
+`PROJECT-HARNESS.md`가 후보 LLM 분석을 제외하므로 LLM 경로를 활성화하려면 먼저
+하네스·입력 시점·출력 schema·검증 기준을 versioned 계약으로 변경해야 한다.
 
 오케스트레이터의 replay·멱등성·상태 전이·보안·배포 상세는
 [Durable Functions 오케스트레이터 아키텍처](orchestrator-architecture.md)를 기준으로 한다.
@@ -27,64 +36,84 @@ Candidate Engine의 책임은 후보 저장까지이며, 포털·TradingAgents�
 - 운영 스케줄은 Python Durable Functions가 담당한다. Candidate Engine은 포털이나
   TradingAgents의 분석 결과를 저장하지 않는다.
 
-## 전체 Azure 운영 아키텍처
+## 슬라이드 1 기준 전체 아키텍처
+
+| 영역 | 상태 | 이 저장소의 책임 |
+|---|---|---|
+| 원천 수집·Data Spine·Qlib Alpha158·LightGBM·selection·Candidate API | CURRENT | 포함 |
+| LLM 기업·뉴스 평가 상위 20과 수치 Top 20 통합 | PLANNED | 계약 승인 후 포함 예정 |
+| Portal·TradingAgents·외부 분석 data/state·report | EXTERNAL | 제외, API 연동만 유지 |
 
 <!-- mermaid-checked: no braces in labels, all subgraphs closed, unique ids -->
 ```mermaid
-flowchart TB
-    subgraph DataSources["Market and Reference Sources"]
-        MassiveAzure["Massive"]
-        SecAzure["SEC EDGAR"]
-        AlphaAzure["Alpha Vantage"]
-        CalendarAzure["XNYS Calendar"]
+flowchart LR
+    subgraph CandidateScope["PROJECT SCOPE · candidate_engine"]
+        subgraph Daily["Daily Orchestration · 05:30 ET"]
+            subgraph Inputs["S&P 500 Universe and Source Data"]
+                Reference["Wikipedia and SEC<br/>S&P 500 · GICS · CIK · ticker · exchange"]
+                Massive["Massive<br/>OHLCV · VWAP · SPY · actions · news"]
+                Sec["SEC EDGAR<br/>filing · submissions · normalized XBRL"]
+                Alpha["Alpha Vantage<br/>earnings calendar · estimate · reported EPS"]
+            end
+
+            DataSpine[("Candidate PostgreSQL<br/>immutable snapshot · manifest · execution context")]
+
+            subgraph Quant["Microsoft Qlib · Numeric Top 20 · CURRENT"]
+                Export["Qlib export<br/>adjusted OHLCV · calendar · span"]
+                Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
+                WalkForward["Purged walk-forward<br/>time split · train-only fit"]
+                LightGBM["LightGBM<br/>SHORT_5D · MEDIUM_20D"]
+                NumericTop["Predicted return rank<br/>numeric top 20"]
+            end
+
+            LlmTop["LLM company and news evaluation<br/>top 20 · PLANNED"]
+            Merge["Candidate merge and validation<br/>deduplication · risk factors · sector diversification"]
+            CandidateApi["Final candidates 5 to 10<br/>Candidate API · not an order"]
+
+            Reference --> DataSpine
+            Massive --> DataSpine
+            Sec --> DataSpine
+            Alpha --> DataSpine
+            DataSpine --> Export --> Features --> WalkForward --> LightGBM --> NumericTop
+            DataSpine -.-> LlmTop
+            NumericTop --> Merge
+            LlmTop -.-> Merge
+            Merge --> CandidateApi
+        end
+
+        Durable["Python Durable Functions<br/>SHORT_5D then MEDIUM_20D · idempotent control plane"]
+        CandidateState["Private Storage · Key Vault · App Insights · ACS Email"]
+        Durable --> Daily
+        CandidateState --> Durable
     end
 
-    subgraph CandidatePlane["Candidate Plane"]
-        CandidateApp["Candidate API<br/>Python App Service"]
-        CandidateEngine["Collection to Candidate Selection"]
-        CandidateDb[("PostgreSQL Flexible Server<br/>candidate source of truth")]
+    subgraph External["EXTERNAL · jongmok-toronbang and TradingAgents"]
+        Portal["Portal and Analysis API<br/>selection validation · idempotent dispatch"]
+
+        subgraph Agents["Agents Layer"]
+            Analysts["Analysts<br/>market · fundamentals · news · sentiment"]
+            Debate["Bull and Bear<br/>evidence debate"]
+            Research["Research Manager<br/>debate synthesis"]
+            Trader["Trader<br/>proposal"]
+            Risk["Risk and Portfolio<br/>final rating"]
+            Analysts --> Debate --> Research --> Trader --> Risk
+        end
+
+        subgraph ExternalData["Data and State Layer"]
+            YFinance["yfinance<br/>OHLCV · fundamentals · news"]
+            Macro["FRED and Polymarket<br/>macro · prediction"]
+            PortalState[("MySQL and private Blob<br/>job · decision · report")]
+        end
+
+        PortalUi["Portal UI<br/>DailyAnalysis · Job status · report retrieval"]
+        Portal --> Agents
+        YFinance --> Analysts
+        Macro --> Analysts
+        Agents --> PortalState
+        PortalState --> PortalUi
     end
 
-    subgraph OrchestrationPlane["Orchestration Plane defined by infra orchestrator bicep"]
-        FunctionApp["Python Durable Functions<br/>Linux Flex Consumption FC1<br/>05:30 dual parent"]
-        Guardian["15 minute resource guardian"]
-        DurableState["Private Storage Account<br/>Blob Queue Table endpoints<br/>Durable state and code package"]
-        VNet["West US 3 VNet<br/>FC1 integration and private DNS"]
-        Vault["Key Vault<br/>API keys and email settings"]
-        Insights["Application Insights<br/>Log Analytics and alerts"]
-        Email["Azure Communication Services Email"]
-    end
-
-    subgraph ExternalPlane["External Analysis Plane"]
-        PortalApi["Portal Service API<br/>App Service"]
-        PortalDb[("MySQL Flexible Server<br/>analysis jobs and results")]
-        TradingApp["TradingAgents<br/>Azure Container App"]
-        FoundryModel["Microsoft Foundry<br/>model deployments"]
-        ReportBlob["Blob Storage<br/>analysis reports"]
-    end
-
-    MassiveAzure --> CandidateEngine
-    SecAzure --> CandidateEngine
-    AlphaAzure --> CandidateEngine
-    CalendarAzure --> CandidateEngine
-    CandidateApp --> CandidateEngine
-    CandidateEngine --> CandidateDb
-
-    DurableState --> FunctionApp
-    VNet --> FunctionApp
-    Guardian --> FunctionApp
-    Vault --> FunctionApp
-    FunctionApp --> Insights
-    FunctionApp -->|"model specific notification"| Email
-    FunctionApp -->|"SHORT then MEDIUM idempotent DAILY"| CandidateApp
-    CandidateApp -->|"candidate and run status"| FunctionApp
-    FunctionApp -->|"selection run batch"| PortalApi
-    PortalApi -->|"aggregate status"| FunctionApp
-
-    PortalApi -->|"persist external analysis state"| PortalDb
-    PortalApi -.->|"dispatch analysis"| TradingApp
-    TradingApp -.->|"inference"| FoundryModel
-    TradingApp -.->|"write report"| ReportBlob
+    CandidateApi -->|"selection run batch"| Portal
 ```
 
 ### 05:30 ET 실행 계약
