@@ -1,6 +1,6 @@
 # 후보 선정 모델 아키텍처
 
-갱신일: 2026-10-12
+갱신일: 2026-10-16
 
 이 문서는 point-in-time 원천 데이터가 Qlib 특징, label, 모델 평가, 일일 score와 5~10개 후보로 변환되는 계약을 정의한다. 후보는 후속 상세 분석 대상이며 매수 신호나 수익 보장이 아니다.
 
@@ -336,6 +336,75 @@ VERIFY: 실제 `bagging_freq`, regularization, sample weights, deterministic 설
 `SHORT_5D` model v2는 Rank IC가 음수여서 `SHADOW`다. `MEDIUM_20D` v1은
 16개 test block에서 coverage 100%, Rank IC 0.006072였지만 2년
 historical reconstruction만 검증했으므로 역시 `SHADOW`다.
+
+## 6.1 주간 재학습·artifact binding [CURRENT / PARTIAL]
+
+상세 계약은 루트의 `weekly_retraining_model_design.md`를 기준으로 한다. 여기서
+**구현**은 저장소 코드 존재, **검증**은 자동 테스트 또는 명시된 PostgreSQL 검증
+통과, **배포**는 운영 Azure resource에 적용하고 실행을 확인한 상태를 뜻한다.
+
+| 항목 | 구현 | 검증 | 배포 |
+|---|---|---|---|
+| production selection을 쓰지 않는 training-only workflow | 완료 | 단위 테스트 | 운영 Job 검증 안 됨 |
+| absolute/relative promotion evaluator | 완료 | finite·경계·목적 단위 테스트 | weekly job과 미통합 |
+| schema-v2 immutable manifest packaging/loader | 완료 | hash·purpose·Blob metadata·multiprocess cache 테스트 | private Blob E2E 안 됨 |
+| active assignment schema와 generation CAS | 완료 | PostgreSQL 16.15 적용·rollback·CAS 검증 | DB migration 적용 |
+| DAILY process metadata pinning | 완료 | pointer 변경·fallback 단위 테스트 | backend 운영 배포 검증 안 됨 |
+| 자동 activation smoke/rollback | 기반 schema/repository만 완료 | E2E 안 됨 | 안 됨 |
+
+### Training-only 경계
+
+`run_training_only_workflow()`는 기존 시간순 walk-forward 학습·평가와 `SHADOW`
+registry 등록을 재사용하지만 `persist_selection=false`로 production scoring 및
+selection 저장을 실행하지 않는다. `WeeklyTrainingJob`은 `PENDING -> RUNNING ->
+EVALUATED` 또는 `FAILED` 상태를 관리한다. 현재 weekly job에는 promotion evaluator,
+artifact upload, `model_promotion_decision` 저장과 active assignment CAS activation이
+아직 연결되지 않았다.
+
+### Promotion policy
+
+`weekly_retraining_v1.yaml`은 두 model purpose마다 coverage, test block 수,
+Rank IC mean, fold Rank IC median, net Top-10 return, Top-10 max drawdown의 absolute
+gate와 incumbent-relative delta gate를 정의한다. gate 입력이 누락되거나 NaN/Infinity
+등 non-finite이면 `REJECT`한다. incumbent가 없는 최초 bootstrap은 absolute gate를
+통과해야 하며 relative gate는 `no_incumbent`로 기록된다.
+
+이 evaluator의 구현·테스트는 model 승격 사실을 의미하지 않는다. 현재 문서에 기록된
+`SHORT_5D` v2와 `MEDIUM_20D` v1은 계속 `SHADOW`이며 새 `CHAMPION`을 선언하지 않는다.
+
+### Immutable artifact와 active assignment
+
+schema-v2 manifest는 model purpose, label/prediction semantics, horizon,
+`model_version_id`, feature 이름·순서, feature/config hash와 **model weight SHA-256**을
+고정한다. manifest 파일 자체의 SHA-256은 model weight SHA-256과 구분하여
+assignment의 `artifact_hash`로 저장한다.
+
+`analytics.active_model_assignment`는 purpose별 authoritative pointer이며 manifest
+URI/hash, Blob ETag 또는 version ID, generation, weekly run과 model version을
+보존한다. 갱신은 row lock과 expected-generation CAS를 사용하고 activation/rollback
+history를 append한다. 운영 assignment는 private Azure Blob HTTPS를 전제로 하며,
+`file://`은 로컬 검증·migration fallback용 loader 계약이다.
+
+### DAILY pinning
+
+DAILY 실행은 purpose별 assignment를 최초 한 번 읽고 전체 binding을
+`ops.process_run.metadata.model_bindings`에 저장한다. 이후 retry는 active pointer를
+다시 선택하지 않고 pinned URI, manifest hash, ETag/version, generation,
+`model_version_id`와 weekly run identity를 재사용한다. loader는 content-addressed
+local cache에서 manifest/model hash를 재검증하며 manifest의 model version과 pin이
+다르면 scoring 전에 실패한다.
+
+assignment가 없을 때만 기존 App Settings manifest fallback을 사용할 수 있다.
+`SHORT_5D`와 `MEDIUM_20D` 사이의 fallback은 금지한다. 이 pinning 경로는 코드와
+단위 테스트가 존재하지만 운영 backend deployment는 별도 검증 대상이다.
+
+### PostgreSQL 16 검증 범위
+
+2026-10-16 Azure PostgreSQL 16.15에서 migration 전체 transaction rollback과 실제
+적용을 확인했다. 실제 FK를 사용해 초기 generation 0→1, stale generation 차단,
+purpose 일치 제약과 rollback history를 rollback transaction 안에서 검증했다.
+이는 weekly schema의 DB 적용·동시성 계약 검증이며, artifact가 업로드되었거나 모델이
+승격되었다는 증거가 아니다.
 
 ## 7. 일일 scoring [CURRENT]
 

@@ -1,0 +1,54 @@
+name: weekly-retraining
+version: "weekly-v1"
+window: EXPANDING
+execution: SEQUENTIAL_INDEPENDENT
+promotion:
+  activation: AUTOMATIC_GATED_CAS
+  rollback: AUTOMATIC
+  purposes:
+    SHORT_5D:
+      absolute:
+        coverage:
+          minimum: 0.80
+        test_blocks:
+          minimum: 3
+        rank_ic_mean:
+          minimum: 0.01
+        fold_rank_ic_median:
+          minimum: 0.00
+        net_top_10_return:
+          minimum: 0.00
+        max_drawdown_top_10:
+          minimum: -0.25
+      relative:
+        rank_ic_mean:
+          minimum_delta: 0.00
+        fold_rank_ic_median:
+          minimum_delta: 0.00
+        net_top_10_return:
+          minimum_delta: 0.00
+        max_drawdown_top_10:
+          minimum_delta: 0.00
+    MEDIUM_20D:
+      absolute:
+        coverage:
+          minimum: 0.80
+        test_blocks:
+          minimum: 3
+        rank_ic_mean:
+          minimum: 0.01
+        fold_rank_ic_median:
+          minimum: 0.00
+        net_top_10_return:
+          minimum: 0.00
+        max_drawdown_top_10:
+          minimum: -0.35
+      relative:
+        rank_ic_mean:
+          minimum_delta: 0.00
+        fold_rank_ic_median:
+          minimum_delta: 0.00
+        net_top_10_return:
+          minimum_delta: 0.00
+        max_drawdown_top_10:
+          minimum_delta: 0.00

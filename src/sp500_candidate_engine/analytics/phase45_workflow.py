@@ -73,6 +73,20 @@ class Phase45Summary:
     scorecard_quality_gate_passed: bool = False
 
 
+@dataclass(frozen=True)
+class TrainingWorkflowSummary:
+    experiment_key: str
+    experiment_dir: Path
+    export_run_id: uuid.UUID
+    model_version_id: uuid.UUID
+    selected_shadow_model: str
+    metrics: dict[str, dict[str, object]]
+    model_purpose: str
+    prediction_horizon_sessions: int
+    return_policy: str
+    scorecard_quality_gate_passed: bool
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -388,28 +402,33 @@ def _segment_index(
     return labels.index[mask]
 
 
-def run_phase45_workflow(
+def _run_phase45_workflow(
     *,
     settings: Settings,
     export_dir: Path,
     model_config: VersionedConfig,
     label_config: VersionedConfig,
-    selection_config: VersionedConfig,
+    selection_config: VersionedConfig | None,
     output_root: Path,
-) -> Phase45Summary:
+    persist_selection: bool,
+) -> Phase45Summary | TrainingWorkflowSummary:
+    if persist_selection != (selection_config is not None):
+        raise ValueError(
+            "selection_config is required exactly when production selection is persisted"
+        )
     export_manifest = json.loads(
         (export_dir / "manifest.json").read_text(encoding="utf-8")
     )
     fit_at = pd.Timestamp(export_manifest["cutoff_at"])
     export_run_id = uuid.UUID(export_manifest["export_run_id"])
-    experiment_key = _canonical_hash(
-        {
-            "export_hash": export_manifest["content_hash"],
-            "model_config_hash": model_config.config_hash,
-            "label_config_hash": label_config.config_hash,
-            "selection_config_hash": selection_config.config_hash,
-        }
-    )
+    experiment_identity = {
+        "export_hash": export_manifest["content_hash"],
+        "model_config_hash": model_config.config_hash,
+        "label_config_hash": label_config.config_hash,
+    }
+    if selection_config is not None:
+        experiment_identity["selection_config_hash"] = selection_config.config_hash
+    experiment_key = _canonical_hash(experiment_identity)
     experiment_dir = Path(output_root) / experiment_key[:24]
     experiment_dir.mkdir(parents=True, exist_ok=True)
     model_payload = model_config.payload
@@ -701,79 +720,120 @@ def run_phase45_workflow(
                 )
             )
 
-        latest_date = pd.Timestamp(export_row["end_date"])
-        latest_index = data.features.index[
-            data.features.index.get_level_values("datetime") == latest_date
-        ]
-        latest_features = data.features.loc[latest_index]
-        if selected_shadow_model == "lightgbm":
-            latest_prediction = lightgbm_final.predict(latest_features)
-        elif selected_shadow_model == "ridge":
-            latest_prediction = ridge_final.predict(latest_features)
-        else:
-            latest_prediction = data.momentum.loc[latest_index]
-        eligible_metadata = data.metadata
-        raw_scores: dict[uuid.UUID, float] = {}
-        sectors: dict[uuid.UUID, str | None] = {}
-        for (_, instrument), score in latest_prediction.dropna().items():
-            if instrument not in eligible_metadata.index:
-                continue
-            row = eligible_metadata.loc[instrument]
-            instrument_id = row["instrument_id"]
-            raw_scores[instrument_id] = float(score)
-            sectors[instrument_id] = row["sector"]
-        daily_scores = rank_daily_scores(
-            session_date=latest_date.date(),
-            raw_scores=raw_scores,
-            sectors=sectors,
-        )
-        score_repository = ScoreRepository(connection)
-        scoring_run_id = score_repository.create_run(
-            session_date=latest_date.date(),
-            execution_context_id=export_row["execution_context_id"],
+        if persist_selection:
+            assert selection_config is not None
+            latest_date = pd.Timestamp(export_row["end_date"])
+            latest_index = data.features.index[
+                data.features.index.get_level_values("datetime") == latest_date
+            ]
+            latest_features = data.features.loc[latest_index]
+            if selected_shadow_model == "lightgbm":
+                latest_prediction = lightgbm_final.predict(latest_features)
+            elif selected_shadow_model == "ridge":
+                latest_prediction = ridge_final.predict(latest_features)
+            else:
+                latest_prediction = data.momentum.loc[latest_index]
+            eligible_metadata = data.metadata
+            raw_scores: dict[uuid.UUID, float] = {}
+            sectors: dict[uuid.UUID, str | None] = {}
+            for (_, instrument), score in latest_prediction.dropna().items():
+                if instrument not in eligible_metadata.index:
+                    continue
+                row = eligible_metadata.loc[instrument]
+                instrument_id = row["instrument_id"]
+                raw_scores[instrument_id] = float(score)
+                sectors[instrument_id] = row["sector"]
+            daily_scores = rank_daily_scores(
+                session_date=latest_date.date(),
+                raw_scores=raw_scores,
+                sectors=sectors,
+            )
+            score_repository = ScoreRepository(connection)
+            scoring_run_id = score_repository.create_run(
+                session_date=latest_date.date(),
+                execution_context_id=export_row["execution_context_id"],
+                export_run_id=export_run_id,
+                model_version_id=model_ids[selected_shadow_model],
+                universe_version_id=export_row["universe_version_id"],
+                config_hash=effective_model_hash,
+                score_semantics=score_semantics,
+                prediction_horizon_sessions=horizon_sessions,
+            )
+            score_repository.write_scores(
+                scoring_run_id=scoring_run_id,
+                scores=daily_scores,
+                prediction_horizon=horizon_sessions,
+            )
+            selection_payload = selection_config.payload
+            policy = SelectionPolicy(
+                minimum_candidates=int(selection_payload["minimum_candidates"]),
+                maximum_candidates=int(selection_payload["maximum_candidates"]),
+                sector_cap=int(selection_payload["sector_cap"]),
+                relaxed_sector_cap=int(selection_payload["relaxed_sector_cap"]),
+            )
+            candidate_metadata = {
+                row["instrument_id"]: CandidateMetadata(
+                    instrument_id=row["instrument_id"],
+                    issuer_id=row["issuer_id"],
+                    symbol=str(row["symbol"]),
+                    sector=row["sector"],
+                )
+                for _, row in eligible_metadata.iterrows()
+            }
+            selection_result = select_candidates(
+                scores=daily_scores,
+                metadata=candidate_metadata,
+                policy=policy,
+            )
+            generated_at = datetime.now(UTC)
+            selection_run_id = SelectionRepository(connection).persist(
+                price_session_date=latest_date.date(),
+                cutoff_at=export_row["cutoff_at"],
+                generated_at=generated_at,
+                valid_until=None,
+                scoring_run_id=scoring_run_id,
+                policy_version=str(selection_payload["version"]),
+                requested_count=policy.maximum_candidates,
+                result=selection_result,
+            )
+
+    metrics_path = experiment_dir / "metrics.json"
+    metrics_path.write_text(
+        json.dumps(
+            {
+                "experiment_key": experiment_key,
+                "selected_shadow_model": selected_shadow_model,
+                "promotion_gate_passed": False,
+                "scorecard_quality_gate_passed": scorecard_quality_gate_passed,
+                "model_purpose": model_purpose,
+                "prediction_horizon_sessions": horizon_sessions,
+                "return_policy": return_policy,
+                "label_name": label_config.name,
+                "label_version": label_config.version,
+                "label_config_hash": label_config.config_hash,
+                "metrics": metrics,
+                "model_version_ids": {
+                    name: str(value) for name, value in model_ids.items()
+                },
+            },
+            default=str,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    if not persist_selection:
+        return TrainingWorkflowSummary(
+            experiment_key=experiment_key,
+            experiment_dir=experiment_dir,
             export_run_id=export_run_id,
             model_version_id=model_ids[selected_shadow_model],
-            universe_version_id=export_row["universe_version_id"],
-            config_hash=effective_model_hash,
-            score_semantics=score_semantics,
+            selected_shadow_model=selected_shadow_model,
+            metrics=metrics,
+            model_purpose=model_purpose,
             prediction_horizon_sessions=horizon_sessions,
-        )
-        score_repository.write_scores(
-            scoring_run_id=scoring_run_id,
-            scores=daily_scores,
-            prediction_horizon=horizon_sessions,
-        )
-        selection_payload = selection_config.payload
-        policy = SelectionPolicy(
-            minimum_candidates=int(selection_payload["minimum_candidates"]),
-            maximum_candidates=int(selection_payload["maximum_candidates"]),
-            sector_cap=int(selection_payload["sector_cap"]),
-            relaxed_sector_cap=int(selection_payload["relaxed_sector_cap"]),
-        )
-        candidate_metadata = {
-            row["instrument_id"]: CandidateMetadata(
-                instrument_id=row["instrument_id"],
-                issuer_id=row["issuer_id"],
-                symbol=str(row["symbol"]),
-                sector=row["sector"],
-            )
-            for index, row in eligible_metadata.iterrows()
-        }
-        selection_result = select_candidates(
-            scores=daily_scores,
-            metadata=candidate_metadata,
-            policy=policy,
-        )
-        generated_at = datetime.now(UTC)
-        selection_run_id = SelectionRepository(connection).persist(
-            price_session_date=latest_date.date(),
-            cutoff_at=export_row["cutoff_at"],
-            generated_at=generated_at,
-            valid_until=None,
-            scoring_run_id=scoring_run_id,
-            policy_version=str(selection_payload["version"]),
-            requested_count=policy.maximum_candidates,
-            result=selection_result,
+            return_policy=return_policy,
+            scorecard_quality_gate_passed=scorecard_quality_gate_passed,
         )
 
     payload = candidate_result_payload(
@@ -800,31 +860,6 @@ def run_phase45_workflow(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    metrics_path = experiment_dir / "metrics.json"
-    metrics_path.write_text(
-        json.dumps(
-            {
-                "experiment_key": experiment_key,
-                "selected_shadow_model": selected_shadow_model,
-                "promotion_gate_passed": False,
-                "scorecard_quality_gate_passed": scorecard_quality_gate_passed,
-                "model_purpose": model_purpose,
-                "prediction_horizon_sessions": horizon_sessions,
-                "return_policy": return_policy,
-                "label_name": label_config.name,
-                "label_version": label_config.version,
-                "label_config_hash": label_config.config_hash,
-                "metrics": metrics,
-                "model_version_ids": {
-                    name: str(value) for name, value in model_ids.items()
-                },
-            },
-            default=str,
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
     return Phase45Summary(
         experiment_key=experiment_key,
         experiment_dir=experiment_dir,
@@ -843,3 +878,48 @@ def run_phase45_workflow(
         return_policy=return_policy,
         scorecard_quality_gate_passed=scorecard_quality_gate_passed,
     )
+
+
+def run_phase45_workflow(
+    *,
+    settings: Settings,
+    export_dir: Path,
+    model_config: VersionedConfig,
+    label_config: VersionedConfig,
+    selection_config: VersionedConfig,
+    output_root: Path,
+) -> Phase45Summary:
+    summary = _run_phase45_workflow(
+        settings=settings,
+        export_dir=export_dir,
+        model_config=model_config,
+        label_config=label_config,
+        selection_config=selection_config,
+        output_root=output_root,
+        persist_selection=True,
+    )
+    if not isinstance(summary, Phase45Summary):
+        raise RuntimeError("DAILY phase45 workflow did not persist selection")
+    return summary
+
+
+def run_training_only_workflow(
+    *,
+    settings: Settings,
+    export_dir: Path,
+    model_config: VersionedConfig,
+    label_config: VersionedConfig,
+    output_root: Path,
+) -> TrainingWorkflowSummary:
+    summary = _run_phase45_workflow(
+        settings=settings,
+        export_dir=export_dir,
+        model_config=model_config,
+        label_config=label_config,
+        selection_config=None,
+        output_root=output_root,
+        persist_selection=False,
+    )
+    if not isinstance(summary, TrainingWorkflowSummary):
+        raise RuntimeError("Training-only workflow attempted production selection")
+    return summary

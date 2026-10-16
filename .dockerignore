@@ -1,0 +1,12 @@
+.git
+.github
+.venv*
+.local
+data
+htmlcov
+infra
+orchestrator
+tests
+*.log
+*.pyc
+__pycache__

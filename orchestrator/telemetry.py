@@ -21,6 +21,9 @@ SAFE_FIELDS = frozenset(
         "state",
         "stage",
         "remediated",
+        "iso_week",
+        "weekly_run_id",
+        "job_execution_name",
     }
 )
 

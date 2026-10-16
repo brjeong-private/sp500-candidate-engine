@@ -2,6 +2,39 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## Weekly retraining control contract — 2026-10-16
+
+이 항목은 모델 release나 승격 기록이 아니라 주간 재학습 control contract의 구현
+기록이다. `SHORT_5D`와 `MEDIUM_20D`의 label·score 의미와 기존 model version은
+변경하지 않았다.
+
+- production score·selection을 쓰지 않는 `run_training_only_workflow()`와 주간 run
+  상태 전이를 구현했다. 학습 결과는 우선 `SHADOW`로 등록된다.
+- versioned absolute/현 champion 대비 relative promotion gate를 구현했다. coverage,
+  test block 수, Rank IC, fold Rank IC 중앙값, net Top-10 return, Top-10 max drawdown이
+  누락되거나 유한하지 않으면 fail closed한다.
+- schema-v2 manifest와 model weight의 SHA-256을 서로 다른 값으로 관리하고,
+  `SHORT_5D`/`MEDIUM_20D` 목적·label·prediction horizon 계약을 검증한다.
+- PostgreSQL active assignment는 manifest URI/SHA-256, Blob ETag/version, generation을
+  보존하며 expected-generation CAS와 rollback history를 사용한다.
+- DAILY 실행은 최초 assignment를 process metadata에 pin하고 retry에서도 같은
+  generation과 artifact identity를 사용한다. 목적 간 artifact fallback은 허용하지 않는다.
+- Azure PostgreSQL 16.15에서 migration rollback/실제 적용과 FK, generation CAS,
+  stale-write 차단, rollback history를 검증했다.
+
+상태 구분:
+
+- **구현·자동 테스트 완료**: training-only 분기, promotion evaluator, artifact
+  packaging/loading/cache, assignment repository, DAILY pinning.
+- **DB 적용·검증 완료**: PostgreSQL 16.15 weekly schema와 제약.
+- **배포 검증 안 됨**: 이 코드와 주간 Container Job/Blob/DAILY backend의 운영
+  deployment 및 promotion E2E.
+- **아직 통합 안 됨**: weekly job의 gate 평가·decision 저장·artifact upload·CAS
+  activation·activation smoke·자동 rollback 연결.
+
+이 변경으로 승격된 모델은 없다. 아래에 기록된 기존 모델 상태를 변경하거나 새로운
+`CHAMPION`을 주장하지 않는다.
+
 ## MEDIUM_20D v1 — 2026-10-11
 
 - 기존 `SHORT_5D`를 보존하고 Alpha158·LightGBM 기반 20거래일 raw-return

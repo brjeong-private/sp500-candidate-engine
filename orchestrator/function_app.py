@@ -10,6 +10,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import azure.durable_functions as df
 import azure.functions as func
 from clients import (
+    activation_smoke as activation_smoke_client,
+)
+from clients import (
     candidate_run_status as candidate_run_status_client,
 )
 from clients import (
@@ -28,22 +31,34 @@ from clients import (
     send_email as send_email_client,
 )
 from clients import (
+    start_weekly_training_job as start_weekly_training_job_client,
+)
+from clients import (
     submit_candidate_daily as submit_candidate_daily_client,
 )
 from clients import (
     submit_portal_candidate_analysis as submit_portal_candidate_analysis_client,
 )
+from clients import submit_weekly_training as submit_weekly_training_client
+from clients import weekly_eligibility as weekly_eligibility_client
+from clients import weekly_training_job_status as weekly_training_job_status_client
+from clients import weekly_training_status as weekly_training_status_client
 from guardian import run_guardian
 from scheduler import (
     orchestration_instance_id,
     parent_orchestration_instance_id,
     scheduled_analysis_date,
+    scheduled_weekly_iso_week,
     validate_model_purpose,
     validate_target_date,
+    weekly_model_instance_id,
+    weekly_parent_instance_id,
 )
 from telemetry import emit_pipeline_telemetry as emit_pipeline_telemetry_client
 from workflow import daily_orchestrator as daily_orchestrator_generator
 from workflow import dual_model_parent as dual_model_parent_generator
+from workflow import weekly_model_orchestrator as weekly_model_orchestrator_generator
+from workflow import weekly_parent_orchestrator as weekly_parent_orchestrator_generator
 
 app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -73,6 +88,18 @@ def _parent_orchestration_input(analysis_date) -> dict[str, object]:
         "poll_seconds": _positive_int("ORCHESTRATOR_POLL_SECONDS", 60),
         "child_instance_ids": {
             model_purpose: orchestration_instance_id(analysis_date, model_purpose)
+            for model_purpose in ("SHORT_5D", "MEDIUM_20D")
+        },
+    }
+
+
+def _weekly_parent_input(iso_week: str) -> dict[str, object]:
+    return {
+        "iso_week": iso_week,
+        "timeout_minutes": _positive_int("ORCHESTRATOR_WEEKLY_TIMEOUT_MINUTES", 720),
+        "poll_seconds": _positive_int("ORCHESTRATOR_WEEKLY_POLL_SECONDS", 60),
+        "child_instance_ids": {
+            model_purpose: weekly_model_instance_id(iso_week, model_purpose)
             for model_purpose in ("SHORT_5D", "MEDIUM_20D")
         },
     }
@@ -186,7 +213,17 @@ async def hourly_timer(timer: func.TimerRequest, client: df.DurableOrchestration
 
 
 async def _hourly_timer(client: df.DurableOrchestrationClient) -> None:
-    analysis_date = scheduled_analysis_date(datetime.now(UTC))
+    now = datetime.now(UTC)
+    iso_week = scheduled_weekly_iso_week(now)
+    if iso_week is not None:
+        weekly_instance_id = weekly_parent_instance_id(iso_week)
+        if not _is_active_instance(await client.get_status(weekly_instance_id)):
+            await client.start_new(
+                "weekly_parent_orchestrator",
+                weekly_instance_id,
+                _weekly_parent_input(iso_week),
+            )
+    analysis_date = scheduled_analysis_date(now)
     if analysis_date is None:
         return
     instance_id = parent_orchestration_instance_id(analysis_date)
@@ -221,6 +258,18 @@ def daily_orchestrator(context: df.DurableOrchestrationContext):
 @app.orchestration_trigger(context_name="context")
 def dual_model_parent(context: df.DurableOrchestrationContext):
     return dual_model_parent_generator(context)
+
+
+@app.function_name(name="weekly_parent_orchestrator")
+@app.orchestration_trigger(context_name="context")
+def weekly_parent_orchestrator(context: df.DurableOrchestrationContext):
+    return weekly_parent_orchestrator_generator(context)
+
+
+@app.function_name(name="weekly_model_orchestrator")
+@app.orchestration_trigger(context_name="context")
+def weekly_model_orchestrator(context: df.DurableOrchestrationContext):
+    return weekly_model_orchestrator_generator(context)
 
 
 @app.function_name(name="check_exchange_session")
@@ -276,3 +325,40 @@ def send_email(payload: dict):
 @app.activity_trigger(input_name="payload")
 def emit_pipeline_telemetry(payload: dict):
     return emit_pipeline_telemetry_client(payload)
+
+
+@app.function_name(name="weekly_eligibility")
+@app.activity_trigger(input_name="_unused")
+def weekly_eligibility(_unused):
+    del _unused
+    return weekly_eligibility_client()
+
+
+@app.function_name(name="submit_weekly_training")
+@app.activity_trigger(input_name="request")
+def submit_weekly_training(request: dict):
+    return submit_weekly_training_client(request)
+
+
+@app.function_name(name="start_weekly_training_job")
+@app.activity_trigger(input_name="request")
+def start_weekly_training_job(request: dict):
+    return start_weekly_training_job_client(request)
+
+
+@app.function_name(name="weekly_training_job_status")
+@app.activity_trigger(input_name="execution_name")
+def weekly_training_job_status(execution_name: str):
+    return weekly_training_job_status_client(execution_name)
+
+
+@app.function_name(name="weekly_training_status")
+@app.activity_trigger(input_name="weekly_run_id")
+def weekly_training_status(weekly_run_id: str):
+    return weekly_training_status_client(weekly_run_id)
+
+
+@app.function_name(name="weekly_activation_smoke")
+@app.activity_trigger(input_name="weekly_run_id")
+def weekly_activation_smoke(weekly_run_id: str):
+    return activation_smoke_client(weekly_run_id)

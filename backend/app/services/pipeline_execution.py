@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import exchange_calendars
+from azure.identity import DefaultAzureCredential
 
 from backend.app.schemas.execution import PipelineRunAccepted, PipelineRunRequest
 from sp500_candidate_engine.backfill import backfill_cutoff, build_backfill_plan
@@ -63,6 +64,7 @@ class PipelineExecutionService:
         candidate_artifact_manifest: Path | None = None,
         candidate_artifact_manifest_sha256: str | None = None,
         workspace_dir: Path | None = None,
+        model_artifact_loader: object | None = None,
     ) -> None:
         self.database = database
         self.settings = settings
@@ -106,6 +108,7 @@ class PipelineExecutionService:
         self.medium_candidate_artifact_manifest_sha256 = os.environ.get(
             "BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D"
         )
+        self.model_artifact_loader = model_artifact_loader
 
     def validate_request(
         self, request: PipelineRunRequest, *, now: datetime | None = None
@@ -291,7 +294,11 @@ class PipelineExecutionService:
                     target_date=request.date,
                     run_candidates=True,
                     process_run_id=process_run_id,
-                    candidate_runner=self.run_candidate_inference,
+                    candidate_runner=lambda settings, **kwargs: self.run_candidate_inference(
+                        settings,
+                        process_run_id=process_run_id,
+                        **kwargs,
+                    ),
                     model_purpose=request.model_purpose,
                 )
                 if result["status"] == "SUCCEEDED":
@@ -495,18 +502,36 @@ class PipelineExecutionService:
         target_date: date,
         repository_root: Path,
         model_purpose: str = "SHORT_5D",
+        process_run_id: uuid.UUID | None = None,
     ) -> SimpleNamespace:
         """Use a provisioned model without training, fitting processors, or fallback."""
         try:
             contract = MODEL_PURPOSE_CONTRACTS[model_purpose]
         except KeyError as error:
             raise RuntimeError(f"Unsupported model purpose: {model_purpose}") from error
-        if model_purpose == "SHORT_5D":
+        pinned_artifact = (
+            self._resolve_daily_artifact_binding(
+                process_run_id=process_run_id,
+                model_purpose=model_purpose,
+            )
+            if process_run_id is not None
+            else None
+        )
+        if pinned_artifact is not None:
+            configured_manifest = pinned_artifact.manifest_path
+            configured_manifest_sha256 = pinned_artifact.manifest_sha256
+            pinned_model_path = pinned_artifact.model_path
+            pinned_model_version_id = pinned_artifact.manifest.model_version_id
+        elif model_purpose == "SHORT_5D":
             configured_manifest = self.candidate_artifact_manifest
             configured_manifest_sha256 = self.candidate_artifact_manifest_sha256
+            pinned_model_path = None
+            pinned_model_version_id = None
         else:
             configured_manifest = self.medium_candidate_artifact_manifest
             configured_manifest_sha256 = self.medium_candidate_artifact_manifest_sha256
+            pinned_model_path = None
+            pinned_model_version_id = None
         if configured_manifest is None or not configured_manifest_sha256:
             raise RuntimeError(
                 f"DAILY {model_purpose} inference requires its explicitly provisioned candidate "
@@ -557,7 +582,11 @@ class PipelineExecutionService:
         ):
             raise RuntimeError("Candidate artifact manifest model-purpose contract mismatch")
         model_id = uuid.UUID(manifest["model_version_id"])
-        model_path = (manifest_path.parent / manifest["model_file"]).resolve()
+        if pinned_model_version_id is not None and model_id != pinned_model_version_id:
+            raise RuntimeError("Pinned assignment model version mismatch")
+        model_path = pinned_model_path or (
+            manifest_path.parent / manifest["model_file"]
+        ).resolve()
         if not model_path.is_relative_to(manifest_path.parent):
             raise RuntimeError("Model file must reside inside the provisioned artifact directory")
         model_hash = hashlib.sha256(model_path.read_bytes()).hexdigest()
@@ -777,3 +806,105 @@ class PipelineExecutionService:
             model_status=str(model_row["promotion_status"]),
             promotion_gate_passed=False,
         )
+
+    def _resolve_daily_artifact_binding(
+        self,
+        *,
+        process_run_id: uuid.UUID,
+        model_purpose: str,
+    ):
+        from backend.app.services.model_artifacts import (
+            ArtifactBinding,
+            ModelArtifactLoader,
+        )
+
+        with self.database.connect() as connection, connection.transaction():
+            process = connection.execute(
+                """
+                SELECT metadata
+                  FROM ops.process_run
+                 WHERE process_run_id = %s
+                 FOR UPDATE
+                """,
+                (process_run_id,),
+            ).fetchone()
+            if process is None:
+                raise RuntimeError("DAILY process run is missing while binding active model")
+            metadata = process["metadata"]
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            if not isinstance(metadata, dict):
+                raise RuntimeError("DAILY process metadata must be a JSON object")
+            model_bindings = metadata.get("model_bindings", {})
+            if not isinstance(model_bindings, dict):
+                raise RuntimeError("DAILY model bindings metadata is invalid")
+            binding_payload = model_bindings.get(model_purpose)
+            if binding_payload is None:
+                assignment = connection.execute(
+                    """
+                    SELECT model_purpose, model_version_id, artifact_uri,
+                           artifact_hash, blob_etag, blob_version_id, generation,
+                           weekly_run_id
+                      FROM analytics.active_model_assignment
+                     WHERE model_purpose = %s
+                    """,
+                    (model_purpose,),
+                ).fetchone()
+                if assignment is None:
+                    return None
+                binding_payload = {
+                    "model_purpose": str(assignment["model_purpose"]),
+                    "model_version_id": str(assignment["model_version_id"]),
+                    "artifact_uri": str(assignment["artifact_uri"]),
+                    "artifact_hash": str(assignment["artifact_hash"]),
+                    "blob_etag": assignment["blob_etag"],
+                    "blob_version_id": assignment["blob_version_id"],
+                    "generation": int(assignment["generation"]),
+                    "weekly_run_id": str(assignment["weekly_run_id"]),
+                }
+                model_bindings = {**model_bindings, model_purpose: binding_payload}
+                connection.execute(
+                    """
+                    UPDATE ops.process_run
+                       SET metadata = metadata || %s::jsonb
+                     WHERE process_run_id = %s
+                    """,
+                    (
+                        json.dumps({"model_bindings": model_bindings}),
+                        process_run_id,
+                    ),
+                )
+            if (
+                not isinstance(binding_payload, dict)
+                or binding_payload.get("model_purpose") != model_purpose
+            ):
+                raise RuntimeError("Pinned DAILY model purpose mismatch")
+
+        binding = ArtifactBinding(
+            model_purpose=model_purpose,
+            artifact_uri=str(binding_payload["artifact_uri"]),
+            artifact_hash=str(binding_payload["artifact_hash"]),
+            blob_etag=(
+                str(binding_payload["blob_etag"])
+                if binding_payload.get("blob_etag") is not None
+                else None
+            ),
+            blob_version_id=(
+                str(binding_payload["blob_version_id"])
+                if binding_payload.get("blob_version_id") is not None
+                else None
+            ),
+        )
+        loader = self.model_artifact_loader
+        if loader is None:
+            loader = ModelArtifactLoader(
+                self.workspace_dir / "models" / "cache",
+                credential=DefaultAzureCredential(),
+            )
+            self.model_artifact_loader = loader
+        artifact = loader.load(binding)  # type: ignore[attr-defined]
+        if str(artifact.manifest.model_version_id) != str(
+            binding_payload["model_version_id"]
+        ):
+            raise RuntimeError("Pinned assignment model version mismatch")
+        return artifact

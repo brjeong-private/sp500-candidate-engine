@@ -1,5 +1,32 @@
 # 매일 추론·주 1회 재학습 구현 Handoff Plan
 
+## 현재 진행 상태 (2026-10-16)
+
+- Phase 1~10 구현, 문서 정합화, Azure 배포와 실제 canary 검증을 완료했다.
+- `sql/021_weekly_retraining.sql`을 Azure PostgreSQL 16.15에 적용하고 실제 FK 기반
+  generation CAS, stale write 차단, rollback history를 transaction 검증했다.
+- training-only workflow, cutoff-fixed historical export, SHADOW 등록, versioned
+  absolute/relative gate, immutable schema-v2 Blob artifact, active assignment CAS,
+  DAILY process별 binding pinning을 연결했다.
+- weekly API와 Durable parent/child, Container Apps Job start/poll, 실패 run 재시도,
+  SHORT 실패와 무관한 MEDIUM 실행을 구현했다.
+- Candidate 전용 Korea Central private Container Apps·ACR·Blob·VNet·private
+  endpoint와 최소 권한 관리 ID를 배포했다.
+- Backend P3v3/capacity 1·VNet integration, Durable weekly functions, training image,
+  PostgreSQL Entra principal/grant를 배포했다.
+- 전체 pytest 365건과 focused weekly/IaC/Bicep 검증을 통과했다.
+- 실제 cutoff-fixed 2년 Qlib export는 251,978행을 생성했고 SHORT·MEDIUM
+  Container Apps Job은 모두 성공했다. 두 challenger는 promotion gate에서
+  `REJECT`되어 active assignment와 legacy fallback을 변경하지 않았다.
+- Durable validation parent는 SHORT·MEDIUM의 독립 `REJECTED` 결과를 보존하면서
+  `SUCCEEDED`로 완료했다. historical reconstruction context에서 잘못 생성된
+  추가 MEDIUM validation run과 decision은 의존성 검증 후 제거했다.
+- 최종 Backend는 P3v3/capacity 1과 VNet integration을 유지하고 live/readiness,
+  execution binding route, operational manifest eligibility를 통과했다. ACR·Blob
+  private access, Blob versioning, PostgreSQL ReadOnly lock도 확인했다.
+- Phase 11의 전체 pytest 365건, Ruff, Bicep compile, diff/secret/IDE 문제 검증을
+  통과했으며 이 변경 집합의 branch commit/push로 계획을 마감한다.
+
 ## 1. 문서 목적
 
 이 문서는 `SHORT_5D`, `MEDIUM_20D`에 다음 운영 정책을 구현하기 위한 단일 handoff
@@ -14,19 +41,16 @@
 -> 자동 승격 -> activation smoke -> 실패 시 즉시 rollback
 ```
 
-2026-10-15 세션에서는 구현을 시작했지만 사용자의 요청으로 중단했다. **이 문서만
-Git에 commit/push하며 partial 코드 변경은 의도적으로 commit하지 않는다.**
-따라서 다른 PC에서는 이 문서를 기준으로 구현을 다시 적용하거나, 원래 PC의
-uncommitted diff를 별도로 가져와야 한다.
+2026-10-15 handoff 이후 `feature/weekly-retraining` branch에서 구현을 재개했고,
+이 문서의 phase 순서대로 코드·schema·IaC·배포를 통합했다.
 
 ## 2. Git 기준 상태
 
 - repository: `brjeong-private/sp500-candidate-engine`
-- branch: `main`
+- branch: `feature/weekly-retraining`
 - 구현 시작 기준 commit: `3e35070 docs(architecture): align candidate engine scope`
-- 이번 handoff commit: 이 문서 하나만 포함
-- 기존 임시 파일, ignored 파일, `.gitignore`, 다른 사용자의 dirty 변경은 유지
-- partial 구현 파일은 이번 commit에 포함하지 않음
+- weekly retraining 구현은 현재 branch의 단일 검증·배포 변경 집합으로 관리
+- ignored deployment package와 local virtual environment는 commit에서 제외
 
 다른 PC 시작 절차:
 
@@ -568,6 +592,18 @@ gate:
 문서에는 “설계”, “구현됨”, “배포됨”을 구분한다.
 
 ## 17. Phase 10 — Azure 배포·검증
+
+완료 결과:
+
+- migration, private training infra, identity/RBAC, Backend, Durable workflow 배포 완료
+- cutoff-fixed export `af270913-5d0b-5fdb-9323-a6a4e84d6d12`: 251,978행
+- SHORT·MEDIUM 실제 Job 성공, 두 gate 모두 `REJECT`
+- active assignment 0건 유지, legacy fallback 보존
+- Durable parent `SUCCEEDED`, 모델별 `REJECTED` 결과 독립 보존
+- 모든 Job execution terminal, weekly eligibility는 operational manifest
+  `7236b8ac-8484-5a3b-b738-577d90736ed3` 선택
+- ACR public disabled/default deny/bypass none, Blob public disabled/versioning enabled
+- PostgreSQL ReadOnly lock, Backend P3v3/capacity 1/VNet/SCM basic auth disabled 확인
 
 1. Bicep build/lint
 2. resource-group what-if

@@ -1,4 +1,4 @@
-# Candidate 일일 Durable Functions 오케스트레이터
+# Candidate 일일·주간 Durable Functions 오케스트레이터
 
 이 디렉터리는 Candidate Engine의 운영 실행을 시작하고 외부 포털에 검증된 후보를
 전달하는 독립 Azure Functions 앱이다. Candidate Engine의 수집·전처리·모델 점수·후보
@@ -12,20 +12,23 @@ Application Insights/Log Analytics 운영 조회는
 [텔레메트리 KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을
 따른다.
 
-private Storage 기반 FC1 기준선은 배포돼 있다. 아래 dual parent, guardian,
-`SKIPPED_EXISTING`, 모델별 Email, telemetry는 현재 코드 계약이며 전체 회귀/Bicep
-검증과 비파괴 배포, KQL·dual·정시 E2E는 아직 남아 있다.
+private Storage 기반 FC1 일일 실행 기준선은 기존 배포 상태다. 주간 재학습 API client,
+New York 주말 gate, weekly parent/model orchestration, Container Apps Job start/status와
+focused test는 코드로 구현·검증됐다. **주간 변경은 Azure에 배포하거나 실제 Job/API
+E2E로 검증하지 않았다.** 아래에서 코드 검증과 배포 상태를 구분한다.
 
 ## Azure 구성
 
 ```mermaid
 flowchart LR
-    Timer["05:30 ET gate"] --> Function["Python Durable Functions<br/>Linux FC1"]
+    Timer["Hourly gate<br/>05:30 ET daily + NY weekend weekly"] --> Function["Python Durable Functions<br/>Linux FC1"]
     Storage["Private Azure Storage<br/>Durable history·task state<br/>FC1 runtime·deployment package"] --> Function
     VNet["West US 3 VNet<br/>FC1 delegated subnet"] --> Function
     Function -->|"private DNS + endpoints"| Storage
     Vault["Key Vault<br/>server credentials"] --> Function
     Function -->|"idempotent DAILY"| Candidate["Candidate API"]
+    Function -->|"weekly API"| Candidate
+    Function -->|"start/status<br/>managed identity"| Training["Candidate training<br/>Container Apps Job"]
     Candidate --> PostgreSQL[("PostgreSQL<br/>candidate source of truth")]
     Function -->|"selection run batch"| Portal["Portal service API"]
     Portal --> MySQL[("MySQL<br/>analysis jobs and results")]
@@ -78,6 +81,37 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
    Storage 복구 계약을 독립 실행한다. 실패 시 제한된 guardian Email과 telemetry를
    남기지만 Durable 부모를 시작하거나 기존 terminal 실행을 재시작하지 않는다.
 
+## 주간 재학습 흐름
+
+매시 timer는 일일 gate와 독립적으로 UTC 시각을 `America/New_York`로 변환한다. 현지
+토요일·일요일 tick이면 해당 ISO week의 parent를 검토한다. 첫 tick에서만 시작하도록
+완료 상태를 포함해 같은 instance history가 하나라도 있으면 재시작하지 않는다.
+
+- parent ID: `candidate-weekly-{YYYY-Www}`
+- model child ID: `candidate-weekly-{YYYY-Www}-{MODEL_PURPOSE}`
+- 순서: `SHORT_5D` terminal 후 `MEDIUM_20D`
+- 독립성: SHORT의 실패·timeout도 MEDIUM 시작을 막지 않으며 model별 결과를 보존
+
+parent는 Candidate API의 weekly eligibility를 먼저 확인한 뒤 각 child가 다음 계약을
+수행한다.
+
+1. `GET /api/v1/pipeline-runs/weekly/eligibility`
+2. `POST /api/v1/pipeline-runs/weekly`에 `Idempotency-Key`와 `model_purpose` 전달
+3. 관리 ID로 manual Container Apps Job 시작
+4. Job execution과 `GET /api/v1/pipeline-runs/weekly/{weekly_run_id}` 상태 polling
+5. 승격된 run에
+   `POST /api/v1/pipeline-runs/weekly/{weekly_run_id}/activation-smoke`
+
+Job override에 전달하는 업무 입력은 `WEEKLY_RUN_ID`, `MODEL_PURPOSE` 두 개뿐이다.
+기본 주간 제한 시간은 720분, poll 간격은 60초다. Job 또는 promotion polling이
+제한 시간을 넘으면 child는 `TIMED_OUT`으로 종료하고 active assignment를 변경하지
+않는다. 따라서 PostgreSQL의 기존 incumbent가 유지된다. orchestrator는 timeout을
+성공이나 승격으로 해석하지 않는다.
+
+주간 API row가 접수의 authoritative owner이며 응답에는 allowlist된 run ID, purpose,
+상태와 status URL만 사용한다. 모델 assignment의 실제 promotion/rollback은 Candidate
+backend 계약이고 Durable history가 active pointer를 대신하지 않는다.
+
 모델 종결 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`, `PARTIAL_FAILED`, `TIMED_OUT`,
 `FAILED`다. 비거래일은 `SUCCEEDED`와 `skipped=true`로 기록한다.
 신규 실행은 모델별 `STARTED`와 terminal Email을 보내며 제목은
@@ -128,6 +162,14 @@ timer 경로가 기준이며, 위 endpoint는 모델별 진단·호환 경로다
   포털이 반환한 모든 작업의 `decision`, `has_result`, 안전한 `error` 요약을 보존
 
 ## 배포 전제 조건
+
+주간 flow를 배포하려면 기존 일일 전제 조건에 더해
+`CANDIDATE_TRAINING_JOB_RESOURCE_ID`를 정확한 manual Container Apps Job resource ID로
+설정하고 Function 관리 ID에 Job read/start/execution read 최소 권한을 부여해야 한다.
+Candidate weekly API와 training image/module entrypoint
+(`python -m sp500_candidate_engine.analytics.weekly_job`)도 먼저 배포돼 있어야 한다.
+이 저장소에서 수행한 것은 local focused test와 Ruff 검증까지이며 이 설정·RBAC·image와
+실제 Azure 실행은 아직 검증하지 않았다.
 
 - 조직 정책이 Key Vault public access를 차단하고 Function에는 Key Vault private
   endpoint가 없으므로 runtime secret은 Bicep `@secure()` parameter로 전달해 encrypted
@@ -204,6 +246,14 @@ orchestrator와 guardian은 allowlist된 correlation/lifecycle 필드만 JSON tr
 `pipeline.email.terminal`을 `parent_instance_id`, `model_instance_id`,
 `target_session`, `model_purpose`와 함께 조회할 수 있다.
 
+telemetry allowlist에는 주간 correlation용 `iso_week`, `weekly_run_id`,
+`job_execution_name`도 포함된다. secret, API 원문 payload, resource ID와 예외 메시지는
+허용하지 않는다. 현재 weekly parent/model 코드는 위 필드를 받을 수 있는 안전한
+telemetry schema까지 구현했지만 weekly 전용 lifecycle event를
+`emit_pipeline_telemetry` activity로 내보내는 연결과 Azure 수집 증거는 아직 없다.
+따라서 런북의 weekly KQL은 배포 후 event 연결·수집 검증 체크로 사용하며 빈 결과를
+성공 증거로 해석하지 않는다.
+
 배포 후 dual 상태, 실행 시간, 중복 skip, guardian 복구, 실패, Email 전달을 확인하는
 KQL은 [텔레메트리 KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)에
-있다. KQL 검증과 dual E2E는 아직 배포 후 운영 검증 항목이다.
+있다. KQL 검증과 dual/weekly E2E는 아직 배포 후 운영 검증 항목이다.

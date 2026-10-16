@@ -1,6 +1,6 @@
 # Orchestrator telemetry KQL runbook
 
-Updated: 2026-10-13
+Updated: 2026-10-16
 
 The Function App writes one JSON object per pipeline trace. The emitter allowlists only
 correlation and lifecycle fields; secrets, raw payloads, report bodies, resource IDs, and
@@ -11,6 +11,13 @@ The examples work in a workspace-based Application Insights resource (`AppTraces
 the Application Insights Logs experience (`traces`). Replace the time range as needed.
 Run the common projection and the selected query in the same query tab. These queries
 are read-only; deployment validation in the target workspace is still required.
+
+The weekly retraining flow is implemented and covered by focused local tests, but the
+weekly changes have not been deployed. The code allowlist accepts `iso_week`,
+`weekly_run_id`, and `job_execution_name`; it still rejects secrets, ARM resource IDs,
+raw API payloads, and exception messages. Weekly lifecycle emission from the Durable
+workflow, allowlist output, and collection in the target workspace remain validation
+items. An empty weekly query is therefore not evidence of a successful run.
 
 ## Common projection
 
@@ -34,8 +41,47 @@ let PipelineTelemetry = union isfuzzy=true AppTraces, traces
     State = tostring(T.state),
     Stage = tostring(T.stage),
     Remediated = tobool(T.remediated),
+    IsoWeek = tostring(T.iso_week),
+    WeeklyRunId = tostring(T.weekly_run_id),
+    JobExecutionName = tostring(T.job_execution_name),
     EventTime = todatetime(T.timestamp);
 ```
+
+## Weekly retraining status
+
+Use this query after weekly lifecycle events are connected to the replay-safe emitter.
+It intentionally projects only allowlisted identifiers and states.
+
+```kusto
+PipelineTelemetry
+| where isnotempty(IsoWeek) or isnotempty(WeeklyRunId)
+| summarize arg_max(
+    EventTime, Event, State, Stage, ModelInstanceId, WeeklyRunId, JobExecutionName)
+    by IsoWeek, ParentInstanceId, ModelPurpose
+| order by IsoWeek desc, ParentInstanceId asc, ModelPurpose asc
+```
+
+Expected correlation IDs are `candidate-weekly-YYYY-Www` for the parent and
+`candidate-weekly-YYYY-Www-{MODEL_PURPOSE}` for children. SHORT and MEDIUM run
+sequentially but have independent outcomes, so alerting must not infer that a SHORT
+failure means MEDIUM was not attempted.
+
+## Weekly timeouts and incumbent retention
+
+```kusto
+PipelineTelemetry
+| where isnotempty(WeeklyRunId)
+| where State == "TIMED_OUT"
+| project EventTime, IsoWeek, ParentInstanceId, ModelInstanceId,
+    ModelPurpose, WeeklyRunId, JobExecutionName, Stage
+| order by EventTime desc
+```
+
+A timeout at `training_job` or `promotion` is terminal for that model child. The
+orchestrator does not update the active assignment on timeout, so the Candidate
+PostgreSQL incumbent remains authoritative. Confirm retention against the Candidate
+assignment API/database during deployment validation; telemetry alone does not prove
+pointer state.
 
 ## Dual-model status
 

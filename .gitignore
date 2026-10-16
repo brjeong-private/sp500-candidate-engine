@@ -42,3 +42,10 @@
 /infra/*
 !/infra/backend-appservice.bicep
 !/infra/orchestrator.bicep
+!/infra/candidate-training.bicep
+!/infra/modules/
+/infra/modules/*
+!/infra/modules/candidate-network.bicep
+!/infra/modules/candidate-artifacts.bicep
+!/infra/modules/candidate-observability.bicep
+!/infra/modules/candidate-training-job.bicep

@@ -31,6 +31,13 @@ agent prompt·memory, 최종 rating, MySQL 분석 상태와 Blob 보고서는 �
 guardian 정시 실행과 one-off dual 실행·cleanup은 검증했으며, 2026-10-12를 대상으로 한
 첫 05:30 ET 정기 dual 실행 검증이 남아 있습니다.
 
+주간 재학습 control plane과 Candidate 전용 Korea Central private training
+인프라도 배포했습니다. PostgreSQL의 deterministic weekly run, versioned promotion
+gate, immutable Blob artifact, generation CAS active assignment, DAILY run별 assignment
+pinning, `SHORT_5D -> MEDIUM_20D` 독립 Durable 실행을 사용합니다. Backend는
+P3v3/capacity 1과 Candidate VNet route-all로 운영되며, training Job은 관리 ID로만
+PostgreSQL·Blob·ACR에 접근합니다.
+
 | 데이터 | 결과 |
 |---|---:|
 | S&P 500 universe | 503증권, 500기업 |

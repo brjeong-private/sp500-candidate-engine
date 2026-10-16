@@ -523,3 +523,128 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             final["stage"] = "email"
             final["reason"] = "EMAIL_TERMINAL_FAILED"
         return (yield from _finish_model(context, request, final))
+
+
+WEEKLY_TERMINAL = {"PROMOTED", "REJECTED", "ROLLED_BACK", "FAILED"}
+
+
+def weekly_model_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
+    request = context.get_input()
+    model_purpose = str(request["model_purpose"])
+    iso_week = str(request["iso_week"])
+    timeout = timedelta(minutes=int(request["timeout_minutes"]))
+    poll_interval = timedelta(seconds=int(request["poll_seconds"]))
+    weekly_run_id: str | None = None
+    try:
+        accepted = yield context.call_activity(
+            "submit_weekly_training",
+            {"iso_week": iso_week, "model_purpose": model_purpose},
+        )
+        weekly_run_id = str(accepted["weekly_run_id"])
+        if accepted["status"] in WEEKLY_TERMINAL:
+            run_status = accepted
+        else:
+            started = yield context.call_activity(
+                "start_weekly_training_job",
+                {"weekly_run_id": weekly_run_id, "model_purpose": model_purpose},
+            )
+            deadline = context.current_utc_datetime + timeout
+            while True:
+                job = yield context.call_activity(
+                    "weekly_training_job_status", started["execution_name"]
+                )
+                if job["terminal"]:
+                    if not job["succeeded"]:
+                        return {
+                            "state": "FAILED",
+                            "stage": "training_job",
+                            "iso_week": iso_week,
+                            "model_purpose": model_purpose,
+                            "weekly_run_id": weekly_run_id,
+                        }
+                    break
+                if context.current_utc_datetime >= deadline:
+                    return {
+                        "state": "TIMED_OUT",
+                        "stage": "training_job",
+                        "iso_week": iso_week,
+                        "model_purpose": model_purpose,
+                        "weekly_run_id": weekly_run_id,
+                    }
+                yield context.create_timer(context.current_utc_datetime + poll_interval)
+
+            while True:
+                run_status = yield context.call_activity(
+                    "weekly_training_status", weekly_run_id
+                )
+                if run_status["status"] in WEEKLY_TERMINAL:
+                    break
+                if context.current_utc_datetime >= deadline:
+                    return {
+                        "state": "TIMED_OUT",
+                        "stage": "promotion",
+                        "iso_week": iso_week,
+                        "model_purpose": model_purpose,
+                        "weekly_run_id": weekly_run_id,
+                    }
+                yield context.create_timer(context.current_utc_datetime + poll_interval)
+
+        if run_status["status"] == "PROMOTED":
+            smoke = yield context.call_activity("weekly_activation_smoke", weekly_run_id)
+            if not smoke["passed"]:
+                return {
+                    "state": "FAILED",
+                    "stage": "activation_smoke",
+                    "iso_week": iso_week,
+                    "model_purpose": model_purpose,
+                    "weekly_run_id": weekly_run_id,
+                }
+            state = "SUCCEEDED"
+        elif run_status["status"] == "REJECTED":
+            state = "REJECTED"
+        else:
+            state = "FAILED"
+        return {
+            "state": state,
+            "iso_week": iso_week,
+            "model_purpose": model_purpose,
+            "weekly_run_id": weekly_run_id,
+            "status": run_status["status"],
+        }
+    except Exception:
+        return {
+            "state": "FAILED",
+            "stage": "orchestrator",
+            "iso_week": iso_week,
+            "model_purpose": model_purpose,
+            "weekly_run_id": weekly_run_id,
+        }
+
+
+def weekly_parent_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
+    request = context.get_input()
+    iso_week = str(request["iso_week"])
+    eligibility = yield context.call_activity("weekly_eligibility", None)
+    if not eligibility["eligible"]:
+        return {
+            "state": "SKIPPED",
+            "iso_week": iso_week,
+            "reason": eligibility.get("reason", "NOT_ELIGIBLE"),
+            "models": {},
+        }
+    models: dict[str, dict[str, Any]] = {}
+    for model_purpose in MODEL_SEQUENCE:
+        child_result = yield context.call_sub_orchestrator(
+            "weekly_model_orchestrator",
+            {
+                "iso_week": iso_week,
+                "model_purpose": model_purpose,
+                "timeout_minutes": request["timeout_minutes"],
+                "poll_seconds": request["poll_seconds"],
+            },
+            request["child_instance_ids"][model_purpose],
+        )
+        models[model_purpose] = child_result
+    states = {item["state"] for item in models.values()}
+    state = "SUCCEEDED" if states <= {"SUCCEEDED", "REJECTED"} else "FAILED"
+    return {"state": state, "iso_week": iso_week, "models": models}

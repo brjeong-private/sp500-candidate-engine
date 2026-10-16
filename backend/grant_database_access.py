@@ -45,6 +45,7 @@ def main() -> None:
             "018_multi_model_support.sql",
             "019_advanced_feature_availability.sql",
             "020_backend_pipeline_idempotency.sql",
+            "021_weekly_retraining.sql",
         ):
             connection.execute((migration_directory / name).read_text(encoding="utf-8"))
         connection.execute(

@@ -10,6 +10,11 @@ param portalOrigin string = 'https://web-jongmok-portal-8d0218f4.azurewebsites.n
 param httpUserAgent string
 param candidateShortManifestSha256 string
 param candidateMediumManifestSha256 string
+param vnetIntegrationSubnetId string
+param appServicePlanSkuName string = 'P3v3'
+param appServicePlanSkuTier string = 'PremiumV3'
+@minValue(1)
+param appServicePlanCapacity int = 1
 
 @secure()
 param apiKey string
@@ -25,9 +30,9 @@ resource plan 'Microsoft.Web/serverfarms@2026-08-01' = {
   location: location
   kind: 'linux'
   sku: {
-    name: 'B3'
-    tier: 'Basic'
-    capacity: 1
+    name: appServicePlanSkuName
+    tier: appServicePlanSkuTier
+    capacity: appServicePlanCapacity
   }
   properties: {
     reserved: true
@@ -47,6 +52,8 @@ resource app 'Microsoft.Web/sites@2026-08-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    virtualNetworkSubnetId: vnetIntegrationSubnetId
+    vnetRouteAllEnabled: true
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.11'
       appCommandLine: 'python -m uvicorn backend.app.main:create_app --factory --host 0.0.0.0 --port 8000 --workers 1'

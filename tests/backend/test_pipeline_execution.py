@@ -244,7 +244,7 @@ def test_acceptance_persists_same_id_then_executes_daily_and_candidates(service,
     service.execute_background(run.process_run_id)
     assert runner.call_args.kwargs["process_run_id"] == run.process_run_id
     assert runner.call_args.kwargs["run_candidates"] is True
-    assert runner.call_args.kwargs["candidate_runner"] == service.run_candidate_inference
+    assert callable(runner.call_args.kwargs["candidate_runner"])
     assert runner.call_args.kwargs["model_purpose"] == "SHORT_5D"
     assert "candidate_history_start" not in runner.call_args.kwargs
     assert service.database.requests[run.process_run_id]["status"] == "SUCCEEDED"

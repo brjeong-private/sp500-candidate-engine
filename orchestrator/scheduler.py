@@ -49,3 +49,39 @@ def orchestration_instance_id(analysis_date: date, model_purpose: str) -> str:
 def parent_orchestration_instance_id(analysis_date: date) -> str:
     """날짜별 듀얼 모델 부모 Durable 인스턴스 ID를 반환한다."""
     return f"candidate-dual-{analysis_date.isoformat()}"
+
+
+def scheduled_weekly_iso_week(now_utc: datetime) -> str | None:
+    """Return the completed New York week during weekend hourly ticks."""
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=UTC)
+    local = now_utc.astimezone(NEW_YORK)
+    if local.weekday() not in {5, 6}:
+        return None
+    iso = local.date().isocalendar()
+    return f"{iso.year:04d}-W{iso.week:02d}"
+
+
+def weekly_parent_instance_id(iso_week: str) -> str:
+    if not _valid_iso_week(iso_week):
+        raise ValueError("iso_week must use YYYY-Www format")
+    return f"candidate-weekly-{iso_week}"
+
+
+def weekly_model_instance_id(iso_week: str, model_purpose: str) -> str:
+    validate_model_purpose(model_purpose)
+    if not _valid_iso_week(iso_week):
+        raise ValueError("iso_week must use YYYY-Www format")
+    return f"candidate-weekly-{iso_week}-{model_purpose}"
+
+
+def _valid_iso_week(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 8 or value[4:6] != "-W":
+        return False
+    try:
+        year = int(value[:4])
+        week = int(value[6:])
+        date.fromisocalendar(year, week, 1)
+    except ValueError:
+        return False
+    return f"{year:04d}-W{week:02d}" == value

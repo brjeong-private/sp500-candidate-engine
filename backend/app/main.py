@@ -140,13 +140,20 @@ def create_app(
             connection.execute("SELECT 1 FROM ops.backend_pipeline_request LIMIT 1").fetchone()
         return {"status": "ready"}
 
-    from backend.app.routers import candidates, collection_data, execution, pipeline_runs
+    from backend.app.routers import (
+        candidates,
+        collection_data,
+        execution,
+        pipeline_runs,
+        weekly_training,
+    )
 
     for router in (
         candidates.router,
         collection_data.router,
         execution.router,
         pipeline_runs.router,
+        weekly_training.router,
     ):
         app.include_router(router)
     return app

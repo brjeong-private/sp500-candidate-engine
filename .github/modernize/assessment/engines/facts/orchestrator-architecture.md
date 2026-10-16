@@ -1,21 +1,24 @@
 # Durable Functions 오케스트레이터 아키텍처
 
-갱신일: 2026-10-13
+갱신일: 2026-10-16
 
 이 문서는 Candidate Engine의 일일 실행과 외부 분석 시스템 전달을 조정하는
 `orchestrator/`의 기준 설계다. 오케스트레이터는 수집·전처리·모델 점수·후보 선정
 알고리즘을 소유하지 않는다. Candidate API를 통해 해당 파이프라인을 시작하고 검증된
 selection run을 외부 Portal에 전달하는 control plane이다.
 
-Linux FC1과 private Storage Durable backend는 배포 기준선이다. 이 문서의 dual parent,
-15분 guardian, duplicate skip, 모델별 Email, allowlist telemetry는 현재 코드 계약이며
-배포 후 KQL·dual·정시 E2E 증거는 아직 검증 대기다.
+Linux FC1과 private Storage Durable backend는 기존 일일 배포 기준선이다. 주간 API
+client, New York 주말 gate, deterministic weekly parent/model, Container Apps Job
+start/status와 독립 model 결과는 구현되고 focused test로 검증됐다. 주간 코드는 아직
+Azure에 배포되지 않았고 실제 API·Job·RBAC·KQL E2E 증거도 없다.
 
 ## 책임과 경계
 
 | 영역 | 오케스트레이터 책임 | 비책임 |
 |---|---|---|
 | 일정 | 05:30 ET gate, 날짜별 dual 부모와 모델별 child | 거래 세션 원장 생성 |
+| 주간 일정 | New York 주말 hourly gate, ISO week parent와 모델별 child | XNYS 원장·manifest 생성 |
+| 주간 학습 조정 | weekly API 접수·상태, Container Apps Job start/status, activation smoke | 학습·promotion·active pointer 계산 |
 | guardian | 15분마다 readiness와 승인된 제한 복구 | pipeline 시작·terminal 재실행 |
 | 사전 점검 | Candidate·Portal ARM/runtime readiness, TradingAgents readiness | SKU·firewall·secret 변경 |
 | Candidate 실행 | 멱등 DAILY 접수, 상태 polling, 후보 계약 검증 | 수집·특징·모델·선정 계산 |
@@ -86,6 +89,53 @@ flowchart TB
 random ID 생성과 직접
 로깅을 두지 않는다. 외부 I/O는 activity에 격리하고 대기에는 durable timer를 사용해
 history replay가 외부 요청을 반복하지 않도록 한다.
+
+## 주간 재학습 제어 흐름
+
+```mermaid
+sequenceDiagram
+    participant T as Hourly Timer
+    participant W as Weekly Parent
+    participant M as Weekly Model Child
+    participant C as Candidate Weekly API
+    participant J as Container Apps Job
+
+    T->>T: Convert UTC to America/New_York
+    alt Not Saturday or Sunday
+        T-->>T: No weekly start
+    else Weekend and no instance history
+        T->>W: Start candidate-weekly-YYYY-Www
+        W->>C: GET weekly eligibility
+        W->>M: SHORT_5D child
+        M->>C: POST weekly run with Idempotency-Key
+        M->>J: Start with WEEKLY_RUN_ID and MODEL_PURPOSE
+        loop Until Job terminal or timeout
+            M->>J: GET execution status
+            M-->>M: Durable timer
+        end
+        loop Until weekly run terminal or timeout
+            M->>C: GET weekly run status
+            M-->>M: Durable timer
+        end
+        opt PROMOTED
+            M->>C: POST activation-smoke
+        end
+        M-->>W: SHORT independent result
+        W->>M: MEDIUM_20D child even if SHORT failed
+        M-->>W: MEDIUM independent result
+    end
+```
+
+ID는 `candidate-weekly-{YYYY-Www}`와
+`candidate-weekly-{YYYY-Www}-{SHORT_5D|MEDIUM_20D}`로 결정적이다. 주말의 첫 hourly
+tick이 parent를 만들며 completed history도 재시작하지 않는다. 두 모델은 계산 자원
+때문에 순차 실행하지만 성공 조건은 독립적이다. SHORT 실패·timeout은 MEDIUM을
+차단하지 않는다.
+
+Job/promotion 제한 시간에는 child가 `TIMED_OUT`으로 끝나며 orchestrator가 assignment를
+변경하지 않는다. active assignment는 Candidate PostgreSQL이 소유하므로 기존 incumbent가
+유지된다. Job override의 업무 입력은 `weekly_run_id`, `model_purpose`에 대응하는 두 env
+값뿐이며 secret·DB 설정은 기존 runtime environment 계약에서 가져온다.
 
 ## 일일 제어 흐름
 
@@ -194,11 +244,17 @@ child 결과 중 `FAILED`, `TIMED_OUT`, `PARTIAL_FAILED` 우선순위로 집계�
 idempotency record를 함께 고려한 명시적 재실행 절차가 필요하다. 모델 목적을 바꿔 같은
 key를 재사용하는 방식은 payload 충돌이므로 허용하지 않는다.
 
+주간 flow는 별도로 Durable weekly parent/model deterministic ID와 Candidate
+`weekly_training_run` row를 사용한다. 같은 week/purpose/policy/manifest 접수는 DB
+unique key가 소유하며 Durable state 자체를 업무 acceptance 원장으로 사용하지 않는다.
+
 ## 외부 계약과 검증
 
 | 대상 | 인증 | 요청·검증 |
 |---|---|---|
 | Candidate API | `X-API-Key` | session 조회, readiness, DAILY 접수, run polling, candidate 조회 |
+| Candidate weekly API | `X-API-Key`, POST `Idempotency-Key` | eligibility, weekly 접수·상태, activation smoke |
+| Candidate training Job | 관리 ID·`DefaultAzureCredential` | manual Job start와 execution status |
 | Azure Resource Manager | 관리 ID·`DefaultAzureCredential` | Candidate·Portal App Service가 `RUNNING`인지 확인 |
 | Portal API | `Authorization: Bearer` | selection run 일괄 접수와 `daily_analysis_id` 집계 조회 |
 | TradingAgents | 서비스 readiness endpoint | `/readyz`의 `status=ready` 확인 |
@@ -255,20 +311,24 @@ private 연결 실패 시 fail closed한다. Durable Task Scheduler는 사용하
   `pipeline.guardian.*`, `pipeline.email.terminal`을 날짜·부모·child·업무 ID로
   correlation한다. 운영 query는 [telemetry KQL runbook](orchestrator-telemetry-runbook.md)을
   따른다.
+- telemetry allowlist는 `iso_week`, `weekly_run_id`, `job_execution_name`을 허용하되
+  secret, resource ID, raw payload와 예외 메시지를 계속 제외한다. weekly lifecycle에서
+  emitter activity를 예약하는 연결과 Azure 수집 검증은 아직 완료되지 않았으므로
+  weekly KQL의 빈 결과를 정상 실행 증거로 간주하지 않는다.
 
 ## 구현 매핑
 
 | 구현 | 역할 |
 |---|---|
-| `orchestrator/function_app.py` | 05:30 timer, 15분 guardian, parent/child trigger, activity 등록 |
-| `orchestrator/scheduler.py` | DST-aware 05:30 gate와 parent/child instance ID |
-| `orchestrator/workflow.py` | SHORT 후 MEDIUM 순차 parent, replay-safe child, 상태 전이 |
-| `orchestrator/clients.py` | Candidate·Portal·ARM·ACS 외부 계약과 검증 |
+| `orchestrator/function_app.py` | hourly daily/weekly gate, 15분 guardian, parent/child와 activity 등록 |
+| `orchestrator/scheduler.py` | DST-aware 05:30·New York 주말 gate와 deterministic ID |
+| `orchestrator/workflow.py` | 일일·주간 SHORT 후 MEDIUM 순차 parent와 replay-safe child |
+| `orchestrator/clients.py` | Candidate·weekly·Portal·Job ARM·ACS 외부 계약과 검증 |
 | `orchestrator/guardian.py` | 15분 readiness·제한 복구와 실패 알림 |
 | `orchestrator/telemetry.py` | allowlist 구조화 trace |
 | `orchestrator/settings.py` | 환경 설정과 HTTPS/resource ID fail-closed 검증 |
 | `infra/orchestrator.bicep` | FC1, state, identity, secrets, telemetry, email, alerts |
-| `tests/orchestrator/` | 순서·guardian·중복 skip·Email·telemetry·보안 경계 회귀 검증 |
+| `tests/orchestrator/` | 일일·주간 순서, gate, guardian, 중복 skip, Email·telemetry 계약 검증 |
 
 상위 시스템 경계는 [프로젝트 전체 아키텍처](architecture-diagram.md), 실제 실행·배포
 방법은 [오케스트레이터 README](../../../../../orchestrator/README.md)를 따른다.

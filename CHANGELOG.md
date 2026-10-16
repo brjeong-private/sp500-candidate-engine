@@ -1,5 +1,31 @@
 # Change Log
 
+- 2026-10-16 | Weekly Final Validation | 전체 pytest 365건, Ruff, Bicep compile, diff·secret·IDE 문제 검사를 통과하고 배포 임시 파일을 정리했다.
+- 2026-10-16 | Weekly Canary | cutoff-fixed 2년 251,978행 export와 실제 SHORT·MEDIUM Job을 완료하고 두 gate의 REJECT 및 active assignment 무변경을 검증했다.
+- 2026-10-16 | Weekly Deployment Validation | 최종 Backend·Durable 배포, operational manifest eligibility, private ACR·Blob, PostgreSQL lock, P3v3/VNet·SCM auth 상태를 검증하고 historical validation run을 정리했다.
+- 2026-10-16 | Weekly Manifest Fence | eligibility가 training 중 생성된 historical reconstruction context를 재선택하지 않고 최신 operational replay manifest에 고정되도록 수정했다.
+- 2026-10-16 | Weekly Activation Rollback | Candidate가 promoted Blob artifact를 실제 materialize·검증하고 실패 시 generation CAS로 이전 assignment 또는 legacy fallback으로 rollback하도록 연결했다.
+- 2026-10-16 | Weekly Export Permissions | training ID에 cutoff-fixed export가 요구하는 세 ops derived-context table의 INSERT만 추가하고 원천 데이터는 read-only로 유지했다.
+- 2026-10-16 | Weekly Job Correlation | Durable start activity가 생성된 Container Apps execution name을 주간 run에 즉시 CAS binding하도록 내부 API를 추가했다.
+- 2026-10-16 | Weekly Retraining Documentation | private training·Backend·Durable 배포 상태와 실제 Job 입력·재시도·승격 계약을 README와 실행 계획에 반영했다.
+- 2026-10-16 | Weekly Retry | 실패한 deterministic 주간 run을 다음 주말 tick에서 같은 ID로 안전하게 재수락하고 terminal Durable parent를 재시작하도록 보강했다.
+- 2026-10-16 | Weekly Promotion Runtime | training Job이 gate 결정을 기록하고 reject를 종료하며 통과 시 immutable Blob artifact upload와 generation CAS 승격까지 수행하도록 연결했다.
+- 2026-10-16 | Weekly Training Input | 격리 training Job이 로컬 사전 export를 가정하지 않고 고정 cutoff로 2년 Qlib 입력을 작업 디렉터리에 생성하도록 연결했다.
+- 2026-10-16 | Weekly Training Identity | Container Apps training Job에 Azure 구독·tenant와 Entra PostgreSQL principal 환경을 명시해 관리 ID 설정 계약을 완성했다.
+- 2026-10-16 | Weekly Job Runtime | Container Apps Job 실행 시 배포된 전체 template 계약을 보존하고 weekly 입력 환경 변수만 안전하게 덮어쓰도록 수정했다.
+- 2026-10-16 | Weekly Training Container | Python 3.12 analytics 환경에서 weekly job module을 실행하는 비root 전용 training image 정의를 추가했다.
+- 2026-10-16 | Weekly Orchestration | 주말 eligibility, 멱등 weekly API, Container Apps Job 실행·poll, SHORT/MEDIUM 독립 결과 Durable 흐름을 추가했다.
+- 2026-10-16 | Candidate Training Infrastructure | Candidate 전용 private Blob·ACR·Container Apps Job·VNet·관리 ID·최소 RBAC IaC를 추가했다.
+- 2026-10-16 | Model Promotion Artifacts | versioned promotion gate와 schema v2 immutable artifact packaging·검증·원자적 cache를 추가했다.
+- 2026-10-16 | DAILY Model Binding | DAILY 실행이 active assignment generation·manifest identity를 process metadata에 고정하고 재시도 시 같은 binding을 재사용하도록 연결했다.
+- 2026-10-16 | Weekly Retraining Migration | Azure PostgreSQL 16에서 migration transaction rollback과 실제 적용, assignment CAS·rollback을 검증했다.
+- 2026-10-16 | Weekly Training Database Access | 주간 학습 관리 ID에 원천 schema 읽기와 analytics schema 쓰기만 부여하는 최소 권한 부트스트랩을 추가했다.
+- 2026-10-16 | Weekly Training Workflow | 모델 학습·평가·SHADOW 등록을 재사용하면서 production score·selection 저장을 차단하는 training-only 진입점을 추가했다.
+- 2026-10-16 | Weekly Retraining Schema | 주간 학습 실행·승격 결정·active model assignment·이력 테이블과 모델 목적별 champion 유일성 제약을 추가했다.
+- 2026-10-16 | Weekly Retraining Repository | deterministic 주간 run 멱등성과 generation 기반 active assignment CAS·rollback 이력 기반을 추가했다.
+- 2026-10-16 | Backend Database Bootstrap | backend 관리 ID 부트스트랩이 weekly retraining migration을 적용하도록 확장했다.
+- 2026-10-16 | Weekly Retraining Plan | partial 구현 부재, Phase 2 구현 범위와 로컬 검증 환경 제한을 현재 상태에 반영했다.
+
 - 2026-10-14 | Architecture Documentation | README와 기준 아키텍처를 발표 1장의 candidate_engine·계획 LLM Top 20·외부 TradingAgents 경계로 통일했다.
 
 - 2026-10-14 | Presentation | 중간 발표 4판의 중첩 아키텍처와 LLM 상위 20 병렬 경로를 유지하면서 실제 수집 데이터·에이전트·데이터 계층 명칭을 그레이톤으로 교정한 7판을 추가했다.

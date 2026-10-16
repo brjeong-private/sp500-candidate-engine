@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable, Iterable
+from copy import deepcopy
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -159,6 +161,220 @@ def check_exchange_session(analysis_date: str) -> dict[str, Any]:
         "exchange_mic": settings.exchange_mic,
         "is_session": payload["is_session"],
         "data_complete": payload["data_complete"],
+    }
+
+
+def weekly_eligibility() -> dict[str, Any]:
+    settings = Settings.from_env()
+    payload = request_json(
+        "GET",
+        f"{settings.candidate_base_url}/api/v1/pipeline-runs/weekly/eligibility",
+        headers=_candidate_headers(settings),
+    )
+    if not isinstance(payload.get("eligible"), bool):
+        raise ExternalServiceError("weekly eligibility response is invalid")
+    if payload["eligible"] and not all(
+        isinstance(payload.get(key), str)
+        for key in ("iso_week", "anchor_session", "input_manifest_id", "training_cutoff")
+    ):
+        raise ExternalServiceError("eligible weekly response is incomplete")
+    return payload
+
+
+def submit_weekly_training(request: dict[str, Any]) -> dict[str, Any]:
+    model_purpose = request.get("model_purpose")
+    iso_week = request.get("iso_week")
+    if model_purpose not in {"SHORT_5D", "MEDIUM_20D"} or not isinstance(iso_week, str):
+        raise ExternalServiceError("weekly submission input is invalid")
+    settings = Settings.from_env()
+    payload = request_json(
+        "POST",
+        f"{settings.candidate_base_url}/api/v1/pipeline-runs/weekly",
+        headers={
+            **_candidate_headers(settings),
+            "Idempotency-Key": f"weekly:{iso_week}:{model_purpose}",
+        },
+        json_body={"model_purpose": model_purpose},
+        expected_statuses=(202,),
+    )
+    if (
+        not isinstance(payload.get("weekly_run_id"), str)
+        or payload.get("model_purpose") != model_purpose
+        or not isinstance(payload.get("status"), str)
+    ):
+        raise ExternalServiceError("weekly acceptance response is invalid")
+    return {
+        "weekly_run_id": payload["weekly_run_id"],
+        "model_purpose": model_purpose,
+        "status": payload["status"],
+    }
+
+
+def weekly_training_status(weekly_run_id: str) -> dict[str, Any]:
+    settings = Settings.from_env()
+    status_url = (
+        f"{settings.candidate_base_url}/api/v1/pipeline-runs/weekly/"
+        f"{quote(weekly_run_id, safe='')}"
+    )
+    payload = request_json(
+        "GET",
+        status_url,
+        headers=_candidate_headers(settings),
+    )
+    if payload.get("weekly_run_id") != weekly_run_id or not isinstance(
+        payload.get("status"), str
+    ):
+        raise ExternalServiceError("weekly status response is invalid")
+    return payload
+
+
+def activation_smoke(weekly_run_id: str) -> dict[str, Any]:
+    settings = Settings.from_env()
+    payload = request_json(
+        "POST",
+        (
+            f"{settings.candidate_base_url}/api/v1/pipeline-runs/weekly/"
+            f"{quote(weekly_run_id, safe='')}/activation-smoke"
+        ),
+        headers=_candidate_headers(settings),
+        expected_statuses=(200,),
+    )
+    if payload.get("weekly_run_id") != weekly_run_id or not isinstance(
+        payload.get("passed"), bool
+    ):
+        raise ExternalServiceError("activation smoke response is invalid")
+    return payload
+
+
+def _training_job_resource_id() -> str:
+    value = os.environ.get("CANDIDATE_TRAINING_JOB_RESOURCE_ID", "").strip()
+    if (
+        not value.startswith("/subscriptions/")
+        or ".." in value
+        or "?" in value
+        or "#" in value
+        or any(character.isspace() for character in value)
+    ):
+        raise ExternalServiceError("CANDIDATE_TRAINING_JOB_RESOURCE_ID is invalid")
+    return value
+
+
+def _weekly_job_template(
+    resource: dict[str, Any],
+    *,
+    weekly_run_id: str,
+    model_purpose: str,
+) -> dict[str, Any]:
+    properties = resource.get("properties")
+    template = properties.get("template") if isinstance(properties, dict) else None
+    if not isinstance(template, dict):
+        raise ExternalServiceError("training job template is invalid")
+    result = {
+        key: deepcopy(value)
+        for key, value in template.items()
+        if key in {"containers", "initContainers"} and value is not None
+    }
+    containers = result.get("containers")
+    if not isinstance(containers, list):
+        raise ExternalServiceError("training job containers are invalid")
+    container = next(
+        (
+            candidate
+            for candidate in containers
+            if isinstance(candidate, dict)
+            and candidate.get("name") == "candidate-training"
+        ),
+        None,
+    )
+    if container is None:
+        raise ExternalServiceError("training job container is missing")
+    environment = container.get("env")
+    if not isinstance(environment, list):
+        raise ExternalServiceError("training job environment is invalid")
+    overrides = {
+        "WEEKLY_RUN_ID": weekly_run_id,
+        "MODEL_PURPOSE": model_purpose,
+    }
+    container["env"] = [
+        entry
+        for entry in environment
+        if isinstance(entry, dict) and entry.get("name") not in overrides
+    ] + [
+        {"name": name, "value": value}
+        for name, value in overrides.items()
+    ]
+    return result
+
+
+def start_weekly_training_job(request: dict[str, Any]) -> dict[str, str]:
+    from azure.identity import DefaultAzureCredential
+
+    weekly_run_id = request.get("weekly_run_id")
+    model_purpose = request.get("model_purpose")
+    if not isinstance(weekly_run_id, str) or model_purpose not in {
+        "SHORT_5D",
+        "MEDIUM_20D",
+    }:
+        raise ExternalServiceError("training job input is invalid")
+    settings = Settings.from_env()
+    resource_id = _training_job_resource_id()
+    credential = DefaultAzureCredential()
+    resource = _arm_resource(resource_id, CONTAINER_APP_API_VERSION, credential)
+    template = _weekly_job_template(
+        resource,
+        weekly_run_id=weekly_run_id,
+        model_purpose=model_purpose,
+    )
+    token = credential.get_token(ARM_SCOPE).token
+    payload = request_json(
+        "POST",
+        f"{ARM_ENDPOINT}{resource_id}/start?api-version={CONTAINER_APP_API_VERSION}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        json_body=template,
+        expected_statuses=(200, 202),
+    )
+    execution_name = payload.get("name")
+    if not isinstance(execution_name, str) or not execution_name:
+        raise ExternalServiceError("training job start response is invalid")
+    binding = request_json(
+        "POST",
+        (
+            f"{settings.candidate_base_url}/api/v1/pipeline-runs/weekly/"
+            f"{quote(weekly_run_id, safe='')}/execution"
+        ),
+        headers=_candidate_headers(settings),
+        json_body={"execution_name": execution_name},
+    )
+    if binding.get("container_job_execution_name") != execution_name:
+        raise ExternalServiceError("training job execution binding response is invalid")
+    return {"execution_name": execution_name}
+
+
+def weekly_training_job_status(execution_name: str) -> dict[str, Any]:
+    from azure.identity import DefaultAzureCredential
+
+    if not execution_name or "/" in execution_name or "\\" in execution_name:
+        raise ExternalServiceError("training job execution name is invalid")
+    resource_id = _training_job_resource_id()
+    credential = DefaultAzureCredential()
+    token = credential.get_token(ARM_SCOPE).token
+    payload = request_json(
+        "GET",
+        (
+            f"{ARM_ENDPOINT}{resource_id}/executions/{quote(execution_name, safe='')}"
+            f"?api-version={CONTAINER_APP_API_VERSION}"
+        ),
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    properties = payload.get("properties")
+    status = properties.get("status") if isinstance(properties, dict) else None
+    if not isinstance(status, str):
+        raise ExternalServiceError("training job status response is invalid")
+    return {
+        "execution_name": execution_name,
+        "status": status,
+        "terminal": status.casefold() in {"succeeded", "failed", "stopped"},
+        "succeeded": status.casefold() == "succeeded",
     }
 
 

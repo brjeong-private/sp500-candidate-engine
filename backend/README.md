@@ -34,6 +34,11 @@ OpenAPI and Swagger UI are available at `/openapi.json` and `/docs`.
 | GET | `/api/v1/pipeline-runs` | Filtered, paginated execution history |
 | GET | `/api/v1/pipeline-runs/{process_run_id}` | Execution status |
 | GET | `/api/v1/pipeline-runs/{process_run_id}/dates` | Date/attempt details |
+| GET | `/api/v1/pipeline-runs/weekly/eligibility` | Check weekly input eligibility; requires `X-API-Key` |
+| POST | `/api/v1/pipeline-runs/weekly` | Accept an idempotent weekly training request; requires `X-API-Key` and `Idempotency-Key` |
+| GET | `/api/v1/pipeline-runs/weekly/{weekly_run_id}` | Read allowlisted weekly run state; requires `X-API-Key` |
+| POST | `/api/v1/pipeline-runs/weekly/{weekly_run_id}/execution` | Bind the allowlisted Container Apps execution name from the trusted orchestrator; requires `X-API-Key` |
+| POST | `/api/v1/pipeline-runs/weekly/{weekly_run_id}/activation-smoke` | Smoke-check a promoted active assignment; requires `X-API-Key` |
 | GET | `/api/v1/candidates` | Latest successful selection per date or explicit selection run |
 | GET | `/api/v1/collection-data/{dataset}` | Normalized dataset records |
 
@@ -121,6 +126,25 @@ the same key and canonical request returns the original `process_run_id` and
 status URL without scheduling duplicate work. Reusing a key with a different
 request returns `409`.
 
+### Weekly training and DAILY assignment pinning
+
+The weekly API is a control surface, not an in-process trainer. Eligibility returns
+`READY`, `NO_COMPLETE_MANIFEST`, or `ALREADY_ACCEPTED`. Acceptance persists a
+`PENDING` `analytics.weekly_training_run` for `SHORT_5D` or `MEDIUM_20D`; a trusted
+orchestrator must start the manual Container Apps Job and persist its execution
+name. Status responses expose only allowlisted identifiers, lifecycle state, and
+safe error codes. Activation smoke requires both `PROMOTED` state and that run's
+model to be the current `analytics.active_model_assignment`.
+
+At the start of a DAILY run, the backend reads the active assignment for the
+requested purpose under the process transaction. It stores the model version,
+artifact URI/hash, Blob ETag or version ID, generation, and weekly run ID in
+`ops.process_run.metadata.model_bindings`. Retries for that process reuse this
+binding even if a later promotion changes the active assignment. This prevents a
+single DAILY run from changing models mid-execution. Until an active assignment
+exists, the existing purpose-specific manifest path and SHA-256 App Settings remain
+the explicit compatibility source; there is still no cross-purpose fallback.
+
 ## CORS
 
 The exact allowed production Origin is:
@@ -141,10 +165,13 @@ App Service platform CORS is left unconfigured; FastAPI is the single policy own
 
 ## Deployment
 
-[infra/backend-appservice.bicep](../infra/backend-appservice.bicep) creates a separate
-Python App Service on the dedicated Linux B3 `asp-sp500-candidate` Plan (7 GB,
-one instance). It does not redeploy the portal, alter its container image, or
-change the portal's existing B1 plan. The dedicated plan incurs ongoing Azure cost.
+[infra/backend-appservice.bicep](../infra/backend-appservice.bicep) creates or updates
+the separate Python App Service on dedicated Linux plan `asp-sp500-candidate`.
+The current template target is **P3v3, capacity 1**, and
+`vnetIntegrationSubnetId` is mandatory. Route-all VNet integration is enabled so
+the backend can resolve and reach private PostgreSQL, Blob, and ACR endpoints.
+It does not redeploy the portal, alter its container image, or change the portal's
+existing plan. The dedicated Premium plan incurs ongoing Azure cost.
 
 The resource group metadata location is West US 3, but the application explicitly
 uses **Korea Central** to match the existing plan and database.
@@ -173,6 +200,64 @@ do not enable the broad "Allow Azure services" rule. Database migrations run wit
 the administrator, not the app identity. App settings hold provider/API credentials;
 rotate them through an encrypted settings update, not a new source ZIP.
 
+### Candidate training infrastructure and bootstrap
+
+[infra/candidate-training.bicep](../infra/candidate-training.bicep) and its modules
+implement the candidate-only training foundation in **Korea Central**:
+
+- an internal Container Apps managed environment and a manual Consumption Job
+  sized at 2 CPU/4 GiB;
+- a private Premium ACR and private Standard ZRS Blob account with versioning and
+  the `candidate-training` container;
+- separate Container Apps, private-endpoint, and backend App Service integration
+  subnets, plus Blob, ACR, and PostgreSQL private endpoints/private DNS;
+- separate training and reader user-assigned identities; and
+- Blob Data Contributor for training, Blob Data Reader for readers, AcrPull for
+  training, and a custom ARM role limited to reading/starting the Job.
+
+Bootstrap is intentionally two-phase:
+
+1. Deploy with `deployTrainingJob=false`. Wait for the deployment to reach
+   `Succeeded`; capture `backendIntegrationSubnetId`, identity IDs, ACR, Blob, and
+   environment outputs. Do not treat an `Accepted`, `Running`, or in-progress
+   deployment as complete.
+2. Build a training image that installs the analytics dependencies and repository
+   configuration and whose entry point is
+   `python -m sp500_candidate_engine.analytics.weekly_job`. Push it as
+   `<acr-login-server>/candidate-training:latest`.
+3. Provision the training identity in PostgreSQL, then validate its grants. The
+   database role used as `PGUSER` must refer to that exact Entra identity.
+4. Redeploy the same template with `deployTrainingJob=true`. Each Job start must
+   supply `WEEKLY_RUN_ID` and `MODEL_PURPOSE`; the runtime must also receive the
+   provisioned `PGUSER`. Only then configure the orchestrator with the resulting
+   Job resource ID and grant its Job operator role.
+5. Redeploy the backend with the bootstrap `backendIntegrationSubnetId`, P3v3, and
+   capacity 1 while preserving existing App Settings and API keys.
+
+Create the least-privilege PostgreSQL identity with an Entra administrator:
+
+```powershell
+python -m backend.grant_weekly_training_access `
+  --principal-id <trainingIdentityPrincipalId> `
+  --role <training-database-role-used-as-PGUSER>
+```
+
+That role receives `CONNECT`; read-only access to source data in `ops`, `ref`,
+`market`, `fundamental`, `event`, and `selection`; narrow `INSERT` access only to
+`ops.input_manifest`, `ops.input_manifest_member`, and `ops.execution_context` for
+cutoff-fixed derived export metadata; and `SELECT`, `INSERT`, and `UPDATE` plus
+sequence usage in `analytics`. It does not receive schema ownership, DDL, DELETE,
+broad database-owner rights, or backend API credentials. Migrations remain an
+administrator responsibility.
+
+**Deployment status (2026-10-16):** the private training environment, ACR, Blob,
+manual Job, managed identities, least-privilege PostgreSQL grants, Durable weekly
+functions, backend P3v3/capacity 1, and backend VNet integration are deployed.
+Backend live/readiness and weekly eligibility/acceptance are runtime-verified.
+The Job start contract preserves the deployed container definition and overrides
+only `WEEKLY_RUN_ID` and `MODEL_PURPOSE`; the Job then creates a cutoff-fixed Qlib
+export in ephemeral work storage before training.
+
 ## Operational limitations
 
 - `BackgroundTasks` is not a durable queue. `202` means accepted, not completed.
@@ -181,9 +266,10 @@ rotate them through an encrypted settings update, not a new source ZIP.
 - App Service restarts/deployments may interrupt accepted work. API-owned interrupted
   requests must become failed, not silently stay running or automatically restart.
   Inspect status before manually resubmitting.
-- Do not redeploy during active collection. The API has a dedicated B3 plan, separate
-  from the portal. Analytics runs still require measured memory capacity and valid
-  model/export prerequisites before increasing production workloads.
+- Do not redeploy during active collection. The API remains separate from the
+  portal. P3v3/capacity 1 and VNet route-all are deployed; analytics runs still
+  require measured memory capacity and valid model/export prerequisites before
+  increasing production workloads.
 - PostgreSQL must be running. Readiness reports failure when database access fails.
 - Per-process request IDs and structured request completion logs support diagnostics.
 
@@ -264,15 +350,17 @@ reuse is presented as success. Existing CLI defaults remain unchanged; the
 separate CLI training workflow is not invoked by the API.
 
 Shared B1 capacity (1.75 GB) is unsafe/unverified for this inference workload.
-The deployed API therefore uses a dedicated B3 host (7 GB). Use
-**at least 4 GB as a starting recommendation**,
-not a measured minimum. Full retraining belongs on a separate host; **8 GB** is
-a starting recommendation requiring workload-specific measurement.
+The last live verification used the dedicated B3 host (7 GB); the current
+infrastructure target is P3v3/capacity 1 with VNet integration. Neither SKU is a
+measured minimum. Full retraining belongs in the separate Container Apps Job, not
+on App Service; its 2 CPU/4 GiB request also requires workload-specific measurement.
 
 ## Live verification (2026-10-11)
 
 - Endpoint: `https://web-sp500-candidate-8d0218f4.azurewebsites.net`
-- Dedicated Linux B3 plan: `asp-sp500-candidate`, one instance, Korea Central.
+- At this verification date, the live backend used dedicated Linux B3 plan
+  `asp-sp500-candidate`, one instance, Korea Central. P3v3/VNet is a later target,
+  not part of this 2026-10-11 verification.
 - Readiness uses system-assigned identity access to PostgreSQL.
 - Real database-backed API smoke checks passed for candidates, all dataset routes,
   history, allowed/disallowed Origins, API-key rejection and ten-day range validation.
