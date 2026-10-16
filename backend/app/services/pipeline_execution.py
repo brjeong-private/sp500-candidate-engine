@@ -10,6 +10,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import exchange_calendars
 from azure.identity import DefaultAzureCredential
@@ -24,6 +25,10 @@ from sp500_candidate_engine.source_harness import (
     CandidateCollectionPlan,
     validate_candidate_collection_plan,
 )
+
+if TYPE_CHECKING:
+    from sp500_candidate_engine.analytics.historical_export import HistoricalInputContext
+    from sp500_candidate_engine.daily_preselection import ParallelPreselectionResult
 
 logger = logging.getLogger(__name__)
 ACCEPTANCE_LOCK = 517_017_001
@@ -300,6 +305,18 @@ class PipelineExecutionService:
                         **kwargs,
                     ),
                     model_purpose=request.model_purpose,
+                    preselection_runner=(
+                        (
+                            lambda: self.run_daily_preselections(
+                                target_date=request.date,
+                                process_run_id=process_run_id,
+                            )
+                        )
+                        if request.model_purpose == "MEDIUM_20D"
+                        and os.getenv("LLM_PRESELECTION_ENABLED", "false").strip().lower()
+                        in {"true", "1", "yes"}
+                        else None
+                    ),
                 )
                 if result["status"] == "SUCCEEDED":
                     candidate = result.get("candidate_run")
@@ -331,7 +348,11 @@ class PipelineExecutionService:
             self._finish(
                 process_run_id,
                 status,
-                None if status == "SUCCEEDED" else "Collection failed; inspect date attempts",
+                (
+                    None
+                    if status == "SUCCEEDED"
+                    else "Pipeline incomplete; inspect execution_result and date attempts"
+                ),
             )
         except BaseException as error:
             if claimed:
@@ -495,6 +516,41 @@ class PipelineExecutionService:
         )
         return start
 
+    async def run_daily_preselections(
+        self,
+        *,
+        target_date: date,
+        process_run_id: uuid.UUID,
+    ) -> ParallelPreselectionResult:
+        from sp500_candidate_engine.analytics.historical_export import (
+            HistoricalQlibExportService,
+        )
+        from sp500_candidate_engine.daily_preselection import run_parallel_preselections
+        from sp500_candidate_engine.llm_preselection.pipeline import run_llm_preselection
+
+        input_context = await asyncio.to_thread(
+            HistoricalQlibExportService(self.database).prepare_preselection_context,
+            start_date=self.candidate_history_start(target_date),
+            end_date=target_date,
+            decision_cutoff=backfill_cutoff(target_date),
+        )
+        return await run_parallel_preselections(
+            quantitative_runner=lambda: self.run_candidate_inference(
+                self.settings,
+                target_date=target_date,
+                repository_root=self.repository_root,
+                model_purpose="MEDIUM_20D",
+                process_run_id=process_run_id,
+                input_context=input_context,
+            ),
+            llm_runner=lambda: run_llm_preselection(
+                self.settings,
+                target_session=target_date,
+                execution_context_id=input_context.execution_context_id,
+                repository_root=self.repository_root,
+            ),
+        )
+
     def run_candidate_inference(
         self,
         settings: Settings,
@@ -503,6 +559,7 @@ class PipelineExecutionService:
         repository_root: Path,
         model_purpose: str = "SHORT_5D",
         process_run_id: uuid.UUID | None = None,
+        input_context: HistoricalInputContext | None = None,
     ) -> SimpleNamespace:
         """Use a provisioned model without training, fitting processors, or fallback."""
         try:
@@ -608,8 +665,13 @@ class PipelineExecutionService:
             root / "config" / "analytics" / str(contract["label_config"]),
             required_keys=("horizon_sessions",),
         )
+        selection_filename = (
+            "selection_medium_20d_v1.yaml"
+            if model_purpose == "MEDIUM_20D"
+            else "selection_v1.yaml"
+        )
         selection_config = load_versioned_config(
-            root / "config" / "analytics" / "selection_v1.yaml",
+            root / "config" / "analytics" / selection_filename,
             required_keys=(
                 "minimum_candidates",
                 "maximum_candidates",
@@ -673,6 +735,7 @@ class PipelineExecutionService:
             output_root=self.workspace_dir / "data" / "output" / "qlib",
             qlib_version=version("pyqlib"),
             decision_cutoff=backfill_cutoff(target_date),
+            input_context=input_context,
         )
         with self.database.connect() as connection:
             context = connection.execute(
@@ -790,6 +853,9 @@ class PipelineExecutionService:
             generated_at=generated_at,
             policy_version=str(policy_payload["version"]),
             result=selected,
+            model_purpose=model_purpose,
+            prediction_horizon_sessions=int(contract["horizon_sessions"]),
+            return_policy=str(contract["return_policy"]),
             model_status=str(model_row["promotion_status"]),
             promotion_gate_passed=False,
         )
@@ -805,6 +871,8 @@ class PipelineExecutionService:
             candidate_count=len(selected.candidates),
             model_status=str(model_row["promotion_status"]),
             promotion_gate_passed=False,
+            execution_context_id=export.execution_context_id,
+            model_purpose=model_purpose,
         )
 
     def _resolve_daily_artifact_binding(

@@ -144,6 +144,7 @@ def create_app(
         candidates,
         collection_data,
         execution,
+        llm_preselections,
         pipeline_runs,
         weekly_training,
     )
@@ -152,6 +153,7 @@ def create_app(
         candidates.router,
         collection_data.router,
         execution.router,
+        llm_preselections.router,
         pipeline_runs.router,
         weekly_training.router,
     ):

@@ -109,8 +109,13 @@ def run_candidate_date(
         root / "config" / "analytics" / label_filename,
         required_keys=("horizon_sessions", "entry_rule", "exit_rule"),
     )
+    selection_filename = (
+        "selection_medium_20d_v1.yaml"
+        if model_purpose == "MEDIUM_20D"
+        else "selection_v1.yaml"
+    )
     selection_config = load_versioned_config(
-        root / "config" / "analytics" / "selection_v1.yaml",
+        root / "config" / "analytics" / selection_filename,
         required_keys=(
             "minimum_candidates",
             "maximum_candidates",

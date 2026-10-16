@@ -578,8 +578,16 @@ def _ensure_tradingagents(
     template = properties.get("template")
     scale = template.get("scale") if isinstance(template, dict) else None
     min_replicas = scale.get("minReplicas") if isinstance(scale, dict) else None
+    if (
+        not isinstance(template, dict)
+        or not isinstance(scale, dict)
+        or not isinstance(min_replicas, int)
+        or isinstance(min_replicas, bool)
+        or min_replicas < 0
+    ):
+        raise ExternalServiceError("TradingAgents scale configuration is invalid")
     running_status = str(properties.get("runningStatus", "")).upper()
-    if min_replicas != settings.tradingagents_min_replicas:
+    if min_replicas < settings.tradingagents_min_replicas:
         updated_template = {
             **template,
             "scale": {
@@ -630,10 +638,12 @@ def _ensure_tradingagents(
         current_scale = (
             current_template.get("scale") if isinstance(current_template, dict) else None
         )
+        current_min = current_scale.get("minReplicas") if isinstance(current_scale, dict) else None
         return (
             str(current.get("runningStatus", "")).upper() == "RUNNING"
-            and isinstance(current_scale, dict)
-            and current_scale.get("minReplicas") == settings.tradingagents_min_replicas
+            and isinstance(current_min, int)
+            and not isinstance(current_min, bool)
+            and current_min >= settings.tradingagents_min_replicas
         )
 
     _wait_for_resource("TradingAgents", get_resource, ready)
@@ -839,12 +849,15 @@ def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
             "selection_run_id": existing_candidates[0]["selection_run_id"],
             "candidate_count": len(existing_candidates),
         }
+    idempotency_key = f"orchestrator-daily-{analysis_date}-{model_purpose.lower()}"
+    if model_purpose == "MEDIUM_20D":
+        idempotency_key += "-top20-v1"
     payload = request_json(
         "POST",
         f"{settings.candidate_base_url}/api/v1/pipeline-runs",
         headers={
             **_candidate_headers(settings),
-            "Idempotency-Key": f"orchestrator-daily-{analysis_date}-{model_purpose.lower()}",
+            "Idempotency-Key": idempotency_key,
         },
         json_body={
             "mode": "DAILY",
@@ -859,6 +872,44 @@ def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
     if not isinstance(run_id, str) or not run_id:
         raise ExternalServiceError("Candidate response omitted process_run_id")
     return {"process_run_id": run_id, "status": str(payload.get("status", "PENDING"))}
+
+
+def fetch_and_verify_llm_preselection(
+    *,
+    analysis_date: str,
+    existing_only: bool = False,
+) -> dict[str, Any] | None:
+    settings = Settings.from_env()
+    page = request_json(
+        "GET",
+        f"{settings.candidate_base_url}/api/v1/llm-preselections",
+        headers=_candidate_headers(settings),
+        params={"date": analysis_date, "limit": 1},
+    )
+    items = page.get("items")
+    if not isinstance(items, list) or len(items) != 1:
+        if existing_only:
+            return None
+        raise ExternalServiceError("LLM preselection response is invalid")
+    run = items[0]
+    candidates = run.get("candidates") if isinstance(run, dict) else None
+    valid = (
+        isinstance(run, dict)
+        and run.get("price_session_date") == analysis_date
+        and run.get("status") == "SUCCEEDED"
+        and run.get("ranking_status") == "SUCCEEDED"
+        and run.get("requested_count") == 20
+        and run.get("selected_count") == 20
+        and isinstance(candidates, list)
+        and len(candidates) == 20
+        and [item.get("position") for item in candidates if isinstance(item, dict)]
+        == list(range(1, 21))
+    )
+    if not valid:
+        if existing_only:
+            return None
+        raise ExternalServiceError("LLM preselection verification failed")
+    return run
 
 
 def candidate_run_status(process_run_id: str) -> dict[str, Any]:
@@ -937,8 +988,13 @@ def _verify_candidate_items(
     model_purpose: str,
     allowed_statuses: set[str],
 ) -> list[dict[str, Any]]:
-    if not 5 <= len(items) <= 10:
-        raise ExternalServiceError("Candidate selection must contain 5 to 10 items")
+    expected_counts = (
+        {20} if model_purpose == "MEDIUM_20D" else set(range(5, 11))
+    )
+    if len(items) not in expected_counts:
+        raise ExternalServiceError(
+            "Candidate selection count does not match the model-purpose policy"
+        )
     tickers: set[str] = set()
     instruments: set[str] = set()
     selection_runs: set[str] = set()
@@ -952,7 +1008,7 @@ def _verify_candidate_items(
             or item.get("status") not in allowed_statuses
             or item.get("model_purpose") != model_purpose
             or item.get("selected_count") != len(items)
-            or item.get("requested_count") not in range(5, 11)
+            or item.get("requested_count") not in expected_counts
             or item.get("position") != position
             or not isinstance(ticker, str)
             or not isinstance(instrument_id, str)
@@ -1079,11 +1135,14 @@ def portal_candidate_analysis_status(analysis: dict[str, Any]) -> dict[str, Any]
 
 
 def send_email(payload: dict[str, Any]) -> dict[str, Any]:
-    from azure.communication.email import EmailClient
-    from azure.identity import DefaultAzureCredential
-
     try:
         settings = Settings.from_env()
+        if not settings.email_enabled:
+            return {"sent": False, "disabled": True}
+
+        from azure.communication.email import EmailClient
+        from azure.identity import DefaultAzureCredential
+
         client = EmailClient(settings.acs_endpoint, DefaultAzureCredential())
         message = {
             "senderAddress": settings.email_sender,

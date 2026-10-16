@@ -71,6 +71,9 @@ param emailSender string
 @description('Comma-separated ACS recipients stored as an encrypted Function App setting.')
 param emailRecipients string
 
+@description('Whether orchestrator email notifications are sent.')
+param emailEnabled bool = false
+
 param exchangeMic string = 'XNYS'
 
 @minValue(1)
@@ -619,6 +622,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'ORCHESTRATOR_EMAIL_RECIPIENTS'
           value: emailRecipients
+        }
+        {
+          name: 'ORCHESTRATOR_EMAIL_ENABLED'
+          value: string(emailEnabled)
         }
         {
           name: 'ORCHESTRATOR_EXCHANGE_MIC'

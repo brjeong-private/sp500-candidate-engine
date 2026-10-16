@@ -37,6 +37,13 @@ from sp500_candidate_engine.production_models import CorporateAction
 
 
 @dataclass(frozen=True)
+class HistoricalInputContext:
+    execution_context_id: uuid.UUID
+    universe_version_id: uuid.UUID
+    cutoff_at: datetime
+
+
+@dataclass(frozen=True)
 class HistoricalExportSummary:
     export_run_id: uuid.UUID
     execution_context_id: uuid.UUID
@@ -73,6 +80,25 @@ class HistoricalQlibExportService:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    def prepare_preselection_context(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        decision_cutoff: datetime,
+    ) -> HistoricalInputContext:
+        if start_date > end_date:
+            raise ValueError("start_date must be on or before end_date")
+        with self.database.connect() as connection, connection.transaction():
+            context_id, universe_id, cutoff_at = self._create_context(
+                connection,
+                start_date=start_date,
+                end_date=end_date,
+                decision_cutoff=decision_cutoff,
+                include_evidence=True,
+            )
+        return HistoricalInputContext(context_id, universe_id, cutoff_at)
+
     def export(
         self,
         *,
@@ -82,6 +108,7 @@ class HistoricalQlibExportService:
         qlib_version: str,
         decision_cutoff: datetime | None = None,
         require_snapshot_available_by_cutoff: bool = False,
+        input_context: HistoricalInputContext | None = None,
     ) -> HistoricalExportSummary:
         if start_date > end_date:
             raise ValueError("start_date must be on or before end_date")
@@ -90,16 +117,37 @@ class HistoricalQlibExportService:
                 "decision_cutoff is required when snapshot availability is enforced"
             )
         with self.database.connect() as connection:
-            with connection.transaction():
-                context_id, universe_version_id, cutoff_at = self._create_context(
-                    connection,
-                    start_date=start_date,
-                    end_date=end_date,
-                    decision_cutoff=decision_cutoff,
-                    require_snapshot_available_by_cutoff=(
-                        require_snapshot_available_by_cutoff
-                    ),
+            if input_context is None:
+                with connection.transaction():
+                    context_id, universe_version_id, cutoff_at = self._create_context(
+                        connection,
+                        start_date=start_date,
+                        end_date=end_date,
+                        decision_cutoff=decision_cutoff,
+                        require_snapshot_available_by_cutoff=(
+                            require_snapshot_available_by_cutoff
+                        ),
+                    )
+            else:
+                source = SourceRepository(connection)
+                context = source.read_context(
+                    execution_context_id=input_context.execution_context_id
                 )
+                if (
+                    decision_cutoff != input_context.cutoff_at
+                    or context["cutoff_at"] != input_context.cutoff_at
+                ):
+                    raise ValueError("Prepared input context cutoff mismatch")
+                source.validate_context_manifest(
+                    execution_context_id=input_context.execution_context_id
+                )
+                if require_snapshot_available_by_cutoff:
+                    raise ValueError(
+                        "Prepared reconstruction context cannot certify snapshot availability"
+                    )
+                context_id = input_context.execution_context_id
+                universe_version_id = input_context.universe_version_id
+                cutoff_at = input_context.cutoff_at
             calendar = build_exchange_calendar(
                 exchange_mic="XNYS",
                 start_date=start_date,
@@ -195,6 +243,7 @@ class HistoricalQlibExportService:
         end_date: date,
         decision_cutoff: datetime | None = None,
         require_snapshot_available_by_cutoff: bool = False,
+        include_evidence: bool = False,
     ) -> tuple[uuid.UUID, uuid.UUID, datetime]:
         rows = connection.execute(
             """
@@ -245,7 +294,7 @@ class HistoricalQlibExportService:
             JOIN ops.source_snapshot ss
               ON ss.source_snapshot_id = imm.source_snapshot_id
             WHERE rc.context_rank = 1
-              AND ss.dataset_code = ANY(%s::text[])
+              AND (%s::boolean OR ss.dataset_code = ANY(%s::text[]))
               AND (
                   %s::boolean = false
                   OR ss.source_available_at <= %s
@@ -260,6 +309,7 @@ class HistoricalQlibExportService:
                 require_snapshot_available_by_cutoff,
                 decision_cutoff,
                 decision_cutoff,
+                include_evidence,
                 list(self.DATASET_CODES),
                 require_snapshot_available_by_cutoff,
                 decision_cutoff,

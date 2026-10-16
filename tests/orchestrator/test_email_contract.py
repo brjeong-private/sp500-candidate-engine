@@ -58,11 +58,12 @@ def _candidates() -> list[dict[str, Any]]:
             "model_purpose": "MEDIUM_20D",
             "position": position,
         }
-        for position in range(1, 6)
+        for position in range(1, 21)
     ]
 
 
-def test_actual_execution_sends_exact_started_and_terminal_subjects():
+@pytest.mark.parametrize("email_disabled", [False, True])
+def test_actual_execution_sends_exact_started_and_terminal_subjects(email_disabled):
     emails = []
 
     def respond(event):
@@ -76,20 +77,11 @@ def test_actual_execution_sends_exact_started_and_terminal_subjects():
             return {"process_run_id": "run-id", "status": "PENDING"}
         if name == "send_email":
             emails.append(payload)
-            return {"sent": True}
+            return {"sent": False, "disabled": True} if email_disabled else {"sent": True}
         if name == "candidate_run_status":
             return {"process_run_id": "run-id", "status": "SUCCEEDED", "terminal": True}
         if name == "fetch_and_verify_candidates":
             return _candidates()
-        if name == "submit_portal_candidate_analysis":
-            return {
-                **payload,
-                "daily_analysis_id": 7,
-                "jobs": [{"status": "completed"} for _ in range(5)],
-                "terminal": True,
-                "succeeded": 5,
-                "failed": 0,
-            }
         raise AssertionError(name)
 
     outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
@@ -129,6 +121,48 @@ def test_skipped_existing_sends_only_exact_terminal_subject():
     ]
 
 
+def test_disabled_email_does_not_fail_pipeline():
+    def respond(event):
+        name = event[1]
+        if name == "check_exchange_session":
+            return {"is_session": True, "data_complete": True}
+        if name == "readiness_preflight":
+            return {"status": "ready"}
+        if name == "submit_candidate_daily":
+            return {
+                "status": "SKIPPED_EXISTING",
+                "selection_run_id": "selection-id",
+                "candidate_count": 5,
+            }
+        if name == "send_email":
+            return {"sent": False, "disabled": True}
+        raise AssertionError(name)
+
+    outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
+
+    assert outcome["state"] == "SKIPPED_EXISTING"
+
+
+def test_disabled_email_emits_skipped_telemetry():
+    context = FakeContext()
+    email = workflow._send_email(
+        context,
+        context.get_input(),
+        {"subject": "disabled", "body": ""},
+        stage="started",
+    )
+
+    assert next(email) == (
+        "activity",
+        "send_email",
+        {"subject": "disabled", "body": ""},
+    )
+    telemetry = email.send({"sent": False, "disabled": True})
+
+    assert telemetry[1] == "emit_pipeline_telemetry"
+    assert telemetry[2]["state"] == "SKIPPED"
+
+
 @pytest.mark.parametrize(
     ("failing_activity", "expected_stage", "expected_reason"),
     [
@@ -137,8 +171,6 @@ def test_skipped_existing_sends_only_exact_terminal_subject():
         ("submit_candidate_daily", "candidate_submit", "CANDIDATE_SUBMIT_FAILED"),
         ("candidate_run_status", "candidate_poll", "CANDIDATE_POLL_FAILED"),
         ("fetch_and_verify_candidates", "candidate_fetch", "CANDIDATE_FETCH_FAILED"),
-        ("submit_portal_candidate_analysis", "portal_submit", "PORTAL_SUBMIT_FAILED"),
-        ("portal_candidate_analysis_status", "portal_poll", "PORTAL_POLL_FAILED"),
     ],
 )
 def test_activity_exceptions_use_limited_stage_specific_failure_codes(

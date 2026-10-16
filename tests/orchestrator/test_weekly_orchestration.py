@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -117,6 +117,21 @@ def test_hourly_weekend_gate_restarts_terminal_weekly_parent(monkeypatch):
         "weekly_parent_orchestrator",
         "candidate-weekly-2026-W42",
     )
+
+
+def test_weekend_daily_tick_keeps_weekly_models_but_starts_only_medium_daily(monkeypatch):
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: "2026-W42")
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 16))
+    client = TimerClient()
+
+    asyncio.run(function_app._hourly_timer(client))
+
+    assert [item[0] for item in client.started] == [
+        "weekly_parent_orchestrator",
+        "daily_orchestrator",
+    ]
+    assert set(client.started[0][2]["child_instance_ids"]) == {"SHORT_5D", "MEDIUM_20D"}
+    assert client.started[1][2]["model_purpose"] == "MEDIUM_20D"
 
 
 def test_weekly_job_template_preserves_runtime_contract_and_overrides_inputs():

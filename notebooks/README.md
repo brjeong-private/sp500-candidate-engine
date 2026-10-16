@@ -1,5 +1,18 @@
 # 재현 가능한 분석 노트북 환경
 
+## 연구 결과와 운영 후보 계약
+
+일일 기본 MEDIUM_20D 정량 후보는 정확히 20개이며
+`config/analytics/model_lightgbm_20d_v1.yaml`,
+`config/analytics/label_forward_return_20d_v1.yaml`,
+`config/analytics/selection_medium_20d_v1.yaml`을 사용한다.
+아래 기존 notebook의 5D·`selection_v1.yaml`은 SHORT 레거시 연구 경로다.
+Top-5/10 평가 지표를 20으로 임의 변경하지 않는다.
+
+수집 후 정량 Top 20과 선택 활성화된 독립 LLM Top 20을 병렬 생성하며,
+향후 최종 통합·TradingAgents 전달은 기존 5~10개에서 20개로 변경한다.
+통합·최종 전달은 아직 미구현이며 notebook 실행이 자동 외부 전달을 활성화하지 않는다.
+
 ## 환경 생성
 
 프로젝트의 Qlib·학습·노트북 실행 환경은 Python 3.11을 사용한다.

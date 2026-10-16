@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from sp500_candidate_engine.backfill import (
     backfill_cutoff,
@@ -31,6 +31,9 @@ from sp500_candidate_engine.production_models import MassiveBackfillRange
 from sp500_candidate_engine.production_pipeline import collect_production_inputs
 from sp500_candidate_engine.raw_store import RawSnapshotWriter
 from sp500_candidate_engine.sec_bulk import SecBulkResult, parse_sec_bulk
+
+if TYPE_CHECKING:
+    from sp500_candidate_engine.daily_preselection import ParallelPreselectionResult
 
 T = TypeVar("T")
 
@@ -136,6 +139,9 @@ async def run_daily_process(
     candidate_history_start: date | None = None,
     candidate_runner: Callable[..., object] | None = None,
     model_purpose: str = "SHORT_5D",
+    preselection_runner: Callable[
+        [], Awaitable[ParallelPreselectionResult]
+    ] | None = None,
 ) -> dict[str, object]:
     database = Database(settings)
     accepted_run = process_run_id is not None
@@ -214,6 +220,40 @@ async def run_daily_process(
             **summary,
         }
         if run_candidates and summary["status"] == "SUCCEEDED":
+            if preselection_runner is not None:
+                parallel = await preselection_runner()
+                response["status"] = parallel.status
+                response["candidate_run"] = (
+                    None
+                    if parallel.quantitative is None
+                    else _candidate_run_payload(parallel.quantitative)
+                )
+                response["quantitative_preselection_status"] = (
+                    "FAILED"
+                    if parallel.quantitative is None
+                    else "SUCCEEDED"
+                    if parallel.quantitative.candidate_count == 20
+                    else "SHORTFALL"
+                )
+                response["llm_preselection_run"] = (
+                    {
+                        "status": "FAILED",
+                        "selection_run_id": None,
+                        "candidate_count": 0,
+                        "failure_code": parallel.failures["llm"],
+                    }
+                    if parallel.llm is None
+                    else {
+                        "status": parallel.llm.status,
+                        "selection_run_id": parallel.llm.selection_run_id,
+                        "llm_ranking_run_id": parallel.llm.llm_ranking_run_id,
+                        "price_session_date": parallel.llm.price_session_date,
+                        "candidate_count": parallel.llm.selected_count,
+                        "failure_code": parallel.llm.failure_code,
+                    }
+                )
+                response["preselection_failures"] = parallel.failures
+                return response
             from sp500_candidate_engine.candidate_pipeline import run_candidate_date
 
             if candidate_history_start is not None:
@@ -237,16 +277,21 @@ async def run_daily_process(
                 repository_root=Path(__file__).parents[2],
                 model_purpose=model_purpose,
             )
-            response["candidate_run"] = {
-                "price_session_date": candidate.price_session_date,
-                "model_version_id": candidate.model_version_id,
-                "scoring_run_id": candidate.scoring_run_id,
-                "selection_run_id": candidate.selection_run_id,
-                "candidate_count": candidate.candidate_count,
-                "model_status": getattr(candidate, "model_status", "SHADOW"),
-                "promotion_gate_passed": candidate.promotion_gate_passed,
-            }
+            response["candidate_run"] = _candidate_run_payload(candidate)
         return response
+
+
+def _candidate_run_payload(candidate) -> dict[str, object]:
+    return {
+        "price_session_date": candidate.price_session_date,
+        "model_version_id": candidate.model_version_id,
+        "scoring_run_id": candidate.scoring_run_id,
+        "selection_run_id": candidate.selection_run_id,
+        "candidate_count": candidate.candidate_count,
+        "model_status": getattr(candidate, "model_status", "SHADOW"),
+        "promotion_gate_passed": candidate.promotion_gate_passed,
+        "execution_context_id": getattr(candidate, "execution_context_id", None),
+    }
 
 
 async def run_backfill_process(

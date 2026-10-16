@@ -1,8 +1,10 @@
 import uuid
 from datetime import date
+from pathlib import Path
 
 import pytest
 
+from sp500_candidate_engine.analytics.config import load_versioned_config
 from sp500_candidate_engine.analytics.scoring import DailyScore
 from sp500_candidate_engine.selection.policy import (
     CandidateMetadata,
@@ -88,3 +90,38 @@ def test_selection_keeps_eligible_candidates_when_all_predictions_are_negative()
         "NON_POSITIVE_PREDICTION" in candidate.reason_codes
         for candidate in result.candidates
     )
+
+
+@pytest.mark.parametrize("count", [19, 20, 50])
+def test_medium_policy_returns_exact_twenty_or_fails_closed(count) -> None:
+    config = load_versioned_config(
+        Path(__file__).parents[2]
+        / "config" / "analytics" / "selection_medium_20d_v1.yaml"
+    )
+    policy = SelectionPolicy(
+        **{
+            key: int(config.payload[key])
+            for key in (
+                "minimum_candidates", "maximum_candidates",
+                "sector_cap", "relaxed_sector_cap",
+            )
+        }
+    )
+    items = [_score(index, f"Sector-{index % 11}") for index in range(1, count + 1)]
+
+    def select():
+        return select_candidates(
+            scores=tuple(item[0] for item in items),
+            metadata={item[1].instrument_id: item[1] for item in items},
+            policy=policy,
+        )
+
+    if count < 20:
+        with pytest.raises(SelectionShortfallError):
+            select()
+    else:
+        result = select()
+        assert result.status == "SUCCEEDED"
+        assert len(result.candidates) == 20
+        assert [item.position for item in result.candidates] == list(range(1, 21))
+        assert len({item.issuer_id for item in result.candidates}) == 20

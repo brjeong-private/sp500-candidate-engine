@@ -139,3 +139,22 @@ def test_guardian_still_fails_when_alert_delivery_fails():
         )
 
     assert json.loads(handler.messages[0])["alert_sent"] is False
+
+
+def test_guardian_records_disabled_alert_without_hiding_preflight_failure():
+    events = []
+    logger, _ = _logger()
+
+    def fail_preflight():
+        raise ValueError("preflight failed")
+
+    with pytest.raises(ValueError, match="preflight failed"):
+        guardian.run_guardian(
+            preflight=fail_preflight,
+            email_client=lambda payload: {"sent": False, "disabled": True},
+            telemetry=lambda event: events.append(event),
+            logger=logger,
+        )
+
+    email_event = next(event for event in events if event["event"] == "pipeline.email.terminal")
+    assert email_event["state"] == "SKIPPED"

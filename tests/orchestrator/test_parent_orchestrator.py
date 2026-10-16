@@ -165,38 +165,77 @@ class TimerClient:
         self.started.append((name, instance_id, client_input))
 
 
-def test_timer_starts_one_deterministic_parent(monkeypatch):
+def test_timer_starts_only_deterministic_medium_daily_instance(monkeypatch):
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: None)
     client = TimerClient()
 
     asyncio.run(function_app._hourly_timer(client))
 
     assert len(client.started) == 1
-    name, instance_id, parent_input = client.started[0]
-    assert name == "dual_model_parent"
-    assert instance_id == "candidate-dual-2026-10-09"
-    assert parent_input["child_instance_ids"] == {
-        "SHORT_5D": "candidate-daily-2026-10-09-short_5d",
-        "MEDIUM_20D": "candidate-daily-2026-10-09-medium_20d",
-    }
+    name, instance_id, daily_input = client.started[0]
+    assert name == "daily_orchestrator"
+    assert instance_id == "candidate-daily-2026-10-09-medium_20d"
+    assert daily_input["model_purpose"] == "MEDIUM_20D"
+    assert daily_input["analysis_date"] == "2026-10-09"
+    assert "child_instance_ids" not in daily_input
 
 
-def test_timer_restarts_terminal_parent(monkeypatch):
+def test_timer_restarts_terminal_medium_instance(monkeypatch):
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: None)
     client = TimerClient(existing={"runtime_status": "Completed"})
 
     asyncio.run(function_app._hourly_timer(client))
 
     assert len(client.started) == 1
-    assert client.started[0][1] == "candidate-dual-2026-10-09"
+    assert client.started[0][1] == "candidate-daily-2026-10-09-medium_20d"
 
 
-def test_timer_does_not_restart_active_parent(monkeypatch):
+def test_timer_does_not_restart_active_medium_instance(monkeypatch):
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: None)
     client = TimerClient(existing={"runtime_status": "Running"})
 
     asyncio.run(function_app._hourly_timer(client))
 
+    assert client.started == []
+
+
+def test_timer_checks_medium_instance_after_terminal_legacy_parent(monkeypatch):
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: None)
+    client = TimerClient()
+    checked = []
+
+    async def get_status(instance_id):
+        checked.append(instance_id)
+        return {"runtime_status": "Running" if instance_id.endswith("medium_20d") else "Completed"}
+
+    client.get_status = get_status
+    asyncio.run(function_app._hourly_timer(client))
+
+    assert checked == [
+        "candidate-dual-2026-10-09",
+        "candidate-daily-2026-10-09-medium_20d",
+    ]
+    assert client.started == []
+
+
+def test_timer_preserves_active_legacy_parent_without_starting_medium(monkeypatch):
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 9))
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: None)
+    client = TimerClient()
+    checked = []
+
+    async def get_status(instance_id):
+        checked.append(instance_id)
+        return {"runtime_status": "Running"}
+
+    client.get_status = get_status
+    asyncio.run(function_app._hourly_timer(client))
+
+    assert checked == ["candidate-dual-2026-10-09"]
     assert client.started == []
 
 

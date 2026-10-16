@@ -76,8 +76,16 @@ def _terminal_email(
 
 
 def _require_email_delivery(response: Any) -> None:
-    if isinstance(response, dict) and response.get("sent") is False:
+    if _email_delivery_failed(response):
         raise _EmailDeliveryFailed
+
+
+def _email_delivery_failed(response: Any) -> bool:
+    return (
+        isinstance(response, dict)
+        and response.get("sent") is False
+        and response.get("disabled") is not True
+    )
 
 
 def _model_summary(instance_id: str, child_result: dict[str, Any]) -> dict[str, Any]:
@@ -191,11 +199,12 @@ def _send_email(
             stage=stage,
         )
         raise
-    sent = not (isinstance(response, dict) and response.get("sent") is False)
+    disabled = isinstance(response, dict) and response.get("disabled") is True
+    sent = not _email_delivery_failed(response) and not disabled
     yield from _emit(
         context,
         "pipeline.email.terminal",
-        "SUCCEEDED" if sent else "FAILED",
+        "SKIPPED" if disabled else "SUCCEEDED" if sent else "FAILED",
         request=request,
         stage=stage,
     )
@@ -393,7 +402,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                     _terminal_email(model_purpose, analysis_date, final),
                     stage="terminal",
                 )
-                if isinstance(email_result, dict) and email_result.get("sent") is False:
+                if _email_delivery_failed(email_result):
                     final["reason"] = "EMAIL_TERMINAL_FAILED"
                 return (yield from _finish_model(context, request, final))
             yield context.create_timer(context.current_utc_datetime + poll_interval)
@@ -415,13 +424,33 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 _terminal_email(model_purpose, analysis_date, final),
                 stage="terminal",
             )
-            if isinstance(email_result, dict) and email_result.get("sent") is False:
+            if _email_delivery_failed(email_result):
                 final["reason"] = "EMAIL_TERMINAL_FAILED"
             return (yield from _finish_model(context, request, final))
 
         failure_code = "CANDIDATE_FETCH_FAILED"
         failure_stage = "candidate_fetch"
         candidates = yield context.call_activity("fetch_and_verify_candidates", candidate_request)
+        if model_purpose == "MEDIUM_20D":
+            final = result(
+                "SUCCEEDED",
+                analysis_date,
+                model_purpose,
+                stage="parallel_preselection",
+                process_run_id=accepted["process_run_id"],
+                selection_run_id=candidates[0]["selection_run_id"],
+                candidate_count=len(candidates),
+                submitted_candidates=0,
+            )
+            terminal_email_attempted = True
+            email_result = yield from _send_email(
+                context,
+                request,
+                _terminal_email(model_purpose, analysis_date, final),
+                stage="terminal",
+            )
+            _require_email_delivery(email_result)
+            return (yield from _finish_model(context, request, final))
         failure_code = "PORTAL_SUBMIT_FAILED"
         failure_stage = "portal_submit"
         portal_analysis = yield context.call_activity(
@@ -453,7 +482,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                     _terminal_email(model_purpose, analysis_date, final),
                     stage="terminal",
                 )
-                if isinstance(email_result, dict) and email_result.get("sent") is False:
+                if _email_delivery_failed(email_result):
                     final["reason"] = "EMAIL_TERMINAL_FAILED"
                 return (yield from _finish_model(context, request, final))
             yield context.create_timer(context.current_utc_datetime + poll_interval)
@@ -486,7 +515,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             _terminal_email(model_purpose, analysis_date, final),
             stage="terminal",
         )
-        if isinstance(email_result, dict) and email_result.get("sent") is False:
+        if _email_delivery_failed(email_result):
             final["state"] = "FAILED"
             final["stage"] = "email"
             final["reason"] = "EMAIL_TERMINAL_FAILED"
@@ -516,7 +545,7 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
                 _terminal_email(model_purpose, analysis_date, final),
                 stage="terminal",
             )
-            if isinstance(email_result, dict) and email_result.get("sent") is False:
+            if _email_delivery_failed(email_result):
                 final["stage"] = "email"
                 final["reason"] = "EMAIL_TERMINAL_FAILED"
         except Exception:

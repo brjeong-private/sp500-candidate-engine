@@ -91,6 +91,13 @@ def network_action(name: str) -> str:
     return value
 
 
+def boolean_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name, str(default)).strip().casefold()
+    if value not in {"true", "false"}:
+        raise ConfigurationError(f"{name} must be true or false")
+    return value == "true"
+
+
 @dataclass(frozen=True)
 class Settings:
     candidate_base_url: str
@@ -114,6 +121,7 @@ class Settings:
     email_sender: str
     email_recipients: tuple[str, ...]
     exchange_mic: str
+    email_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -154,4 +162,5 @@ class Settings:
             email_sender=required("ORCHESTRATOR_EMAIL_SENDER"),
             email_recipients=recipients,
             exchange_mic=os.environ.get("ORCHESTRATOR_EXCHANGE_MIC", "XNYS").strip().upper(),
+            email_enabled=boolean_flag("ORCHESTRATOR_EMAIL_ENABLED", True),
         )

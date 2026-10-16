@@ -1,763 +1,322 @@
 # S&P 500 Candidate Engine
 
-미국 거래일마다 S&P 500에서 후속 분석할 5~10개 종목을 선정하기 위한 데이터 수집·후보 선정 엔진입니다.
+미국 거래일마다 수집한 point-in-time 데이터로 후속 분석 후보를 선정하는 엔진입니다.
+일일 기본 경로는 **MEDIUM_20D 정량 후보 20개**이며, 별도 LLM 후보 20개와
+최종 통합 후보 20개로 확장하는 구조입니다. **TradingAgents에 전달할 후보 수는
+기존 5~10개에서 20개로 변경합니다.** 후보는 매수 추천이나 주문이 아닙니다.
 
-production 데이터 수집, point-in-time provenance, Qlib export·Alpha158, walk-forward 모델 평가, 일일 점수와 5~10개 후보 선정까지 구현했습니다.
+공통 범위·무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를
+우선합니다. 이 문서의 설계 계약은 운영 배포 완료를 의미하지 않습니다.
 
-이 프로젝트와 저장소의 제품 범위는 **`candidate_engine`**이며 업무 경계는
-`수집 -> 전처리 -> 모델 점수 -> 후보 통합·검증 -> 5~10개 후보 API`까지입니다.
-이 저장소에는 이 업무 파이프라인을 시작하고 외부 Portal/TradingAgents 계약을 연결하는
-Durable Functions **control plane 오케스트레이터**도 포함하지만, 후보 이후 분석 실행,
-agent prompt·memory, 최종 rating, MySQL 분석 상태와 Blob 보고서는 별도
-종목토론방 프로젝트의 책임입니다. 공통 무결성·시점·재현성 규칙은
-[PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 기준으로 합니다.
-
-발표 아키텍처의 `LLM 기업·뉴스 평가 상위 20`은 candidate_engine의 **계획된 확장**이다.
-현재 운영 후보는 Qlib Alpha158·LightGBM과 selection policy로 생성하며, LLM 경로는
-하네스·시점 계약·schema·검증 기준을 승인해 versioning하기 전에는 실행 경로가 아니다.
-
-현재 `SHORT_5D` model v2와 `MEDIUM_20D` model v1을 독립 보존합니다.
-두 모델은 각각 `D+1 adjusted open -> D+5/D+20 adjusted close` raw 수익률을
-예측합니다. SPY는 optional 비교 지표이며 학습 label에서 차감하지 않습니다.
-모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)에 기록합니다.
-
-## 현재 상태
-
-2026-10-09 세션을 대상으로 실제 provider key와 Azure PostgreSQL을 사용해 production 수집과 명시적 shadow 후보 실행을 완료했습니다.
-
-운영 오케스트레이터의 Linux FC1과 private Storage(Durable history·Blob·Queue·Table)는
-배포 완료 상태입니다. `SHORT_5D -> MEDIUM_20D` 부모, 15분 resource guardian,
-`SKIPPED_EXISTING`, 모델별 Email, 구조화 telemetry와 KQL runbook도 배포됐습니다.
-guardian 정시 실행과 one-off dual 실행·cleanup은 검증했으며, 2026-10-12를 대상으로 한
-첫 05:30 ET 정기 dual 실행 검증이 남아 있습니다.
-
-주간 재학습 control plane과 Candidate 전용 Korea Central private training
-인프라도 배포했습니다. PostgreSQL의 deterministic weekly run, versioned promotion
-gate, immutable Blob artifact, generation CAS active assignment, DAILY run별 assignment
-pinning, `SHORT_5D -> MEDIUM_20D` 독립 Durable 실행을 사용합니다. Backend는
-P3v3/capacity 1과 Candidate VNet route-all로 운영되며, training Job은 관리 ID로만
-PostgreSQL·Blob·ACR에 접근합니다.
-
-| 데이터 | 결과 |
-|---|---:|
-| S&P 500 universe | 503증권, 500기업 |
-| Massive 일봉 | 503개 |
-| 미래 일봉 | 0개 |
-| Massive corporate actions | 99개 |
-| Massive news | 291개 |
-| Alpha Vantage earnings | 467개 |
-| SEC instrument states | 503개 |
-| Production source snapshots | 7개 |
-| ACTIVE production 품질 이슈 | 0개 |
-| Qlib historical export | 500 sessions, 251,471 rows |
-| Alpha158 | 158 features |
-| SHORT_5D 후보 | 10개, SHADOW model |
-| MEDIUM_20D 후보 | 10개, SHADOW model |
-| MEDIUM_20D score 의미 | 향후 20거래일 예측 수익률 |
-| MEDIUM_20D OOS Rank IC | 0.006072 |
-
-Production identifiers:
+## 범위와 결과 계약
 
 ```text
-ingestion_run_id     8496d161-8f00-4ff5-ad3f-e1ae9cd92b20
-input_manifest_id    5cefeecc-2651-5e15-a89e-3d68302ce217
-execution_context_id 7f56908c-23bb-596c-926f-211d136207aa
-latest_export_run_id b47ef1cc-fd0b-5c75-a0c4-e38e89c0a889
-latest_scoring_run_id fa74d683-2c11-521b-a791-5e6496920834
-latest_selection_run_id b87800b5-8cd3-5634-91bb-b91b74a47690
-medium20_export_run_id da7992fc-f64f-53a3-893f-21b1b79bc507
-medium20_model_version_id 74c367e9-bd84-58ab-b933-19a36dae35c4
-medium20_scoring_run_id cd46b3d6-dac2-5d26-b102-499641222d49
-medium20_selection_run_id 52d72987-ddf0-5a7f-9be7-1fc11aef5960
+수집 -> 전처리 -> 모델 점수 -> 후보 선정·검증 -> 저장·조회 API
 ```
 
-배포된 후보 API는 옵션이 없으면 `MEDIUM_20D`를 반환합니다.
-기존 5거래일 결과는 `model_purpose=SHORT_5D`로 조회하며, 한 모델 목적의 결과가
-없을 때 다른 모델로 자동 대체하지 않습니다. API의 기본 조회 모델과 별개로 일일
-Durable control plane은 `SHORT_5D` child가 terminal이 된 뒤 `MEDIUM_20D` child를
-시작하는 날짜별 부모 orchestration을 사용합니다.
+- Candidate PostgreSQL이 원천·점수·후보·실행 기록의 단일 원본입니다.
+- Portal과 TradingAgents는 외부 소비자입니다. 분석 실행, agent prompt·memory,
+  매수·매도 판정, MySQL 분석 상태와 보고서 Blob은 이 저장소의 책임이 아닙니다.
+- Durable Functions는 일정·멱등 API 호출·상태 확인을 담당하는 control plane입니다.
+- 기존 `SHORT_5D`의 명시적 API·수동 실행과 5~10개 레거시 정책은 유지합니다.
+  이를 일일 MEDIUM 또는 향후 최종 전달 수량 20개와 혼동하지 않습니다.
 
-## 데이터 원천
+| 결과 | 개수 | 점수 의미 | 실행·조회 계약 |
+|---|---:|---|---|
+| 정량 `MEDIUM_20D` | 정확히 20 | `PREDICTED_20D_RETURN` | 기본 일일 추론, `/api/v1/candidates` |
+| 레거시 `SHORT_5D` | 5~10 | `PREDICTED_5D_RETURN` | 명시적 목적 선택, 동일 API |
+| 독립 `LLM_PRESELECTION` | 정확히 20 | `LLM_EVIDENCE_SCORE` | feature flag 기본 비활성, `/api/v1/llm-preselections` |
+| 향후 RRF 통합 결과 | 목표 20 | 별도 fusion 순위 | 설계 단계, 아직 미구현 |
+| 외부 TradingAgents 전달 | 20 | 선정 run 참조 | 변경된 목표 계약, 자동 전달 전 별도 연동 검증 필요 |
 
-| Provider | 용도 | 현재 구현 |
-|---|---|---|
-| Massive Stocks Basic | EOD OHLCV·VWAP, SPY benchmark, dividends, splits, news | 구현·실제 적재 |
-| SEC EDGAR | ticker, CIK, exchange, submissions/companyfacts bulk | reference 구현·적재, bulk downloader 구현 |
-| Alpha Vantage | 전체 earnings calendar | 구현·실제 적재 |
-| Wikipedia revision | prototype S&P 500 universe | 구현·실제 적재 |
-| NYSE/Nasdaq | calendar, early close, halts | 미구현 |
+`20D`는 **예측 기간 20거래일**이며 후보 개수와 별개입니다. MEDIUM 선정 정책은
+[selection_medium_20d_v1.yaml](config/analytics/selection_medium_20d_v1.yaml)의
+`medium-20d-top20-v1`입니다. 양수 예측만 고르지 않고 전체 적격 universe에
+issuer 중복 제거와 sector cap을 적용합니다. hard gate를 완화해 수량을 채우거나
+20개 미만을 성공 결과로 표시하지 않습니다.
 
-NYSE/Nasdaq 공식 원천은 거래 달력·조기 폐장·거래정지를 서로 다른 문서와 피드로 제공해 안정적인 수집·과거 재현 정책 검증이 아직 필요합니다. 현재는 `exchange_calendars`의 XNYS 세션을 기준선으로 사용하며 공식 collector는 구현하지 않았습니다.
+후보 수 변경은 모델 재학습이나 예측값 변경이 아닙니다. Top-5/10 평가 지표와
+과거 10개 후보 검증 기록은 그대로 유효하며 20개 성능으로 바꿔 해석하지 않습니다.
 
-주요 제한:
-
-- Massive Stocks Basic: 분당 5회, EOD, 가격 과거 2년
-- Massive 무료 범위: dividend·news 과거 이력 제한
-- Alpha Vantage 무료 key: 하루 25회
-- Alpha earnings: ticker 없이 전체 목록을 하루 1회 요청
-- SEC: 무료 JSON·bulk ZIP, 연락처 User-Agent 필요
-- SEC facts: concept·unit·duration·fiscal period 정규화가 필요
-- 역사적 S&P 구성·GICS는 S&P DJI 계약 없이는 충족되지 않음
-
-상세 내용은 [데이터 원천·라이선스 카탈로그](.github/modernize/assessment/engines/facts/data-source-license-catalog.md)를 참고하세요.
-
-## 프로젝트 범위와 전체 아키텍처
-
-아래 다이어그램은 중간 발표 1장과 같은 구성이다. **실선 왼쪽
-`PROJECT SCOPE · candidate_engine`이 이 저장소의 구현 범위**다. 오른쪽
-Portal·TradingAgents는 5~10개 후보를 소비하는 외부 시스템이며 연동 계약을 설명하기
-위해 함께 표시한다. 후보 원본과 파이프라인 실행 기록은 Candidate PostgreSQL이 단일
-원본이고, 외부 분석 job·판정·보고서는 Portal MySQL과 private Blob에 저장된다.
-
-| 영역 | 상태 | 저장소 범위 |
-|---|---|---|
-| 원천 수집·Data Spine·Qlib Alpha158·LightGBM·selection·Candidate API | CURRENT | 포함 |
-| LLM 기업·뉴스 평가 상위 20과 수치 Top 20 통합 | PLANNED | 계약 승인 후 포함 예정 |
-| Portal·TradingAgents·외부 분석 data/state·report | EXTERNAL | 제외, API 연동만 유지 |
-
-```mermaid
-flowchart LR
-    subgraph CandidateScope["PROJECT SCOPE · candidate_engine"]
-        subgraph Daily["Daily Orchestration · 05:30 ET"]
-            subgraph Inputs["S&P 500 Universe and Source Data"]
-                Reference["Wikipedia and SEC<br/>S&P 500 · GICS · CIK · ticker · exchange"]
-                Massive["Massive<br/>OHLCV · VWAP · SPY · actions · news"]
-                Sec["SEC EDGAR<br/>filing · submissions · normalized XBRL"]
-                Alpha["Alpha Vantage<br/>earnings calendar · estimate · reported EPS"]
-            end
-
-            DataSpine[("Candidate PostgreSQL<br/>immutable snapshot · manifest · execution context")]
-
-            subgraph Quant["Microsoft Qlib · Numeric Top 20 · CURRENT"]
-                Export["Qlib export<br/>adjusted OHLCV · calendar · span"]
-                Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
-                WalkForward["Purged walk-forward<br/>time split · train-only fit"]
-                LightGBM["LightGBM<br/>SHORT_5D · MEDIUM_20D"]
-                NumericTop["Predicted return rank<br/>numeric top 20"]
-            end
-
-            LlmTop["LLM company and news evaluation<br/>top 20 · PLANNED"]
-            Merge["Candidate merge and validation<br/>deduplication · risk factors · sector diversification"]
-            CandidateApi["Final candidates 5 to 10<br/>Candidate API · not an order"]
-
-            Reference --> DataSpine
-            Massive --> DataSpine
-            Sec --> DataSpine
-            Alpha --> DataSpine
-            DataSpine --> Export --> Features --> WalkForward --> LightGBM --> NumericTop
-            DataSpine -.-> LlmTop
-            NumericTop --> Merge
-            LlmTop -.-> Merge
-            Merge --> CandidateApi
-        end
-
-        Durable["Python Durable Functions<br/>SHORT_5D then MEDIUM_20D · idempotent control plane"]
-        CandidateState["Private Storage · Key Vault · App Insights · ACS Email"]
-        Durable --> Daily
-        CandidateState --> Durable
-    end
-
-    subgraph External["EXTERNAL · jongmok-toronbang and TradingAgents"]
-        Portal["Portal and Analysis API<br/>selection validation · idempotent dispatch"]
-
-        subgraph Agents["Agents Layer"]
-            Analysts["Analysts<br/>market · fundamentals · news · sentiment"]
-            Debate["Bull and Bear<br/>evidence debate"]
-            Research["Research Manager<br/>debate synthesis"]
-            Trader["Trader<br/>proposal"]
-            Risk["Risk and Portfolio<br/>final rating"]
-            Analysts --> Debate --> Research --> Trader --> Risk
-        end
-
-        subgraph ExternalData["Data and State Layer"]
-            YFinance["yfinance<br/>OHLCV · fundamentals · news"]
-            Macro["FRED and Polymarket<br/>macro · prediction"]
-            PortalState[("MySQL and private Blob<br/>job · decision · report")]
-        end
-
-        PortalUi["Portal UI<br/>DailyAnalysis · Job status · report retrieval"]
-        Portal --> Agents
-        YFinance --> Analysts
-        Macro --> Analysts
-        Agents --> PortalState
-        PortalState --> PortalUi
-    end
-
-    CandidateApi -->|"selection run batch"| Portal
-```
-
-운영 순서는 다음과 같다.
-
-1. UTC 매시 30분 timer가 `America/New_York` 05:30인지 확인하고
-   `candidate-dual-YYYY-MM-DD` 부모를 한 번만 시작한다.
-2. 부모는 결정적 child ID로 `SHORT_5D`를 실행한 뒤 terminal 결과를 보존하고
-   `MEDIUM_20D`를 실행한다. SHORT의 Candidate core·preflight 실패 또는 timeout이면
-   MEDIUM을 시작하지 않으며, SHORT의 Portal 실패·timeout, `PARTIAL_FAILED`,
-   `SKIPPED_EXISTING`에서는 MEDIUM을 계속한다.
-3. 각 child는 XNYS 거래일과 Candidate·Portal·TradingAgents readiness를 확인한다.
-4. Candidate 제출 전에 같은 날짜·모델의 완전한 terminal selection이 있으면
-   `SKIPPED_EXISTING`으로 끝내고 Candidate·Portal·TradingAgents를 새로 실행하지
-   않는다. 그렇지 않으면 모델 목적을 포함한 `Idempotency-Key`로 `DAILY`를 요청한다.
-5. 검증한 모델별 후보 5~10개를 Portal service API에 selection run 단위로 제출한다.
-6. Portal은 TradingAgents Container App 실행을 중개하고 분석 작업·결과를 MySQL에
-   저장한다. 오케스트레이터는 집계를 polling하고 시작·성공·부분 실패·실패·timeout을
-   모델 목적·날짜·상태가 포함된 ACS Email로 알린다.
-7. 별도 guardian은 15분마다 readiness와 승인된 제한 복구를 수행한다. guardian은
-   Durable 부모를 시작하거나 terminal 실행을 재시작하지 않는다.
-
-Candidate DAILY inference는 모델 목적마다 별도의 schema v2 manifest와 SHA-256을
-요구한다. `SHORT_5D`와 `MEDIUM_20D`는 각자의 model/label config, prediction
-semantics, horizon, registry model version과 artifact hash를 모두 검증하며 다른 모델
-artifact로 fallback하지 않는다.
-
-### 오케스트레이터 아키텍처
-
-오케스트레이터는 Candidate Engine과 외부 분석 시스템 사이의 control plane이다.
-Candidate PostgreSQL이나 Portal MySQL에 직접 접근하지 않으며 API 계약만 사용한다.
-표준 Durable Azure Storage backend에는 후보나 분석 결과가 아니라 orchestration
-history와 task state를 저장한다. 같은 Storage Account가 FC1 host runtime과 코드
-배포 컨테이너도 제공하며 공유 키 없이 system-assigned identity로 접근한다.
+## 파이프라인 아키텍처
 
 ```mermaid
 flowchart TD
-    Timer["UTC 매시 30분"] --> LocalGate["05:30 America New York gate"]
-    LocalGate --> Parent["candidate-dual-date<br/>날짜별 부모 instance"]
-    Parent --> Short["SHORT_5D child"]
-    Short --> MediumGate{"SHORT core와<br/>preflight 통과?"}
-    MediumGate -->|"Yes"| Medium["MEDIUM_20D child"]
-    MediumGate -->|"No"| ParentEnd["부모 terminal"]
-    Short --> Duplicate["날짜·모델 기존 selection 확인"]
-    Medium --> Duplicate
-    Duplicate -->|"존재"| Skip["SKIPPED_EXISTING<br/>신규 제출 없음"]
-    Duplicate -->|"없음"| Candidate["Candidate DAILY·poll·검증"]
-    Candidate --> Portal["Portal batch·aggregate polling"]
-    Skip --> ModelMail["모델별 terminal Email"]
-    Portal --> ModelMail
-    ModelMail --> ParentEnd
-    Guardian["15분 resource guardian"] --> Readiness["readiness·제한 복구<br/>실행 시작 안 함"]
+    Timer["05:30 America/New_York<br/>MEDIUM_20D daily"] --> Collect["공통 수집·정규화·품질 검사"]
+    Collect --> Spine[("Candidate PostgreSQL<br/>snapshot·manifest·cutoff")]
+    Spine --> Quant["Qlib export·Alpha158<br/>고정 LightGBM 추론"]
+    Quant --> Quant20["정량 Top 20<br/>issuer·sector 정책"]
+    Spine -.-> Llm["독립 Azure OpenAI pipeline<br/>기본 비활성"]
+    Llm -.-> Llm20["LLM Top 20<br/>근거·schema 검증"]
+    Quant20 --> QuantApi["정량 저장·Candidate API"]
+    Llm20 -.-> LlmApi["별도 LLM 저장·조회 API"]
+    QuantApi -.-> Fusion["후속 구현: issuer union·RRF<br/>정책 검증·최종 Top 20"]
+    LlmApi -.-> Fusion
+    Fusion -.-> Portal["외부 Portal<br/>20개 selection run 전달 목표"]
+    Portal -.-> Trading["외부 TradingAgents<br/>분석·판정·보고서"]
+    Weekly["주 1회 training-only<br/>SHORT와 MEDIUM 독립 평가"] --> Registry["artifact·promotion gate<br/>active assignment"]
+    Registry --> Quant
 ```
 
-핵심 운영 계약:
+실선은 기본 정량 경로입니다. 점선 LLM 경로는 구현된 선택 기능이며 RRF·최종
+20개 전달은 후속 설계입니다. LLM 활성화 시 공통 context 준비 후 Qlib export·모델
+검증과 독립적으로 병렬 실행합니다. 두 중간 목록 40개를 그대로 외부에 전달하지 않습니다.
 
-- timer는 DST를 고려해 뉴욕 현지 05:30에만 직전 달력 날짜의 dual 부모를 시작한다.
-- 비거래일은 외부 실행 없이 `SUCCEEDED`, `skipped=true`로 종료한다.
-- orchestration code는 외부 I/O를 하지 않고 activity와 durable timer만 예약한다.
-- Candidate는 `SUCCEEDED`일 때만 진행하며 `PARTIAL_SUCCESS`는 실패로 종료한다.
-- `SKIPPED_EXISTING`은 오류가 아닌 모델 terminal 상태이며 신규 Candidate/Portal 제출이 없다.
-- 후보는 대상일·모델 목적·position·중복·단일 selection run·5~10개 조건을 검증한다.
-- Portal은 후보 row가 아니라 selection run 참조를 받고 job별 `has_result`까지 집계한다.
-- system-assigned 관리 ID는 Durable/FC1 Storage의 Blob·Queue·Table, App Insights·ACS와
-  ARM 조회에 사용한다. 조직 정책으로 Key Vault가 private-only인 현재 구성에서는 서버 간
-  credential을 Bicep `@secure()` parameter로 전달해 encrypted Function App Settings에
-  저장한다. Storage public access는 Disabled이며 West US 3 VNet의 FC1 위임 subnet,
-  Blob·Queue·Table private endpoint와 private DNS link를 통해서만 접근한다.
-  preflight는 public access를 열지 않고 private data plane 연결을 확인해 실패 시
-  실행을 차단한다.
+### 구현 경계
 
-상태 전이, 멱등성 계층, 외부 API, RBAC, timeout과 관측성의 기준 설계는
-[오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)를
-참고하세요.
+| 구성 | 위치 | 책임 |
+|---|---|---|
+| 공통 수집 | [production_pipeline.py](src/sp500_candidate_engine/production_pipeline.py) | 공급자 수집·정규화·snapshot |
+| 일일 배치 | [batch_pipeline.py](src/sp500_candidate_engine/batch_pipeline.py) | 수집 후 후보 실행·결과 집계 |
+| 고정 정량 추론 | [pipeline_execution.py](backend/app/services/pipeline_execution.py) | artifact 검증·Qlib·점수·20개 선정 |
+| 독립 LLM | [llm_preselection/](src/sp500_candidate_engine/llm_preselection/) | evidence·평가·재정렬·저장·단독 실행 |
+| LLM 정책 | [config/llm_preselection/](config/llm_preselection/) | windows·rubric·token·retry 설정 |
+| 병렬 조정 | [daily_preselection.py](src/sp500_candidate_engine/daily_preselection.py) | 형제 pipeline 실행·실패 격리 |
+| 외부 control plane | [orchestrator/](orchestrator/) | timer·접수·poll·후보 검증·전달 경계 |
 
-상세 설계:
+LLM 기본 설정은 `LLM_PRESELECTION_ENABLED=false`입니다. 정량 Top 20 완료는
+LLM 결과 유무에 의존하지 않습니다. LLM을 활성화한 병렬 실행은 한쪽만 성공하면
+`PARTIAL_SUCCESS`, 양쪽 모두 성공하지 못하면 `FAILED`로 집계하고 성공한 결과는
+보존합니다. 실패한 LLM을 과거 결과나 정량 목록으로 대체하지 않습니다.
 
-- [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
-- [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)
-- [일 1회 수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)
-- [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)
-- [모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md)
-- [Durable Functions 구현·배포](orchestrator/README.md)
-- [오케스트레이터 telemetry·KQL runbook](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)
-- [프로젝트 공통 하네스](PROJECT-HARNESS.md)
+**자동 전달 경계:** 현재 MEDIUM workflow는 `parallel_preselection`에서 종료하고
+`submitted_candidates=0`으로 Portal 제출을 건너뜁니다. 이번 문서의 20개 전달 계약이
+그 차단을 해제하거나 외부 시스템을 배포한 것은 아닙니다. 최종 통합·전달 활성화 시
+Portal의 20개 수용, 날짜·목적·run·position·중복 검증과 멱등 처리를 함께 검증해야 합니다.
 
-## 일일 파이프라인
+## 일일 실행과 주간 재학습
 
-기본 스케줄은 매일 `05:30 America/New_York`입니다.
+### 일일 control plane
 
-### 수집 파이프라인 아키텍처
+1. UTC 매시 30분 timer가 뉴욕 현지 `05:30`일 때만 직전 달력 날짜의
+   `candidate-daily-YYYY-MM-DD-medium_20d`를 시작합니다. DST는 timezone으로 처리합니다.
+2. Candidate XNYS session 조회에서 비거래일이면 외부 실행 없이 skip합니다.
+3. readiness를 확인하고 날짜·모델별 유효한 정량 20개가 이미 있으면
+   `SKIPPED_EXISTING`으로 신규 제출을 생략합니다. 과거 10개 결과는 새 20개 완료 조건이 아닙니다.
+4. MEDIUM은 `top20-v1` suffix가 있는 `Idempotency-Key`로 DAILY를 접수합니다.
+   같은 key·payload는 같은 run, 다른 payload는 충돌로 처리합니다.
+5. 공통 수집 후 고정 artifact로 추론하고 정량 20개를 저장·검증합니다.
+   DAILY API는 모델 학습이나 processor fit을 실행하지 않습니다.
+6. MEDIUM은 후보 저장 경계에서 종료합니다. 기존 SHORT 명시 실행의 Portal 경로는
+   레거시로 유지하며 새 20개 전달 계약의 구현 완료 증거로 간주하지 않습니다.
 
-```mermaid
-flowchart TD
-    Start["05:30 ET 실행"] --> Session["직전 완료 세션 결정"]
-    Session --> Preflight["Key·quota·checkpoint·DB preflight"]
+15분 resource guardian은 readiness와 승인된 제한 복구만 수행하며 일일 실행을
+시작하지 않습니다. 메일은 `ORCHESTRATOR_EMAIL_ENABLED`로 제어하며 비활성 시
+`SKIPPED`를 기록합니다. SKU·replica·리소스 중지는 별도 사용자 승인 없이 변경하지 않습니다.
 
-    Preflight --> MassiveLane["Massive lane<br/>공유 5 req/min queue"]
-    Preflight --> SecLane["SEC lane<br/>JSON·bulk ZIP"]
-    Preflight --> AlphaLane["Alpha lane<br/>전체 earnings 1회"]
-    Preflight --> RefLane["Reference lane<br/>universe·calendar"]
+### 주 1회 training-only
 
-    MassiveLane --> Raw["Atomic raw snapshot<br/>SHA-256·coverage"]
-    SecLane --> Raw
-    AlphaLane --> Raw
-    RefLane --> Raw
+- New York 주말 gate와 ISO week 멱등 run으로 SHORT·MEDIUM을 각각 평가합니다.
+- 학습과 일일 추론은 분리하며 weekly job은 production 후보를 생성하지 않습니다.
+- expanding purged walk-forward, 성숙 label, train-only fit을 적용합니다.
+- challenger가 절대·상대 promotion gate를 통과할 때만 immutable artifact와
+  generation CAS active assignment를 갱신합니다. 실패·reject는 incumbent를 유지합니다.
+- DAILY는 assignment를 실행별로 pin하고 hash·schema·model purpose·horizon을 검증합니다.
 
-    Raw --> MarketWorker["Market·action worker"]
-    Raw --> SecWorker["SEC worker"]
-    Raw --> EventWorker["Event worker"]
-    Raw --> RefWorker["Reference worker"]
+상세 계약은 [주간 재학습 설계](weekly_retraining_model_design.md)와
+[모델 변경 이력](MODEL_CHANGELOG.md)을 참고하세요.
 
-    MarketWorker --> Gate["Cutoff·manifest·품질 gate"]
-    SecWorker --> Gate
-    EventWorker --> Gate
-    RefWorker --> Gate
+## 데이터 원천과 수집
 
-    Gate --> Transactions["Dataset별 transaction"]
-    Transactions --> Manifest["Final input manifest"]
-    Manifest --> Candidate["명시적 date 실행<br/>Qlib·점수·후보"]
-```
+| 원천 | 용도 | 제한·주의 |
+|---|---|---|
+| Massive Stocks Basic | EOD OHLCV·VWAP·SPY·split·dividend·news | 공유 5회/분, 가격 약 2년, 콘텐츠 권리 확인 |
+| SEC EDGAR | CIK·ticker·exchange·submissions·companyfacts | User-Agent 필수, fact concept·unit·기간 정규화 |
+| Alpha Vantage | 전체 earnings calendar | 하루 전체 목록 1회, 무료 key 25회/일 |
+| Wikipedia revision | prototype S&P 500·GICS | 공식 과거 구성·분류 이력이 아님 |
+| `exchange_calendars` | XNYS session 기준선 | 공식 NYSE/Nasdaq calendar·halt collector는 후속 과제 |
 
-1. 마지막 완료 미국 거래 세션 결정
-2. key·quota·checkpoint·DB preflight
-3. 공급자별 병렬 lane 시작
-4. Massive 내부 요청을 하나의 5회/분 queue로 순차화
-5. raw snapshot atomic 저장과 SHA-256
-6. dataset별 병렬 정규화
-7. 조정 상태가 명시된 종목 bar와 `PRICE_RETURN` SPY benchmark revision 저장
-8. cutoff·manifest·품질 gate
-9. dataset transaction과 final manifest
-10. 명시적으로 선택한 date에 Qlib export·feature·score·candidate 실행
+공급자별 quota가 독립인 lane은 병렬 실행합니다. Massive는 collector 전체가 limiter를
+공유하며 grouped daily 미지원 시 ticker fallback으로 약 101분 이상 걸릴 수 있습니다.
+raw snapshot atomic write와 content hash, dataset transaction, temporal·quality gate,
+final manifest를 거쳐 후보 입력을 확정합니다.
 
-기간 backfill은 9단계에서 종료하며 후보를 자동 생성하지 않습니다.
+기간 BACKFILL은 수집에서 종료하고 후보를 자동 생성하지 않습니다. 역사적 earnings는
+당시 revision을 증명할 수 없으면 제외합니다. 현재 구성원 목록을 과거 구성원으로
+간주하지 않으며 결측 가격·거래량을 forward fill하지 않습니다.
 
-Massive grouped daily endpoint를 우선 사용합니다. 사용할 수 없으면 ticker별 503회 fallback이며 최소 약 101분이 걸립니다.
+데이터 권리·범위는 [원천·라이선스 카탈로그](.github/modernize/assessment/engines/facts/data-source-license-catalog.md),
+수집 흐름은 [수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)을 따릅니다.
 
-## 모델 설계
+## 정량 모델과 독립 LLM
 
-```mermaid
-flowchart LR
-    Context["Manifest and Cutoff"] --> Adjust["Split Adjusted OHLCV"]
-    Adjust --> Qlib["Qlib Binary Export"]
-    Qlib --> Features["Alpha158 RAW<br/>158 Features"]
-    Adjust --> ShortLabel["SHORT 5D Return<br/>D plus 1 Open to D plus 5 Close"]
-    Adjust --> MediumLabel["MEDIUM 20D Return<br/>D plus 1 Open to D plus 20 Close"]
-    Features --> Split["Purged Walk Forward"]
-    ShortLabel --> Split
-    MediumLabel --> Split
-    Split --> Models["Momentum Ridge LightGBM"]
-    Models --> Eval["IC Rank IC<br/>Top 5 and 10<br/>Cost Drawdown"]
-    Eval --> Registry["Model Registry<br/>SHADOW or CHAMPION"]
-    Registry --> Score["Predicted 5D or 20D Return<br/>Rank Percentile"]
-    Score --> Select["Hard Gates<br/>Issuer and Sector Limits"]
-    Select --> Candidates["Five to Ten Candidates"]
-```
+### Alpha158·LightGBM
 
-핵심 계약:
+- split-adjusted OHLCV·VWAP, 거래 session, point-in-time membership과 factor lineage를 사용합니다.
+- Alpha158 RAW 158차원, 최대 lookback 60 sessions이며 필요 이력이 없으면 적격으로 만들지 않습니다.
+- SHORT label은 `D+5 adjusted close / D+1 adjusted open - 1`,
+  MEDIUM label은 `D+20 adjusted close / D+1 adjusted open - 1`입니다.
+- 예측값은 raw 가격 수익률이며 확률·confidence·SPY 초과수익률이 아닙니다.
+- 뉴스·실적·SEC fact는 현재 Alpha158 모델 입력에 자동 포함되지 않습니다.
+- IC·Rank IC, Top-5/10 raw·net return, 비용·drawdown 평가를 유지합니다.
+  후보 수 20개 변경만으로 Top-20 성능이 검증됐다고 주장하지 않습니다.
 
-- 특징: Qlib Alpha158 RAW 158차원, 최대 lookback 60 sessions
-- Label: `SHORT_5D`는 D+5, `MEDIUM_20D`는 D+20 adjusted close를 각각
-  `D+1 adjusted open`과 비교한 raw 수익률
-- SPY: optional 평가 series, label 생성과 선정의 필수 입력이 아님
-- 학습: expanding train, validation/test 시간 분할, label-exit purge
-- 모델: Momentum·Ridge baseline과 Qlib LightGBM
-- 평가: IC·Rank IC, Top-5/10 raw·net return, 양의 비율, 5개 중첩 cohort MDD
-- Score: `PREDICTED_5D_RETURN` 또는 `PREDICTED_20D_RETURN`; 확률이나
-  confidence가 아님
-- 후보 API 기본 조회: `MEDIUM_20D`; 일일 control plane은 `SHORT_5D` 다음
-  `MEDIUM_20D`를 독립 실행하며 모델 간 자동 fallback 없음
-- 후보: 양수 threshold 없이 전체 적격 universe를 순회하고 issuer·sector 제약 적용
+### LLM evidence
 
-상세 설계는 [후보 선정 모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md), 모델 변경 이력은 [MODEL_CHANGELOG.md](MODEL_CHANGELOG.md)를 참고하세요.
+별도 LLM pipeline은 manifest로 제한한 뉴스 30일, 실적 2회, SEC filing 1년,
+facts 8분기, 기업행위 1년, 가격 60 sessions와 당시 종목 metadata를 사용합니다.
+전체 적격 universe를 배치별 strict JSON으로 평가하고 상위 pool을 정확히 20개로
+재정렬합니다. raw payload·기사 전문·외부 웹 검색·외부 지식·투자 의견은 입력·평가에서 제외합니다.
 
-## Point-in-Time 원칙
+Entra 인증 Azure OpenAI를 사용합니다. 응답 schema·source evidence ID를 검증하고
+timeout·408/429/5xx 등 제한된 오류만 retry합니다. deployment·API·prompt·policy·
+evidence version과 입력·출력 hash·token 사용량을 보존하며 성공한 동일 입력은 재사용합니다.
 
-- 모든 실행은 `source_snapshot`, `input_manifest`, `execution_context`로 추적합니다.
-- 논리 데이터 revision과 snapshot observation을 분리합니다.
-- 같은 값은 중복 revision으로 저장하지 않습니다.
-- 변경된 provider payload만 새 snapshot으로 저장합니다.
-- 미래 session과 cutoff 이후 데이터는 fail closed합니다.
-- `OPERATIONAL_REPLAY`와 `HISTORICAL_RECONSTRUCTION`을 구분합니다.
-- 동일 수집일 재실행은 변경분만 추가합니다.
+[RRF 설계서](<Agent Implementation Instructions — Hybrid Candidate Selection with RRF.md>)는
+후속 통합 목표입니다. 이벤트 screening·평가 rubric 등 제안은 현재 LLM 구현과 같다고
+간주하지 않으며, 최종 20개 병합·API·외부 전달은 별도 구현·검증이 필요합니다.
 
-## PostgreSQL
+## Point-in-time·저장 계약
 
-대상:
+- 모든 분석 조회는 `execution_context_id`와 `input_manifest_member`에 고정합니다.
+- `source_available_at <= cutoff_at`; `OPERATIONAL_REPLAY`는 observation도 cutoff 이하여야 합니다.
+- `HISTORICAL_RECONSTRUCTION`은 당시 운영 입력 재현으로 표현하지 않습니다.
+- FULL/DELTA lineage 모호성, 미래 누수, artifact 불일치는 fail closed합니다.
+- 원본·revision·기존 후보 run을 덮어쓰지 않습니다. 새 정책은 새 identity를 사용합니다.
+- 후보와 reason은 단일 transaction으로 저장하며 position·instrument·rank 중복을 허용하지 않습니다.
 
-```text
-Azure Database for PostgreSQL Flexible Server 16
-database: candidate_engine
-authentication: Microsoft Entra
-```
-
-논리 스키마:
+Azure PostgreSQL 16+를 Microsoft Entra 인증으로 사용합니다.
 
 | Schema | 책임 |
 |---|---|
-| `ops` | ingestion run, snapshot, manifest, context, quality |
-| `ref` | issuer, instrument, identifier, state, universe |
-| `market` | daily bar, observation, corporate action |
-| `event` | news, earnings, revision, instrument mapping |
-| `fundamental` | SEC filing·fact와 snapshot observation |
-| `analytics` | Qlib export, feature·label, model, score |
-| `selection` | 5~10개 candidate batch와 reason |
+| `ops` | ingestion·snapshot·manifest·context·quality·process |
+| `ref` | issuer·instrument·state·identifier·universe |
+| `market` | daily bar·benchmark·corporate action·observation |
+| `event` | news·earnings·revision·instrument mapping |
+| `fundamental` | SEC filing·fact·observation |
+| `analytics` | export·feature·label·model·score·LLM evidence/assessment |
+| `selection` | 정량 Top 20·레거시 결과·별도 LLM Top 20·reason |
 
-### 데이터 스키마 ER 다이어그램
+[sql/](sql/)의 migration을 순서대로 적용합니다. 20개 허용 제약과 LLM schema는
+[022_llm_preselection.sql](sql/022_llm_preselection.sql)에 있습니다. 신규 코드·schema의
+운영 적용은 별도 배포 작업이며 문서 수정만으로 기존 10개 결과가 변경되지 않습니다.
+상세 관계는 [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)를 참고하세요.
 
-아래 다이어그램은 현재 적재 경로의 핵심 테이블과 provenance 관계를 표시합니다. `analytics`와 `selection`은 논리 스키마만 예약되어 있어 제외했습니다.
+## 설치와 환경 설정
 
-```mermaid
-erDiagram
-    OPS_INGESTION_RUN ||--o{ OPS_SOURCE_SNAPSHOT : produces
-    OPS_SOURCE_SNAPSHOT }o--o{ OPS_INPUT_MANIFEST : included_in
-    OPS_INPUT_MANIFEST ||--o{ OPS_EXECUTION_CONTEXT : creates
-    OPS_PROCESS_RUN ||--o{ OPS_PROCESS_DATE_STATUS : tracks
-
-    REF_ISSUER ||--o{ REF_INSTRUMENT : issues
-    REF_INSTRUMENT ||--o{ REF_INSTRUMENT_IDENTIFIER : identifies
-    REF_INSTRUMENT ||--o{ REF_INSTRUMENT_STATE : has
-    REF_UNIVERSE ||--o{ REF_UNIVERSE_VERSION : versions
-    REF_UNIVERSE_VERSION ||--o{ REF_UNIVERSE_MEMBER : contains
-    REF_INSTRUMENT ||--o{ REF_UNIVERSE_MEMBER : joins
-
-    REF_INSTRUMENT ||--o{ MARKET_DAILY_BAR : prices
-    MARKET_DAILY_BAR ||--o{ MARKET_DAILY_BAR_OBSERVATION : observed_as
-    OPS_SOURCE_SNAPSHOT ||--o{ MARKET_DAILY_BAR_OBSERVATION : records
-    REF_INSTRUMENT ||--o{ MARKET_CORPORATE_ACTION : affects
-    MARKET_CORPORATE_ACTION ||--o{ MARKET_CORPORATE_ACTION_OBSERVATION : observed_as
-    OPS_SOURCE_SNAPSHOT ||--o{ MARKET_CORPORATE_ACTION_OBSERVATION : records
-
-    EVENT_MARKET_EVENT ||--o{ EVENT_EVENT_REVISION : revises
-    EVENT_MARKET_EVENT }o--o{ REF_INSTRUMENT : maps_to
-    EVENT_EVENT_REVISION ||--o{ EVENT_EVENT_REVISION_OBSERVATION : observed_as
-    OPS_SOURCE_SNAPSHOT ||--o{ EVENT_EVENT_REVISION_OBSERVATION : records
-
-    REF_ISSUER ||--o{ FUNDAMENTAL_SEC_FILING : files
-    FUNDAMENTAL_SEC_FILING ||--o{ FUNDAMENTAL_FACT : reports
-    FUNDAMENTAL_SEC_FILING ||--o{ FUNDAMENTAL_SEC_FILING_OBSERVATION : observed_as
-    FUNDAMENTAL_FACT ||--o{ FUNDAMENTAL_FACT_OBSERVATION : observed_as
-    OPS_SOURCE_SNAPSHOT ||--o{ FUNDAMENTAL_SEC_FILING_OBSERVATION : observes
-    OPS_SOURCE_SNAPSHOT ||--o{ FUNDAMENTAL_FACT_OBSERVATION : observes
-```
-
-Migration은 [sql/](sql/)에 있으며 파일명 순서대로 적용됩니다.
-
-`market.daily_bar`는 OHLCV와 함께 provider VWAP, 가격 조정 상태, 거래량 조정 상태를 보존합니다. `market.benchmark_daily_bar`는 동일 거래일의 SPY를 별도 series로 저장하며 현재 수익률 기준은 배당 미포함 `PRICE_RETURN`입니다.
-
-## 설치
-
-Python 3.11 이상이 필요합니다. 현재 개발 환경은 Python 3.13입니다.
-
-<details>
-<summary>개발 환경 설치 명령</summary>
+기본 Python 요구사항은 3.11+입니다. Qlib analytics는 manifest의 제한에 따라
+Python 3.11 또는 3.12를 사용합니다.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m ensurepip --upgrade
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-```
-
-</details>
-
-해결된 의존성 버전은 [requirements.lock](requirements.lock)에 기록합니다.
-
-## 환경 설정
-
-<details>
-<summary>로컬 환경 파일 설정</summary>
-
-```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[analytics,backend,dev]"
 Copy-Item .env.example .env
 ```
 
-`.env`에 다음 값을 입력합니다.
+기존 환경파일이 있다면 덮어쓰지 않습니다. 로컬 엔진·독립 LLM은 루트 `.env`,
+API 전용 설정은 `backend/.env`, Azure는 App Settings와 관리 ID를 사용합니다.
+필수 Azure/DB/provider 설정과 선택 LLM 설정은 [.env.example](.env.example)을 따릅니다.
+tenant/client ID·client secret은 로컬 서비스 계정 인증에만 사용하고 값은 로그·문서·Git에 남기지 않습니다.
+Azure OpenAI client는 custom temperature를 강제하지 않고 strict JSON을 요구합니다.
 
-```dotenv
-AZURE_CREDENTIAL_MODE=azure_cli
+## 실행과 조회
 
-MASSIVE_API_KEY=<real-key>
-ALPHA_VANTAGE_API_KEY=<real-key>
+### 운영용 고정 모델 DAILY API
 
-MARKET_DATA_PROVIDER=massive
-CORPORATE_ACTION_PROVIDER=massive
-NEWS_DATA_PROVIDER=massive
-IDENTIFIER_DATA_PROVIDER=sec_edgar
-EARNINGS_CALENDAR_PROVIDER=alpha_vantage
-FUNDAMENTALS_DATA_PROVIDER=sec_edgar
+아래는 요청 계약입니다. 인증 헤더와 base URL은 실제 환경에서 안전하게 주입합니다.
+
+```json
+{
+  "mode": "DAILY",
+  "date": "2026-10-15",
+  "with_candidates": true,
+  "model_purpose": "MEDIUM_20D"
+}
 ```
 
-</details>
+- `POST /api/v1/pipeline-runs`: `X-API-Key`·`Idempotency-Key`, `202 + process_run_id`.
+- `GET /api/v1/pipeline-runs/{process_run_id}`: 실행 상태 확인.
+- `GET /api/v1/candidates?date=2026-10-15&model_purpose=MEDIUM_20D&limit=100`:
+  대상일 최신 성공 정량 run. `selected_count`, `requested_count`, 실제 row 수를 함께 확인합니다.
+- `GET /api/v1/llm-preselections?date=2026-10-15`: 별도 LLM 결과. 정량 응답과 섞지 않습니다.
 
-`.env`는 Git에서 제외됩니다. 키를 코드, 로그, README에 저장하지 마세요.
+API 조회 기본 목적은 MEDIUM이며 해당 결과가 없다고 SHORT로 fallback하지 않습니다.
+조회 watermark·cursor·CORS·배포 및 단일 worker 제약은 [Backend 가이드](backend/README.md)를 따릅니다.
 
-## 명령
-
-<details>
-<summary>CLI 명령 모음</summary>
-
-설정 상태 확인, 실제 키는 출력하지 않습니다.
+### CLI
 
 ```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env check-config
+# 설정 이름·구성 상태 확인, 비밀값 출력 금지
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env check-config
+
+# 수집만 실행
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env run-daily --date 2026-10-15
+
+# 기존 export 기반 MEDIUM 연구 workflow: 학습·평가를 포함할 수 있어 DAILY API와 구분
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env run-candidates `
+  --date 2026-10-15 --horizon-sessions 20 --decision-cutoff 2026-10-16T09:30:00+00:00
+
+# LLM 단독 실행: 활성 설정·인증·고정 context 필요
+.\.venv\Scripts\python.exe -m sp500_candidate_engine.llm_preselection `
+  --date 2026-10-15 --execution-context-id <context-uuid>
+
+# Backfill 사전 계획 / 수집 / 재시도
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env plan-backfill --start 2026-07-15 --end 2026-10-15
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env run-backfill --start 2026-07-15 --end 2026-10-15
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env retry-backfill `
+  --process-run-id <uuid> --start 2026-07-15 --end 2026-10-15
+
+# 실행 조회 / export / migration
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env show-process --process-run-id <uuid>
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env export-qlib --start 2024-10-16 --end 2026-10-15
+.\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env migrate
 ```
 
-공급자 제한 사전 검증:
+CLI `run-daily --with-candidates`와 `run-candidates`의 기본 horizon은 레거시 5입니다.
+일일 고정 MEDIUM 추론은 위 API 계약을 사용합니다. 연구 CLI는 `--horizon-sessions 20`을
+명시하며 자동 학습 없는 운영 추론으로 오인하지 않습니다.
+노트북 실행은 [notebooks/README.md](notebooks/README.md)를 참고하세요.
 
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env check-source-harness `
-  --date 2026-10-08 `
-  --massive-requests 4
-```
+## 로그·테스트
 
-Provider connectivity probe:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env probe-providers --date 2026-10-08
-```
-
-3개월 backfill dry-run 계획, 네트워크나 DB를 변경하지 않습니다.
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env plan-backfill `
-  --start 2026-07-09 `
-  --end 2026-10-08
-```
-
-일일 production process 실행:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env run-daily --date 2026-10-09
-```
-
-수집 성공 후 같은 명시적 date의 후보까지 실행:
-
-```powershell
-.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env run-daily --date 2026-10-09 --with-candidates
-```
-
-기존 export로 특정 date 후보만 멱등 실행:
-
-```powershell
-.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env run-candidates --date 2026-10-09
-```
-
-Historical Qlib export와 Alpha158 검증:
-
-```powershell
-.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env export-qlib --start 2024-10-11 --end 2026-10-09
-
-.\.venv-alpha158\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env build-features `
-  --export-run-id de126b50-f254-5235-8c4f-f97a70ba0017
-```
-
-재현 가능한 notebook 환경과 비대화형 실행은 [notebooks/README.md](notebooks/README.md)를 참고하세요.
-
-Backfill 실행, 1차 전체 완료 후 실패 날짜를 자동 재처리합니다.
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env run-backfill `
-  --start 2026-07-09 `
-  --end 2026-10-08
-```
-
-Backfill 포함 데이터:
-
-- Massive grouped daily price
-- Massive range dividend·split
-- Massive 주 단위 news pagination
-- SEC submissions/companyfacts bulk normalization
-- 날짜별 05:30 ET cutoff derived snapshots
-- 날짜별 reconstruction manifest
-
-Alpha historical earnings는 당시 revision을 증명할 수 없어 제외합니다.
-
-이전 process의 실패 날짜를 지정 범위에서 다시 처리:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env retry-backfill `
-  --process-run-id <uuid> `
-  --start 2026-07-09 `
-  --end 2026-10-08
-```
-
-진행 상태 확인:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env show-process `
-  --process-run-id <uuid>
-```
-
-Migration:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env migrate
-```
-
-Production collection:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env collect-production --date 2026-10-08
-```
-
-Prototype historical collection:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env collect `
-  --date 2026-10-01 `
-  --mode historical-reconstruction
-```
-
-Cutoff 검증:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env verify-cutoff `
-  --date 2026-10-01 `
-  --mode historical-reconstruction
-```
-
-특정 날짜 삭제:
-
-```powershell
-.\.venv\Scripts\python.exe -m sp500_candidate_engine `
-  --env-file .env reset-date --date 2026-10-01
-```
-
-</details>
-
-## 실행 로그
-
-`logs/<서울 실행일>.log`에 단계별 JSON 한 줄을 기록합니다.
-
-일일·backfill process는 별도로 `logs/processes/<process_run_id>.jsonl` 한 파일을 사용합니다. 파일은 실행 중에도 flush되며 장시간 range download·SEC parse 단계에는 60초 heartbeat를 기록합니다.
-
-필드:
-
-- `pipeline_started_at`
-- `collection_date`
-- `pipeline_name`
-- `status`
-- `duration_ms`
-- `failure_reason`
-- `details`
-
-Process 로그의 날짜별 줄:
-
-- process start time
-- collection date
-- duration
-- collected count와 dataset별 count
-- success/failure
-- failure reason
-- retry required
-- retry status
-- completed
-- completed/success/failed progress
-
-모든 초기 날짜 처리가 끝난 뒤 `RETRY_CHECK` 줄을 기록하고, 실패 날짜를 재처리할 때 같은 파일에 날짜별 `RETRY` 줄을 추가합니다.
-
-## Backfill 실행 결과
-
-2026-10-11까지 `2024-10-11`~`2026-10-09` 500거래일을 적재했습니다. 추가 1년 backfill은 248/248 sessions 성공, 실패·재처리 0건이며 기존 raw snapshot enrichment는 API 재호출 없이 VWAP·조정 상태와 SPY benchmark를 추가했습니다.
-
-| 항목 | 결과 |
-|---|---:|
-| 기간 | `2024-10-11`~`2026-10-09` |
-| XNYS 거래일 | 500 |
-| Qlib export rows | 251,471 |
-| 날짜별 universe 기준 예상 bars | 126,237 |
-| 평균 일별 coverage | 99.9968% |
-| VWAP·조정 상태 반영 | 125,730/126,233 |
-| SPY `PRICE_RETURN` benchmark | 500/500 |
-| Corporate actions | 1,537 |
-| News events | 31,252 |
-| SEC filings | 8,452 |
-| SEC facts | 50,582 |
-| 미래 누수 | 0 |
-| semantic duplicate revisions | 0 |
-
-기존 OHLCV는 덮어쓰지 않고 enrichment revision을 추가했습니다. revision 1의 `UNKNOWN` 상태와 revision 2의 `UNADJUSTED`·VWAP 보강은 서로 다른 semantic payload이며 완전 동일 revision 중복은 0입니다. provider 원본 결측은 HOLX(2026-04-07), VMRK(2026-08-17), PSKY·WBD(2026-10-06) 4건입니다.
-
-로그와 raw payload는 Git에 올리지 않습니다.
-
-## 테스트
-
-<details>
-<summary>테스트·lint 명령</summary>
+단계 로그는 `logs/<서울 실행일>.log`, process 로그는
+`logs/processes/<process_run_id>.jsonl`입니다. 날짜·단계·상태·duration·count·
+failure·retry·heartbeat를 기록하며 secret·token·raw payload는 기록하지 않습니다.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m ruff check src tests
-.\.venv\Scripts\python.exe -m ruff format --check src tests
+.\.venv\Scripts\python.exe -m ruff check src backend orchestrator tests
 ```
 
-</details>
+핵심 검증은 cutoff/manifest, corporate-action lineage, feature 차원, label purge,
+artifact 목적·hash, 정확히 20개 선정·shortfall, SHORT 레거시 보존, 멱등성, 병렬 실패 격리입니다.
+테스트 통과·API smoke·운영 배포·모델 투자 성능은 서로 다른 검증입니다.
 
-현재 테스트는 provider limit, 미래 데이터 차단, Qlib export·feature·label, walk-forward, scoring, selection, parser, key 비노출, 일자별 로그와 가격 precision을 포함합니다.
+## 배포와 후속 작업
 
-## 저장소 구조
+- Backend·Durable 배포 절차는 [backend/README.md](backend/README.md)와
+  [orchestrator/README.md](orchestrator/README.md)를 따릅니다. 문서 수정은 배포 명령이 아닙니다.
+- 정량 20개 코드·정책·DB 제약과 orchestration 검증을 함께 배포해야 합니다.
+- LLM은 Azure OpenAI RBAC·고정 context canary·전체 universe shadow 검증 후 별도 활성화합니다.
+- RRF 통합과 최종 20개 전달은 별도 설계·구현·Portal 수용 검증·재실행 검증을 거칩니다.
+- 공식 point-in-time S&P/GICS, 공식 calendar·halt, 장기 가격·복수 regime 검증,
+  champion promotion·live shadow 관찰은 별도 데이터·연구 과제입니다.
+- 무료 플랜·기사 전문·공시 제3자 콘텐츠·재배포 권리를 확인해야 합니다.
+
+## 문서와 저장소 안내
+
+- [공통 하네스](PROJECT-HARNESS.md), [구현 지시서](us_stock_pipeline_agent_brief.md)
+- [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md)
+- [모델 아키텍처](.github/modernize/assessment/engines/facts/model-architecture.md)
+- [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)
+- [Telemetry·KQL runbook](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)
+- [모델 변경 이력](MODEL_CHANGELOG.md), [변경 로그](CHANGELOG.md)
 
 ```text
-.
-├── src/sp500_candidate_engine/
-│   ├── collectors/
-│   │   ├── massive.py
-│   │   ├── sec.py
-│   │   ├── alpha_vantage.py
-│   │   ├── wikipedia.py
-│   │   └── yahoo.py
-│   ├── production_pipeline.py
-│   ├── production_repository.py
-│   ├── analytics/
-│   ├── selection/
-│   ├── candidate_pipeline.py
-│   ├── source_harness.py
-│   ├── temporal.py
-│   └── database.py
-├── sql/
-├── config/analytics/
-├── notebooks/
-├── tests/
-├── CHANGELOG.md
-├── AGENTS.md
-├── .github/modernize/assessment/engines/facts/
-└── us_stock_pipeline_agent_brief.md
+src/sp500_candidate_engine/
+  collectors/          공통 원천 수집
+  analytics/           Qlib·Alpha158·모델·시점 제한 조회
+  selection/           정량 선정 정책·저장
+  llm_preselection/    독립 LLM pipeline·evidence·ranker·저장
+  daily_preselection.py  병렬 조정
+backend/               API·고정 모델 DAILY 실행
+orchestrator/          Durable control plane
+config/analytics/      정량·재학습 versioned 설정
+config/llm_preselection/  LLM 전용 정책
+sql/                   migration
+tests/                 계약·회귀 테스트
+notebooks/             연구용 workflow
+infra/                 Azure IaC
 ```
 
-모든 사용자 요청 변경은 [CHANGELOG.md](CHANGELOG.md)에 항목별 한 줄로 누적한다.
-
-## 아직 남은 작업
-
-- 공식 NYSE/Nasdaq calendar collector
-- Nasdaq halt collector
-- dataset checkpoint cursor 실제 전진
-- staging COPY·set-based merge 성능 최적화
-- Massive Basic 2년보다 오래된 가격 backfill
-- 공식 point-in-time S&P constituent·GICS
-- 3~5년 가격을 이용한 복수 regime 모델 검증
-- 양의 out-of-sample Rank IC를 만족하는 champion 모델
-- 약 4주의 20-session live shadow 관찰
-
-## 라이선스 주의
-
-- Massive 데이터의 내부 저장, 비표시 분석, 파생 특징, ML·백테스트 권리를 계약에서 확인해야 합니다.
-- Alpha Vantage 데이터 저장·상업 이용·재배포는 플랜 terms를 확인해야 합니다.
-- SEC filing 안의 제3자 저작물은 별도 권리가 있을 수 있습니다.
-- Wikipedia 원문 재배포에는 CC BY-SA 조건이 적용될 수 있습니다.
-- Yahoo 경로는 prototype 전용이며 production 신규 수집에 사용하지 않습니다.
-
-## 현재 판정
-
-현재 데이터는 **명시적 session에 대해 일일 정량 후보를 생성할 수 있는 SHADOW MVP**입니다.
-
-아직 충족하지 못한 핵심 연구 요구사항:
-
-- 3~5년 연속 가격
-- 생존편향 없는 과거 S&P 구성·GICS
-- SEC 전체 taxonomy·custom concept와 원문 XBRL 확장
-- 과거 earnings revision
-- 양의 out-of-sample Rank IC
-- 운영 champion 승격
-- 20-session live shadow 완료
+모든 사용자 요청 변경은 [CHANGELOG.md](CHANGELOG.md)에 항목별 한 줄로 기록합니다.

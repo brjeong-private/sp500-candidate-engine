@@ -226,13 +226,18 @@ async def _hourly_timer(client: df.DurableOrchestrationClient) -> None:
     analysis_date = scheduled_analysis_date(now)
     if analysis_date is None:
         return
-    instance_id = parent_orchestration_instance_id(analysis_date)
+    if _is_active_instance(
+        await client.get_status(parent_orchestration_instance_id(analysis_date))
+    ):
+        return
+    model_purpose = "MEDIUM_20D"
+    instance_id = orchestration_instance_id(analysis_date, model_purpose)
     if _is_active_instance(await client.get_status(instance_id)):
         return
     await client.start_new(
-        "dual_model_parent",
+        "daily_orchestrator",
         instance_id,
-        _parent_orchestration_input(analysis_date),
+        _orchestration_input(analysis_date, model_purpose),
     )
 
 

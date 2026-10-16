@@ -16,7 +16,7 @@ Azure에 배포되지 않았고 실제 API·Job·RBAC·KQL E2E 증거도 없다.
 
 | 영역 | 오케스트레이터 책임 | 비책임 |
 |---|---|---|
-| 일정 | 05:30 ET gate, 날짜별 dual 부모와 모델별 child | 거래 세션 원장 생성 |
+| 일정 | 05:30 ET gate, 날짜별 MEDIUM_20D 단일 실행 | 거래 세션 원장 생성 |
 | 주간 일정 | New York 주말 hourly gate, ISO week parent와 모델별 child | XNYS 원장·manifest 생성 |
 | 주간 학습 조정 | weekly API 접수·상태, Container Apps Job start/status, activation smoke | 학습·promotion·active pointer 계산 |
 | guardian | 15분마다 readiness와 승인된 제한 복구 | pipeline 시작·terminal 재실행 |
@@ -36,9 +36,7 @@ flowchart TB
         Timer["Hourly timer<br/>UTC minute 30"]
         Guardian["15 minute resource guardian"]
         Gate["05:30 America New York gate<br/>previous calendar date"]
-        Parent["Deterministic parent<br/>candidate-dual-date"]
-        Short["SHORT_5D child"]
-        Medium["MEDIUM_20D child"]
+        Medium["MEDIUM_20D daily<br/>candidate-daily-date-medium_20d"]
         Workflow["Replay-safe model orchestrator"]
         DurableState[("Storage<br/>history queues tables")]
     end
@@ -63,10 +61,8 @@ flowchart TB
         Email["ACS Email"]
     end
 
-    Timer --> Gate --> Parent --> Short
-    Short -->|"allowed terminal"| Medium
+    Timer --> Gate --> Medium
     Guardian --> Ready
-    Short --> Workflow
     Medium --> Workflow
     DurableState <--> Workflow
     Workflow --> Session --> Candidate
@@ -142,8 +138,7 @@ Job/promotion 제한 시간에는 child가 `TIMED_OUT`으로 끝나며 orchestra
 ```mermaid
 sequenceDiagram
     participant T as Timer
-    participant D as Dual Parent
-    participant M as Model Child
+    participant M as MEDIUM_20D Daily
     participant C as Candidate API
     participant P as Portal API
     participant A as ACS Email
@@ -152,18 +147,17 @@ sequenceDiagram
     alt Local time is not 05:30
         T-->>T: Exit
     else Local time is 05:30
-        T->>D: Start candidate-dual-date once
-        D->>M: Start SHORT_5D child
+        T->>M: Start candidate-daily-date-medium_20d
         M->>C: Query XNYS exchange session
         alt Not an exchange session
-            M-->>D: SUCCEEDED and skipped
+            M-->>T: SUCCEEDED and skipped
         else Exchange session
             M->>C: ARM state and health ready
             M->>P: ARM state and readyz
             M->>C: GET existing selection
             alt Existing valid terminal selection
                 M->>A: SKIPPED_EXISTING notification
-                M-->>D: SKIPPED_EXISTING
+                M-->>T: SKIPPED_EXISTING
             else No existing selection
                 M->>A: Model STARTED notification
                 M->>C: POST DAILY with model Idempotency-Key
@@ -172,22 +166,12 @@ sequenceDiagram
                     M-->>M: Durable timer
             end
                 M->>C: GET candidates by date and model purpose
-                M->>M: Verify 5 to 10 rows and one selection run
-                M->>P: POST analysis date and selection run reference
-            loop Until all Portal jobs terminal or timeout
-                    M->>P: GET daily analysis aggregate
-                    M-->>M: Durable timer
-                end
+                M->>M: Verify exactly 20 quant rows and one selection run
+                M->>M: Stop at parallel_preselection with zero submissions
                 M->>A: Model terminal notification
             end
         end
-        M-->>D: SHORT_5D terminal result
-        alt SHORT core or preflight failed or timed out
-            D-->>D: Stop and preserve MEDIUM as NOT_STARTED
-        else Continue sequence
-            D->>M: Start MEDIUM_20D child
-            M-->>D: MEDIUM_20D terminal result
-        end
+        M-->>T: MEDIUM_20D terminal result
     end
 ```
 
@@ -203,12 +187,9 @@ Storage 복구를 수행한다. guardian은 부모 orchestration을 시작하지
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ShortChild
-    ShortChild --> ParentStopped: core or preflight failure
-    ShortChild --> MediumChild: success skip or portal terminal
-    MediumChild --> Aggregate
-    ParentStopped --> [*]
-    Aggregate --> [*]
+    [*] --> MediumDaily
+    MediumDaily --> Terminal: success skip failure or timeout
+    Terminal --> [*]
 ```
 
 Candidate의 `PARTIAL_SUCCESS`는 terminal 상태지만 성공으로 간주하지 않는다. Candidate
@@ -216,11 +197,15 @@ Candidate의 `PARTIAL_SUCCESS`는 terminal 상태지만 성공으로 간주하�
 여야 성공으로 집계한다. 비거래일은 `SUCCEEDED`, `skipped=true`,
 `reason=not_exchange_session`으로 구분한다.
 
-각 model child 내부 상태는 session check, preflight, Candidate polling, 후보 검증,
-Portal polling 순서다. terminal 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`,
+각 model child 내부 상태는 session check, preflight, Candidate polling, 후보 검증
+순서다. MEDIUM은 `parallel_preselection`에서 종료하며 Portal 제출·poll은 레거시
+SHORT 명시 실행에만 적용한다. 향후 최종 전달 계약은 기존 5~10개에서 **20개**로
+변경하고 추가 축소하지 않는다. RRF·최종 전달은 후속 구현이다.
+terminal 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`,
 `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다.
 
-부모는 `SHORT_5D`의 core·Candidate·preflight `FAILED` 또는 `TIMED_OUT`에서
+정기 일일 실행은 `MEDIUM_20D` 단독이며 SHORT 결과에 의존하지 않는다. 호환용으로 유지한
+기존 dual 부모는 `SHORT_5D`의 core·Candidate·preflight `FAILED` 또는 `TIMED_OUT`에서
 `MEDIUM_20D`를 `NOT_STARTED`로 보존하고 중단한다. SHORT의 Portal 단계 실패·timeout,
 `PARTIAL_FAILED`, `SKIPPED_EXISTING`에서는 MEDIUM을 계속한다. 부모 최종 상태는 두
 child 결과 중 `FAILED`, `TIMED_OUT`, `PARTIAL_FAILED` 우선순위로 집계한다.
@@ -229,12 +214,15 @@ child 결과 중 `FAILED`, `TIMED_OUT`, `PARTIAL_FAILED` 우선순위로 집계�
 
 세 계층이 중복 실행을 막는다.
 
-1. Timer starter는 `candidate-dual-YYYY-MM-DD` parent가 이미 있으면 새 instance를
-   시작하지 않는다.
-2. 각 child ID는 `candidate-daily-YYYY-MM-DD-{model_purpose}`다.
+1. Timer starter는 `candidate-daily-YYYY-MM-DD-medium_20d`가 활성 상태이면 재사용한다.
+   전환 전 `candidate-dual-YYYY-MM-DD` 부모가 활성 상태여도 새 실행을 시작하지 않는다.
+   terminal 일일 instance는 정기 시각에 재시작할 수 있으며 기존 selection 검사를 다시 한다.
+2. 수동·legacy child ID도 기존 `candidate-daily-YYYY-MM-DD-{model_purpose}`를 유지한다.
 3. Candidate 제출 전에 날짜·모델이 정확히 일치하는 완전한 terminal selection을
    검사한다. 존재하면 `SKIPPED_EXISTING`이며 Candidate POST와 Portal batch를 생략한다.
+   MEDIUM은 정량 20개를 요구하고 LLM 결과에 의존하지 않는다. 기존 10개는 완료가 아니다.
 4. Candidate 제출은 모델 목적을 포함한 날짜 기반 `Idempotency-Key`를 사용한다.
+   MEDIUM은 `top20-v1` suffix로 기존 10개 접수와 구분한다.
    같은 key와 canonical payload는 기존 `process_run_id`를 반환하고 다른 payload는
    `409`로 거부한다.
 5. Portal에는 후보별 요청을 반복하지 않고 하나의 `selection_run_id`를 한 번 제출한다.
@@ -262,18 +250,21 @@ unique key가 소유하며 Durable state 자체를 업무 acceptance 원장으�
 
 모든 외부 URL은 credential·query·fragment가 없는 HTTPS base URL이어야 한다. HTTP
 redirect를 따르지 않고 JSON object만 허용하며 응답은 최대 2 MiB로 제한한다. Candidate
-후보는 다음을 모두 만족해야 Portal로 전달된다.
+후보는 다음을 모두 만족해야 한다. MEDIUM은 검증 후 저장 경계에서 멈추며,
+향후 최종 20개 전달을 활성화할 때 소비자의 동일 검증·멱등성을 확인한다.
 
 - `price_session_date`가 대상일과 일치
 - 설정된 `model_purpose`와 일치
-- 5~10개이며 `selected_count`와 실제 개수가 일치
+- 일일 MEDIUM·향후 최종 결과는 정확히 20개이며 requested·selected·실제 개수가 일치
+- SHORT 명시 실행만 기존 5~10개 레거시 검증 유지
 - position이 1부터 연속이고 ticker·instrument가 중복되지 않음
 - 모든 row가 하나의 `selection_run_id`에 속함
-- selection status가 `SUCCEEDED` 또는 명시적 `SHORTFALL`
+- MEDIUM·최종 전달은 `SUCCEEDED`만 허용하며 20개 미만 shortfall을 성공 전달하지 않음
+- 기존 SHORT의 명시적 `SHORTFALL` 처리는 레거시 계약으로 분리
 
-Candidate API의 기본 조회 모델은 `MEDIUM_20D`다. 일일 부모는 `SHORT_5D` 다음
-`MEDIUM_20D`를 독립 실행한다. 인증된 단일 모델 endpoint는 one-off 진단 경로이며
-모델 간 자동 fallback은 없다.
+Candidate API의 기본 조회 모델과 정기 일일 실행 모델은 `MEDIUM_20D`다.
+인증된 단일 모델 endpoint와 Candidate API의 명시적 모델 선택은 `SHORT_5D`와
+`MEDIUM_20D` 모두 유지한다. 두 모델 주간 재학습도 유지하며 모델 간 자동 fallback은 없다.
 
 ## Azure 배포 토폴로지
 
@@ -322,7 +313,7 @@ private 연결 실패 시 fail closed한다. Durable Task Scheduler는 사용하
 |---|---|
 | `orchestrator/function_app.py` | hourly daily/weekly gate, 15분 guardian, parent/child와 activity 등록 |
 | `orchestrator/scheduler.py` | DST-aware 05:30·New York 주말 gate와 deterministic ID |
-| `orchestrator/workflow.py` | 일일·주간 SHORT 후 MEDIUM 순차 parent와 replay-safe child |
+| `orchestrator/workflow.py` | 일일 MEDIUM 단독·주간 SHORT 후 MEDIUM·legacy dual·replay-safe child |
 | `orchestrator/clients.py` | Candidate·weekly·Portal·Job ARM·ACS 외부 계약과 검증 |
 | `orchestrator/guardian.py` | 15분 readiness·제한 복구와 실패 알림 |
 | `orchestrator/telemetry.py` | allowlist 구조화 trace |

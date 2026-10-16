@@ -122,12 +122,21 @@ def test_candidate_pipeline_selects_versioned_configs_by_horizon(
         == horizon_sessions
     )
     if horizon_sessions == 20:
+        assert result["selection_config"].path.name == "selection_medium_20d_v1.yaml"
+        assert result["selection_config"].payload["minimum_candidates"] == 20
+        assert result["selection_config"].payload["maximum_candidates"] == 20
+        assert result["selection_config"].version == "medium-20d-top20-v1"
         experiment = result["model_config"].payload["experiment"]
         assert experiment == {
             "code": "E1",
             "feature_set": "ALPHA158",
             "requires_news_llm": False,
         }
+    else:
+        assert result["selection_config"].path.name == "selection_v1.yaml"
+        assert result["selection_config"].version == "1"
+        assert result["selection_config"].payload["minimum_candidates"] == 5
+        assert result["selection_config"].payload["maximum_candidates"] == 10
 
 
 def test_candidate_pipeline_rejects_unknown_horizon(tmp_path) -> None:

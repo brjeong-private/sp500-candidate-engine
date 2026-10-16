@@ -134,6 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
             help="Maximum point-in-time export cutoff, including UTC offset",
         )
 
+    rank_llm = commands.add_parser(
+        "rank-llm-candidates",
+        help="Generate the manifest-fenced Azure OpenAI analysis-candidate Top 20",
+    )
+    rank_llm.add_argument("--date", type=_date, required=True)
+    rank_llm.add_argument(
+        "--execution-context-id", type=uuid.UUID, required=True
+    )
+
     run_backfill = commands.add_parser(
         "run-backfill",
         help="Run a Massive price backfill and automatically retry failed dates",
@@ -298,6 +307,22 @@ def main() -> None:
             repository_root=Path(__file__).parents[2],
             horizon_sessions=args.horizon_sessions,
             decision_cutoff=args.decision_cutoff,
+        )
+        print(json.dumps(summary.__dict__, indent=2, sort_keys=True, default=str))
+        return
+
+    if args.command == "rank-llm-candidates":
+        from sp500_candidate_engine.llm_preselection.pipeline import (
+            run_llm_preselection,
+        )
+
+        summary = asyncio.run(
+            run_llm_preselection(
+                settings,
+                repository_root=Path(__file__).parents[2],
+                target_session=args.date,
+                execution_context_id=args.execution_context_id,
+            )
         )
         print(json.dumps(summary.__dict__, indent=2, sort_keys=True, default=str))
         return

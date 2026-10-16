@@ -2,6 +2,60 @@
 
 Status: Deployed
 
+## Candidate Top 20 contract and rollout boundary (2026-10-16)
+
+The deployed records below are dated evidence, not proof that the new Top 20
+policy, migration 022, independent LLM branch or MEDIUM dispatch gate are deployed.
+The code contract is daily MEDIUM quantitative Top 20 plus an optional independent
+LLM Top 20 (`LLM_PRESELECTION_ENABLED=false` by default). RRF final Top 20 remains
+future work. The final Portal/TradingAgents handoff target changes from 5–10 to
+20 with no secondary trim; current MEDIUM code stops at `parallel_preselection`
+with zero submissions. Roll out schema, policy, backend and orchestrator validation
+together, then separately validate fusion and external 20-item acceptance before
+enabling handoff. Explicit SHORT legacy behavior remains unchanged.
+
+## Scheduled daily MEDIUM_20D only (2026-10-16)
+
+- The 05:30 ET daily gate now starts `daily_orchestrator` directly with
+  `model_purpose=MEDIUM_20D` and ID `candidate-daily-YYYY-MM-DD-medium_20d`.
+  Active MEDIUM instances and active legacy dual parents prevent duplicate starts.
+- SHORT_5D, explicit API/manual model selection and the legacy dual workflow remain
+  available. Weekly retraining still processes both model purposes independently.
+- Flex deployment `9571a8d3-4f18-4e9b-84b4-8e9fcc1f40ec` is successful and
+  active. The host is Running with all 22 functions indexed.
+- All 101 orchestrator tests, 12 candidate API tests, Ruff and diff checks passed.
+  The next scheduled 05:30 ET end-to-end run remains to be observed; validation did
+  not start an additional production analysis.
+- Email remains disabled and TradingAgents remains Running with min/max replicas 1.
+
+## TradingAgents single replica and guardian floor (2026-10-16)
+
+- User-approved scaling sets TradingAgents `minReplicas=1`, `maxReplicas=1`.
+  Revision `ca-jongmok-tradingagents--single1-1016` is Healthy, receives 100%
+  of traffic, and has one Running replica. The old `steady5fix` revision is
+  deactivated. `ANALYSIS_WORKER_COUNT=3` is unchanged.
+- Guardian treats `TRADINGAGENTS_MIN_REPLICAS=1` as a floor, not an exact
+  replica target. It raises a lower minimum but never reduces a higher minimum.
+- Flex deployment `763c9cbd-7a0d-43cf-98a3-e4b47cf6f90c` is active and
+  successful; all 98 orchestrator tests and Ruff passed.
+- Function host remains Running and `ORCHESTRATOR_EMAIL_ENABLED=false` remains
+  applied. Both the new revision and production `/readyz` returned `ready`.
+- A manually triggered guardian completed `SUCCEEDED` at 07:54:27 UTC, checking
+  Candidate, PostgreSQL, Portal, MySQL, private Storage and TradingAgents without
+  remediation.
+
+## Email notifications disabled (2026-10-16)
+
+- Flex OneDeploy `6522a353-64f9-4f84-8316-d0eb8735a1bf` completed successfully
+  with remote build; the authenticated SCM deployment path handled the private
+  deployment Storage without enabling its public endpoint or shared keys.
+- `ORCHESTRATOR_EMAIL_ENABLED=false` is applied to the running Function App.
+  Daily start/terminal messages and guardian alerts skip ACS calls; intentionally
+  disabled notifications are recorded as `SKIPPED`, not delivery failures.
+- Live host status is `Running`; all 22 indexed functions remain enabled,
+  including daily/weekly timers, orchestrations and resource guardian.
+- All 92 orchestrator tests and Ruff passed. ACS resources remain provisioned.
+
 ## Active preparation update: private FC1 storage network (2026-10-13)
 
 - Use the standard Durable Functions Azure Storage backend through identity-based
@@ -44,10 +98,10 @@ Status: Deployed
   orchestrator tests passed, and Ruff passed.
 - Azure Resource Graph confirmed the selected subscription currently uses
   `10.20.0.0/16` and `10.82.0.0/16`; the new `10.203.0.0/16` does not overlap.
-- Deployment/package implication: a runner outside the VNet can no longer upload the
-  FC1 ZIP directly to the deployment container. Package upload must run from a
-  VNet-connected private-DNS-capable runner (or use an approved private path), before
-  the Function app consumes the blob through its system-assigned identity.
+- Deployment/package implication: a runner outside the VNet cannot upload directly
+  to the deployment Blob container. Use authenticated Flex OneDeploy with remote
+  build (verified 2026-10-16), or a VNet-connected private-DNS-capable runner for
+  direct Blob upload. Keep Storage public access disabled in either case.
 
 ### Deployment verification
 

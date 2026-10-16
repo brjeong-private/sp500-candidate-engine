@@ -1,6 +1,8 @@
 import uuid
 from datetime import date
+from pathlib import Path
 
+from sp500_candidate_engine.analytics.config import load_versioned_config
 from sp500_candidate_engine.selection.repository import selection_run_identity
 
 
@@ -25,3 +27,20 @@ def test_selection_run_identity_is_idempotent_and_policy_bound() -> None:
 
     assert first == second
     assert first != changed
+
+
+def test_medium_top20_has_distinct_identity_from_legacy_ten_for_same_scores() -> None:
+    root = Path(__file__).parents[2] / "config" / "analytics"
+    legacy = load_versioned_config(root / "selection_v1.yaml")
+    medium = load_versioned_config(root / "selection_medium_20d_v1.yaml")
+    scoring_run_id = uuid.uuid4()
+
+    def identity(version):
+        return selection_run_identity(
+            price_session_date=date(2026, 10, 15),
+            scoring_run_id=scoring_run_id,
+            policy_version=version,
+        )
+
+    assert identity(medium.version) != identity(legacy.version)
+    assert identity(medium.version) == identity(medium.version)

@@ -1,0 +1,21 @@
+name: daily-medium-20d-quantitative-preselection
+version: "medium-20d-top20-v1"
+selection_type: QUANTITATIVE
+score_semantics: PREDICTED_20D_RETURN
+positive_prediction_required: false
+minimum_candidates: 20
+maximum_candidates: 20
+sector_cap: 2
+relaxed_sector_cap: 4
+tie_break:
+  - score_desc
+  - instrument_id_asc
+hard_gates:
+  - manifest_and_cutoff
+  - current_membership
+  - model_artifact_match
+  - finite_score
+  - no_blocking_quality_issue
+soft_constraints:
+  - issuer_deduplication
+  - sector_cap

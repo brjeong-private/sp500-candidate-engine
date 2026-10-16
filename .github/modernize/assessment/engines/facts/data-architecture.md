@@ -1,8 +1,13 @@
 # 데이터 아키텍처 및 PostgreSQL 수집 설계
 
-이 문서는 S&P 500 전체 가격을 매일 적재하고 전처리·모델 점수를 거쳐 5~10개 후보를 선정·저장하기 위한 목표 데이터 모델이다. 현재 저장소에는 구현 코드나 기존 데이터 접근 계층이 없으므로 아래 내용은 PostgreSQL 16 이상을 기준으로 한 설계안이며, ORM과 마이그레이션 도구는 구현 시 확정한다.
+이 문서는 S&P 500 데이터를 적재하고 전처리·모델 점수를 거쳐 일일 MEDIUM 후보
+20개를 선정·저장하는 PostgreSQL 16+ 데이터 계약이다. 수집·Qlib·score·selection
+접근 계층은 구현돼 있으며 실제 DDL은 [sql/](../../../../../sql/) migration을 기준으로 한다.
 
-> 설계 상태: 문서 검토 반영본이다. 실제 DDL·조회 하네스·수집기 검증 전에는 아래 기능을 구현 완료 또는 분석 적합으로 간주하지 않는다.
+> 2026-10-16 계약 변경: 외부 TradingAgents 전달 목표는 기존 5~10개에서 20개다.
+> SHORT_5D 5~10개 레거시는 유지한다. 독립 정량·LLM Top 20은 각각 저장하며
+> RRF 최종 Top 20·자동 전달은 후속 구현이다. 문서의 논리 모델과 날짜별 적재
+> 증거를 구분하며 신규 schema의 운영 적용 완료를 가정하지 않는다.
 
 후보 선정 엔진의 쓰기 책임은 `selection` 스키마까지다. 후보 이후 분석·agent 실행·report·비용·재평가는 별도 프로젝트의 책임이며 이 데이터 모델에 포함하지 않는다. 공통 불변식은 루트 `PROJECT-HARNESS.md`를 따른다.
 
@@ -19,9 +24,18 @@
 | Qlib 전처리·라벨 누락 | RAW/PROCESSED run, processor artifact, label run, split·경계·결측 정책 추가 |
 | 유료 데이터·용량 과대 선행 | MVP 운영, 연구, 이벤트 고도화를 분리하고 run 배수 기반 용량식으로 변경 |
 
-## 현재 구현 및 적재 상태
+## 구현 및 적재 검증 기록 (2026-10-11)
 
-기준 시각은 2026-10-11이며, 아래는 목표 설계가 아니라 Azure PostgreSQL과 코드에서 확인한 실제 상태다.
+아래는 2026-10-11 당시 Azure PostgreSQL·코드 검증 기록이다. 10개 후보·보유량은
+역사적 증거로 보존하며 최신 수량이나 새 20개 정책의 배포 검증으로 해석하지 않는다.
+
+### 후속 schema 계약 (2026-10-16)
+
+[022_llm_preselection.sql](../../../../../sql/022_llm_preselection.sql)은 정량
+requested count·position 상한을 20개로 확장하고 별도 LLM 저장 엔터티를 추가한다.
+LLM은 run·evidence packet·source evidence·call attempt·assessment와 별도 candidate를
+보존하며 정량 candidate row로 위장하지 않는다. context·manifest·cutoff·policy·prompt·
+deployment·입출력 hash로 lineage를 연결한다. RRF fusion 엔터티는 아직 없다.
 
 ### 실제 데이터 보유 현황
 
@@ -139,7 +153,9 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | 5 | temporal·quality gate | dataset별 | core blocking 오류 없음 |
 | 6 | dataset transaction과 checkpoint | dataset별 | commit 성공 후에만 checkpoint 전진 |
 | 7 | final manifest와 execution context | 실행당 각 1개 | core snapshot 집합과 optional 상태 고정 |
-| 8 | feature·score·candidate | 미구현 | 5~10개 후보 batch commit |
+| 8 | Qlib feature·MEDIUM score·candidate | 정량 20개 | 검증된 scoring run 기반 batch commit |
+| 9 | 선택 활성화 LLM·별도 candidate | LLM 20개 | 공통 context로 병렬 평가, 별도 commit·실패 보존 |
+| 후속 | RRF·최종 후보 | 최종 20개 | 통합·API·외부 전달은 미구현 |
 
 각 수집기는 `(source_id, dataset_code, partition_key)`별 `ingestion_checkpoint`를 성공한 트랜잭션 이후에만 전진시킨다. 실패한 실행은 checkpoint를 움직이지 않고 같은 구간을 멱등 재시도한다.
 
@@ -575,7 +591,7 @@ allowlist는 실제 100개 종목의 10-K/10-Q 표본으로 coverage를 측정�
 - 뉴스 본문 5 KB를 종목당 일평균 3건 저장하면 본문만 연 1.9 GB이며 인덱스·JSONB overhead가 추가된다. 다중 공급자와 원문 HTML까지 저장하면 5년 수십~수백 GB가 될 수 있다.
 - SEC `companyfacts` 전체 JSON을 매일 스냅샷으로 복제하면 동일 과거 fact가 계속 중복된다. accession 또는 content hash 기반 증분만 저장한다.
 - 모든 SEC taxonomy/custom tag를 무제한 적재하면 `fundamental.fact`가 가장 큰 테이블이 된다. 원문은 외부 보관하고 분석 concept allowlist와 raw provenance를 함께 운영한다.
-- 모델을 매월 재학습하더라도 과거 전 종목 점수를 모든 모델 버전으로 다시 저장하지 않는다. 운영 시점에 실제 사용한 모델 점수와 명시적 실험 결과만 보관한다.
+- 모델을 주간 재학습하더라도 과거 전 종목 점수를 모든 모델 버전으로 다시 저장하지 않는다. 운영 시점에 실제 사용한 모델 점수와 명시적 실험 결과만 보관한다.
 
 ### 파티셔닝 및 보존
 

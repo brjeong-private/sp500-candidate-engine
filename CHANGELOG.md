@@ -1,5 +1,37 @@
 # Change Log
 
+- 2026-10-16 | Final Candidate Handoff Docs | TradingAgents 최종 전달 목표를 기존 5~10개에서 20개로 통일하고 재축소 금지·SHORT 레거시 보존·현재 MEDIUM 전달 차단을 구분했다.
+- 2026-10-16 | RRF Design Contract | RRF 설계서에 후보 수 변경 이력과 병렬 중간 Top 20·후속 최종 Top 20 전달 계약을 명시하고 현행 LLM과 제안 screening·schema를 구분했다.
+- 2026-10-16 | Main README Refresh | 메인 README 전체를 재구성해 현재 상태 섹션을 제거하고 범위·20개 계약·독립 파이프라인·재학습·API·설치·배포 경계를 갱신했다.
+- 2026-10-16 | Pipeline Architecture Docs | 전체·모델·수집·데이터·오케스트레이터 설계와 다이어그램을 MEDIUM Top 20·선택 LLM 병렬 구조 및 미구현 RRF 경계에 맞췄다.
+- 2026-10-16 | Candidate Consumer Guides | Backend·Portal 계약 예제·구현 지시서·노트북·모델 문서와 배포 가이드의 20개 기준을 맞추고 과거 10개 검증·Top-5/10 평가 기록은 보존했다.
+
+- 2026-10-16 | Quantitative Top 20 Contract | MEDIUM 정확히 20개 선정 정책에 독립 version을 부여해 기존 10개 결과와 충돌을 방지하고 수량·레거시 보존 회귀 검증을 추가했다.
+- 2026-10-16 | Quantitative Independent Completion | 일일 정량 Top 20 완료·중복 검사를 LLM 결과에서 분리하고 MEDIUM 제출 key를 Top 20 전용으로 구분했다.
+- 2026-10-16 | Quantitative Output Metadata | 일일 정량 후보 파일에 실제 모델 목적·예측 기간을 명시해 MEDIUM 결과가 SHORT 기본값으로 표시되지 않도록 수정했다.
+- 2026-10-16 | Local OpenAI Environment | 업로드한 로컬 인증 환경파일을 Git 제외된 저장소 루트로 이동하고 기본 환경 로딩 위치에 맞췄다.
+- 2026-10-16 | Azure OpenAI Compatibility | 실제 연동에서 확인한 temperature 미지원 오류를 해결하기 위해 해당 강제 설정을 제거하고 strict JSON 계약을 유지했다.
+- 2026-10-16 | Azure OpenAI Smoke Test | 로컬 Entra 인증과 실제 배포의 strict JSON 응답을 최소 요청으로 검증하고 정상 응답을 확인했다.
+- 2026-10-16 | Independent LLM Pipeline | LLM Top 20을 정량 추론 내부에서 분리하고 전용 pipeline·모듈 실행 진입점과 형제 실행 결과를 추가했다.
+- 2026-10-16 | LLM Folder Separation | LLM 설정을 config/llm_preselection으로 이동하고 전용 구현·테스트 폴더와 독립 실행 구조를 하네스·구현 지시서에 반영했다.
+- 2026-10-16 | Parallel Failure Isolation | 공통 manifest 준비 뒤 Qlib export·모델 검증과 LLM을 독립 실행하여 한쪽 실패 시 다른 결과를 보존하고 양쪽 실패를 명시했다.
+- 2026-10-16 | Parallel Preselection Idempotency | MEDIUM 일일 중복 실행을 건너뛰기 전에 정량 Top 20과 LLM Top 20이 모두 성공했는지 검증하도록 보강했다.
+- 2026-10-16 | Daily Parallel Preselection | 일일 수집 후 MEDIUM_20D Alpha158 정량 Top 20과 manifest-fenced Azure OpenAI Top 20을 병렬 생성하고 최종 병합은 후속 범위로 분리했다.
+- 2026-10-16 | Quantitative Top 20 | MEDIUM_20D 전용 selection policy와 DB position 상한을 20개로 확장하면서 SHORT_5D 레거시 5~10개 정책을 유지했다.
+- 2026-10-16 | LLM Temporal Evidence | 뉴스·실적·SEC filing/facts·기업행위·종목 상태·유니버스·가격을 execution manifest와 cutoff로 제한하는 evidence packet과 lineage를 추가했다.
+- 2026-10-16 | LLM Ranking | Entra 인증 Azure OpenAI strict JSON 배치 평가·최종 재정렬, bounded retry, token/hash 감사와 성공 run 재사용을 구현했다.
+- 2026-10-16 | LLM Preselection Schema | LLM run·packet·evidence·call attempt·assessment와 별도 Top 20 candidate 결과를 append-only schema로 추가했다.
+- 2026-10-16 | LLM Preselection API | 정량 API와 분리된 LLM run·후보·source evidence 조회 endpoint를 추가했다.
+- 2026-10-16 | LLM Runtime Infrastructure | Candidate 관리 ID의 최소 Azure OpenAI RBAC와 feature flag·endpoint/deployment 설정을 App Service IaC에 추가했다.
+- 2026-10-16 | Preselection Downstream Gate | 두 Top 20의 최종 병합 전까지 MEDIUM 중간 후보를 Portal·TradingAgents에 자동 제출하지 않도록 오케스트레이터를 변경했다.
+- 2026-10-16 | Daily MEDIUM Only | 정기 일일 파이프라인을 MEDIUM_20D 단일 실행으로 변경하고 SHORT_5D·명시적 API 모델 선택·기존 dual 흐름 및 두 모델 주간 재학습은 유지했다.
+- 2026-10-16 | Daily MEDIUM Deployment | MEDIUM 단일 정기 실행을 운영 배포하고 오케스트레이터 101건·후보 API 12건 및 함수 22개 활성·메일 차단·replica 1개 유지 상태를 검증했다.
+- 2026-10-16 | Completed Plan Cleanup | 완료된 주간 재학습 플랜을 로컬에 보존하고 Git 추적에서 제외하도록 ignore 항목과 추적 해제를 적용했다.
+- 2026-10-16 | Guardian Replica Floor | TradingAgents 최소 replica를 정확한 일치 대신 설정 하한 이상으로 검사하고 하한 미만에서만 복구하도록 변경했다.
+- 2026-10-16 | TradingAgents Scaling | 사용자 승인으로 운영 replica 1개 고정·트래픽 전환·기존 리비전 비활성화를 완료하고 워커 3개·메일 차단 유지 및 실제 가디언 SUCCEEDED를 검증했다.
+- 2026-10-16 | Orchestrator Email Deployment | 인증된 Flex OneDeploy로 발송 차단 코드를 배포하고 운영 EMAIL_ENABLED=false, 함수 22개 활성 상태와 private Storage 유지 및 테스트 92건을 검증했다.
+- 2026-10-16 | Guardian Email | 메일 비활성 시 guardian 알림도 SKIPPED로 기록하면서 실제 preflight 실패 상태는 유지하도록 보완했다.
+- 2026-10-16 | Orchestrator Email | ORCHESTRATOR_EMAIL_ENABLED 설정으로 ACS 메일 발송을 건너뛰어도 파이프라인이 계속 실행되도록 변경하고 배포 설정에서 메일을 비활성화했다.
 - 2026-10-16 | Weekly Final Validation | 전체 pytest 365건, Ruff, Bicep compile, diff·secret·IDE 문제 검사를 통과하고 배포 임시 파일을 정리했다.
 - 2026-10-16 | Weekly Canary | cutoff-fixed 2년 251,978행 export와 실제 SHORT·MEDIUM Job을 완료하고 두 gate의 REJECT 및 active assignment 무변경을 검증했다.
 - 2026-10-16 | Weekly Deployment Validation | 최종 Backend·Durable 배포, operational manifest eligibility, private ACR·Blob, PostgreSQL lock, P3v3/VNet·SCM auth 상태를 검증하고 historical validation run을 정리했다.

@@ -1,6 +1,6 @@
 # 일 1회 후보 선정 수집 파이프라인
 
-갱신일: 2026-10-13
+갱신일: 2026-10-16
 
 ## 목표와 범위
 
@@ -36,18 +36,18 @@
 구현된 운영 trigger는 private Storage backend를 사용하는 `orchestrator/`의 Python
 Durable Functions다. Azure Functions timer는 UTC 매시 30분 깨어나
 `America/New_York` 05:30 게이트를 통과할 때만 직전 달력 날짜의
-`candidate-dual-YYYY-MM-DD` 부모를 시작한다. 부모는
-`candidate-daily-YYYY-MM-DD-short_5d`를 terminal까지 실행한 뒤 허용된 결과에서
-`candidate-daily-YYYY-MM-DD-medium_20d`를 시작한다. Candidate `exchange-sessions`
+`candidate-daily-YYYY-MM-DD-medium_20d` 단일 실행을 시작한다.
+정기 일일 실행은 `MEDIUM_20D`만 사용하며 기존 `SHORT_5D`와 명시적 API 모델 선택,
+기존 dual orchestration 및 두 모델 주간 재학습은 유지한다. Candidate `exchange-sessions`
 조회에서 XNYS 거래일이 아니면 Candidate 파이프라인을 시작하지 않는다. 따라서 위
 표의 주말·휴장일 reference refresh는 수집 CLI의 설계 동작이며 현재 외부 Durable
 trigger가 자동 호출하는 경로는 아니다.
 
-각 모델 child는 Candidate 제출 전에 같은 날짜·모델의 완전한 terminal selection을
+일일 실행은 Candidate 제출 전에 같은 날짜·모델의 완전한 terminal selection을
 확인한다. 있으면 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와 Portal batch를
 생략한다. 신규 실행은 날짜와 모델 목적을 포함한 `Idempotency-Key`를 사용한다.
 Candidate API는 canonical 요청 hash를 함께 영속화하므로 같은 key·payload 재시도는
-기존 run을 반환하고, 같은 key의 다른 payload는 충돌로 실패한다. 부모·child ID와 API
+기존 run을 반환하고, 같은 key의 다른 payload는 충돌로 실패한다. 모델별 instance ID와 API
 key가 각 계층에서 중복을 독립 차단한다. 별도 resource guardian은 15분마다 readiness와
 승인된 제한 복구를 수행하지만 파이프라인을 시작하거나 재실행하지 않는다.
 
@@ -191,19 +191,26 @@ optional dataset 실패는 해당 signal을 비활성화하고 stale/failed 상�
 
 ### Phase 6: 후보 생성
 
-구현 완료다. 다만 기간 backfill에서는 실행하지 않고, 사용자가 `--date`를 명시하거나 일일 수집에 `--with-candidates`를 지정한 경우에만 실행한다.
+기간 backfill에서는 후보 생성을 실행하지 않는다. 운영 DAILY는
+`with_candidates=true`, `model_purpose=MEDIUM_20D`로 고정 모델 추론을 요청한다.
+연구 CLI `--with-candidates`는 레거시 기본 horizon 5 경로로 구분한다.
 
-1. raw/proccessed feature run
-2. label·processor·model version 고정
-3. universe-scoped scoring run
-4. quantitative·event·history 정책으로 5~10개 후보
+1. 공통 cutoff·universe·manifest와 execution context 고정
+2. 정량: Qlib export → Alpha158 → 고정 processor·MEDIUM 모델 → universe-scoped score
+3. 정량: 전체 적격 universe에 issuer·sector 정책을 적용하여 정확히 20개 저장
+4. 선택 LLM: 공통 context로 독립 evidence 평가·재정렬 → 별도 Top 20 저장
+
+LLM은 `LLM_PRESELECTION_ENABLED=false`가 기본값이며 활성화하면 정량과 병렬 실행한다.
+Qlib export·모델 검증 실패가 LLM 실행을 차단하지 않으며 형제 결과·실패를 보존한다.
 
 후보 저장이 이 프로젝트의 마지막 단계다. 후보 이후 분석·에이전트 실행은 별도 시스템의 책임이다.
 
-Candidate API의 기본 조회는 `MEDIUM_20D`지만 운영 Durable 부모는 `SHORT_5D` 다음
-`MEDIUM_20D`를 각각 독립 model/scoring/selection run으로 실행한다. 한 모델 결과를
-다른 목적의 fallback으로 사용하지 않는다. 검증된 5~10개 후보의 `selection_run_id`와
-`model_purpose`만 Portal service API에 전달한다. Portal의 MySQL 분석 상태·결과와
+Candidate API 기본 조회와 정기 Durable 실행은 `MEDIUM_20D`다. SHORT_5D의
+5~10개 레거시 정책·명시적 API 선택·dual 호환은 유지하며 목적 간 fallback은 없다.
+최종 외부 전달 목표는 기존 5~10개에서 **20개**로 변경한다. 두 Top 20의 통합은
+후속 구현이며 현재 MEDIUM은 `parallel_preselection`에서 종료하고 Portal에 제출하지 않는다.
+향후 검증된 최종 20개의 `selection_run_id`·`model_purpose`를 축소 없이 전달한다.
+Portal의 MySQL 분석 상태·결과와
 TradingAgents Container App 실행은 이 수집 파이프라인 및 Candidate PostgreSQL 범위
 밖이며, 오케스트레이터는 이를 조정하는 control plane일 뿐 Candidate Engine의
 `수집 -> 전처리 -> 모델 점수 -> 후보 선정` 범위를 확장하지 않는다.
@@ -243,7 +250,9 @@ Massive의 네 endpoint를 동시에 호출하는 것처럼 보이더라도 실�
 | 거래 달력 | 없음 | 공식 일정 + library | 가능 |
 | 거래정지 | 없음 | Nasdaq halt snapshot | 일 1회 기준 가능 |
 | 특징·점수 | Alpha158·momentum·Ridge·LightGBM | 명시적 date의 Qlib export 후 | 구현, 현재 모델 SHADOW |
-| 후보 5~10개 | scoring run 기반 | 전체 적격 universe 순회 | 구현 |
+| 정량 후보 20개 | MEDIUM scoring run 기반 | 전체 적격 universe 순회 | 구현, SHORT 레거시 5~10개 보존 |
+| 독립 LLM 후보 20개 | manifest-fenced evidence | 정량과 병렬, 별도 저장·API | 구현, 기본 비활성 |
+| 최종 후보·외부 전달 20개 | 두 Top 20의 RRF 통합 목표 | 5~10개로 재축소하지 않음 | 후속 구현 |
 
 ## 실패·재시도·멱등성
 

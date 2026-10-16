@@ -23,6 +23,7 @@
     "ACS_EMAIL_ENDPOINT": "https://communication-service.communication.azure.com",
     "ORCHESTRATOR_EMAIL_SENDER": "set-in-local-settings-only",
     "ORCHESTRATOR_EMAIL_RECIPIENTS": "set-in-local-settings-only",
+    "ORCHESTRATOR_EMAIL_ENABLED": "false",
     "ORCHESTRATOR_EXCHANGE_MIC": "XNYS",
     "ORCHESTRATOR_CANDIDATE_TIMEOUT_MINUTES": "120",
     "ORCHESTRATOR_PORTAL_TIMEOUT_MINUTES": "360",

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -208,3 +208,53 @@ def test_read_actions_is_manifest_and_cutoff_constrained() -> None:
     assert "market.corporate_action_observation" in sql
     assert "action.source_available_at <= ec.cutoff_at" in sql
     assert "obs.observed_at <= ec.cutoff_at" in sql
+
+
+def test_read_events_enforces_publication_and_observation_cutoff() -> None:
+    connection = _Connection([[]])
+
+    SourceRepository(connection).read_events(  # type: ignore[arg-type]
+        execution_context_id=uuid.uuid4(),
+        instrument_id=uuid.uuid4(),
+        event_type="NEWS",
+        start_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    sql = connection.sql[0]
+    assert "event.event_revision_observation" in sql
+    assert "revision.source_available_at <= ec.cutoff_at" in sql
+    assert "revision.published_at" in sql
+    assert "BETWEEN %s AND ec.cutoff_at" in sql
+    assert "obs.observed_at <= ec.cutoff_at" in sql
+
+
+def test_read_filings_enforces_acceptance_and_observation_cutoff() -> None:
+    connection = _Connection([[]])
+
+    SourceRepository(connection).read_sec_filings(  # type: ignore[arg-type]
+        execution_context_id=uuid.uuid4(),
+        issuer_id=uuid.uuid4(),
+        filed_on_or_after=date(2025, 1, 1),
+    )
+
+    sql = connection.sql[0]
+    assert "fundamental.sec_filing_observation" in sql
+    assert "filing.accepted_at <= ec.cutoff_at" in sql
+    assert "ss.source_available_at <= ec.cutoff_at" in sql
+    assert "obs.observed_at <= ec.cutoff_at" in sql
+
+
+def test_read_universe_requires_manifested_active_point_in_time_state() -> None:
+    connection = _Connection([[]])
+
+    SourceRepository(connection).read_universe_members(  # type: ignore[arg-type]
+        execution_context_id=uuid.uuid4(),
+        target_session=date(2026, 1, 9),
+    )
+
+    sql = connection.sql[0]
+    assert "uv.source_snapshot_id = imm.source_snapshot_id" in sql
+    assert "state.source_snapshot_id = imm.source_snapshot_id" in sql
+    assert "uv.announced_at <= ec.cutoff_at" in sql
+    assert "state.observed_at <= ec.cutoff_at" in sql
+    assert "state.status = 'ACTIVE'" in sql

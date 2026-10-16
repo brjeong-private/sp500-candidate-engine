@@ -77,15 +77,18 @@ def run_guardian(
             ),
         }
         alert_sent = False
+        alert_disabled = False
         try:
-            alert_sent = email_client(alert).get("sent") is True
+            email_result = email_client(alert)
+            alert_sent = email_result.get("sent") is True
+            alert_disabled = email_result.get("disabled") is True
         except Exception:
             alert_sent = False
         _emit_safely(
             telemetry,
             {
                 "event": "pipeline.email.terminal",
-                "state": "SUCCEEDED" if alert_sent else "FAILED",
+                "state": "SKIPPED" if alert_disabled else "SUCCEEDED" if alert_sent else "FAILED",
                 "stage": "guardian_alert",
                 "remediated": False,
             },

@@ -30,7 +30,7 @@ flowchart LR
     Function -->|"weekly API"| Candidate
     Function -->|"start/status<br/>managed identity"| Training["Candidate training<br/>Container Apps Job"]
     Candidate --> PostgreSQL[("PostgreSQL<br/>candidate source of truth")]
-    Function -->|"selection run batch"| Portal["Portal service API"]
+    Function -.->|"legacy SHORT_5D only<br/>selection run batch"| Portal["Portal service API"]
     Portal --> MySQL[("MySQL<br/>analysis jobs and results")]
     Portal --> Trading["TradingAgents<br/>Container App"]
     Function --> Email["ACS Email"]
@@ -47,10 +47,11 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
 ## 실행 흐름
 
 1. 타이머는 매시 30분(UTC)에 실행되고 `America/New_York` 현지 시각 05:30에만
-   직전 달력 날짜의 `candidate-dual-YYYY-MM-DD` 부모를 시작한다. 부모는 기존
-   `daily_orchestrator`를 결정적 `candidate-daily-YYYY-MM-DD-{model_purpose}`
-   child로 재사용해 `SHORT_5D`를 terminal까지 실행한 뒤 `MEDIUM_20D`를 실행한다.
-   동일 날짜의 부모 history가 있으면 다시 시작하지 않는다.
+   직전 달력 날짜의 `MEDIUM_20D` 단일 `daily_orchestrator`를 시작한다.
+   instance ID는 `candidate-daily-YYYY-MM-DD-medium_20d`이며 활성 instance는
+   재사용한다. terminal instance는 정기 시각에 재시작할 수 있지만 기존 selection
+   검사가 업무 중복을 막는다. 전환 전 dual 부모가 활성 상태이면 새 실행을 시작하지 않는다.
+   기존 dual orchestration과 `SHORT_5D` 수동·API 모델 선택은 호환 경로로 유지한다.
 2. Candidate `exchange-sessions` 조회로 XNYS 거래일인지 확인한다.
 3. `DefaultAzureCredential`로 Candidate/Portal App Service, Candidate PostgreSQL,
    Portal MySQL을 읽고 중지 상태이면 `start`한다. TradingAgents Container App은
@@ -63,19 +64,26 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
    알림이나 pipeline 제출 전에 실패한다. 배포 인프라는
    `TRADINGAGENTS_API_URL`을 필수로 설정하며 TradingAgents `/readyz`도
    `status=ready`인지 확인한다.
+   TradingAgents의 `minReplicas`는 `TRADINGAGENTS_MIN_REPLICAS` 이상이면 정상이며,
+   하한 미만일 때만 늘린다. 가디언은 이미 하한 이상인 replica 설정을 축소하지 않는다.
+   2026-10-16 사용자 승인으로 운영 TradingAgents는 `minReplicas=1`, `maxReplicas=1`로
+   고정했으며 `ANALYSIS_WORKER_COUNT=3`은 변경하지 않았다.
 4. 날짜와 모델 목적 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
    timer로 상태를 확인한다. 제출 전 같은 날짜·모델의 완전한 terminal selection을
    조회하며, 있으면 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와 Portal batch를
    모두 생략한다. Candidate API는 canonical 요청 hash를 저장해 같은 key·payload에는
-   원래 run을 반환하고 다른 payload에는 `409`를 반환한다. 완료 후 5~10개 후보의
-   날짜·순위·식별자·중복을 검증한다.
-5. 검증된 후보 5~10개가 공유하는 `selection_run_id`와 `model_purpose`를 포털 자동화
-   API에 한 번 제출한다. 포털 집계의 개별 작업은 재제출하지 않으며 일부 실패는
-   `PARTIAL_FAILED`, 전부 실패는 `FAILED`가 된다.
-6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. SHORT의 core 또는
-   preflight가 `FAILED`/`TIMED_OUT`이면 부모가 중단되고, `PARTIAL_FAILED`,
-   `SKIPPED_EXISTING` 및 Portal 단계 실패·timeout은 MEDIUM 실행을 계속한다. 부모
-   결과는 모델별 child ID, 상태와 terminal 결과를 보존한다. 외부 I/O와 이메일은
+   원래 run을 반환하고 다른 payload에는 `409`를 반환한다. MEDIUM_20D 완료 후 정량
+   후보가 정확히 20개인지 날짜·순위·식별자·중복을 검증한다. 기존 10개 결과는 완료로
+   인정하지 않으며 MEDIUM 제출 key의 `top20-v1` suffix로 기존 10개 요청과 구분한다.
+   정량 Top 20 완료는 LLM 결과 유무에 의존하지 않는다. LLM 파이프라인은 별도이며
+   `LLM_PRESELECTION_ENABLED`를 활성화할 때만 병렬 실행한다.
+5. MEDIUM_20D의 두 목록은 중간 후보군이므로 `parallel_preselection`에서 성공 종료하며
+   Portal/TradingAgents에 제출하지 않는다. 두 목록을 최종 20개로 병합하는 단계는
+   후속 구현이다. 레거시 SHORT_5D 명시 실행만 기존 Portal batch 계약을 유지한다.
+   향후 최종 전달 계약은 기존 5~10개에서 **20개**로 변경하며, 최종 Top 20을
+   다시 축소하지 않는다. 이는 문서 목표이며 현재 MEDIUM 제출 차단을 해제하지 않는다.
+6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. 정기 일일 실행은
+   `MEDIUM_20D` 정량 Top 20을 생성하며 SHORT 실행이나 LLM 결과에 의존하지 않는다. 외부 I/O와 이메일은
    activity에서만 실행되어 orchestrator replay가 부작용을 반복하지 않는다.
 7. `resource_guardian_timer`는 15분마다 같은 readiness와 승인된 start/replica/private
    Storage 복구 계약을 독립 실행한다. 실패 시 제한된 guardian Email과 telemetry를
@@ -117,6 +125,11 @@ backend 계약이고 Durable history가 active pointer를 대신하지 않는다
 신규 실행은 모델별 `STARTED`와 terminal Email을 보내며 제목은
 `[candidate-orchestrator] {MODEL_PURPOSE} {YYYY-MM-DD} {STATE}`다.
 `SKIPPED_EXISTING`은 STARTED 없이 terminal Email만 보낸다.
+`ORCHESTRATOR_EMAIL_ENABLED=false`이면 ACS Email 호출을 생략하고 email telemetry를
+`SKIPPED`로 기록한다. 파이프라인 실행은 이메일 발송 여부와 독립적으로 계속된다.
+기본값은 코드에서 `true`이며, Bicep 기본값과 로컬 예시는 발송하지 않도록 설정한다.
+2026-10-16 운영 Function App에도 `false`를 적용하고 변경 코드를 배포했다.
+guardian 경고 메일도 같은 설정을 따르며 일일·주간 실행과 guardian 자체는 유지한다.
 
 아래 인증된 수동 HTTP starter는 단일 모델 진단·one-off 호환 경로로 유지되며,
 `SHORT_5D` 또는 `MEDIUM_20D`를 명시적으로 선택한다. 모델 간 fallback은 수행하지 않는다.
@@ -147,16 +160,19 @@ Invoke-RestMethod `
 `x-functions-key` header로 전달해야 한다. 같은 날짜·모델 목적 요청은 기존
 인스턴스를 재사용한다.
 
-날짜별 dual 수동 endpoint는 아직 구현되지 않았다. 전체 dual 실행은 배포된 05:30 ET
-timer 경로가 기준이며, 위 endpoint는 모델별 진단·호환 경로다.
+날짜별 dual 수동 endpoint는 제공하지 않는다. 05:30 ET timer는 `MEDIUM_20D`만
+실행하며, 위 endpoint에서는 기존처럼 `SHORT_5D`와 `MEDIUM_20D`를 명시할 수 있다.
+주간 재학습은 두 모델을 계속 독립적으로 학습·평가한다.
 
 ## 외부 포털 계약
 
-배포 전에 포털이 다음 서버 간 계약을 제공해야 한다.
+최종 전달 활성화 전에 포털이 다음 서버 간 계약을 제공해야 한다.
+MEDIUM 자동 전달은 현재 차단돼 있으며 아래 20개 수용 계약은 후속 연동 목표다.
+기존 SHORT 명시 경로만 5~10개 레거시 batch를 유지한다.
 
 - `Authorization: Bearer <token>`을 두 API에 전달
 - `POST /api/automation/candidate-analyses`: `analysis_date`, `selection_run_id`,
-  `model_purpose` JSON을 한 번 접수하고 `daily_analysis_id` 및 5~10개 `jobs` 집계 반환
+  `model_purpose` JSON을 한 번 접수하고 `daily_analysis_id` 및 최종 20개 `jobs` 집계 반환
 - `GET /api/automation/candidate-analyses/{daily_analysis_id}`: 같은 집계를 반환
 - 작업 상태는 `pending`, `running`, `completed`, `failed`이며 오케스트레이터 결과는
   포털이 반환한 모든 작업의 `decision`, `has_result`, 안전한 `error` 요약을 보존

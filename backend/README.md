@@ -40,6 +40,8 @@ OpenAPI and Swagger UI are available at `/openapi.json` and `/docs`.
 | POST | `/api/v1/pipeline-runs/weekly/{weekly_run_id}/execution` | Bind the allowlisted Container Apps execution name from the trusted orchestrator; requires `X-API-Key` |
 | POST | `/api/v1/pipeline-runs/weekly/{weekly_run_id}/activation-smoke` | Smoke-check a promoted active assignment; requires `X-API-Key` |
 | GET | `/api/v1/candidates` | Latest successful selection per date or explicit selection run |
+| GET | `/api/v1/llm-preselections` | Latest successful manifest-fenced LLM Top 20 per date |
+| GET | `/api/v1/llm-preselections/{run_id}` | Inspect one LLM run, including failed/shortfall |
 | GET | `/api/v1/collection-data/{dataset}` | Normalized dataset records |
 
 The collection dataset allowlist is `daily-bars`, `corporate-actions`, `news`,
@@ -69,6 +71,51 @@ Ticker/company/sector come from that scoring run's universe version. The first
 page fixes a run-creation watermark so a subsequent rerun cannot replace a run
 mid-pagination. Candidate reason codes, priority and event revision IDs are
 public; arbitrary reason-detail JSON is not.
+
+The scheduled `MEDIUM_20D` policy returns exactly 20 quantitative analysis
+candidates. The preserved `SHORT_5D` policy remains a 5–10 candidate legacy
+path. LLM results are not mixed into this response: `/api/v1/llm-preselections`
+returns a separate 20-item run with its execution context, cutoff,
+prompt/deployment/evidence-schema versions, bounded reason codes, and selected
+source-evidence lineage. Its score semantics are `LLM_EVIDENCE_SCORE`, not
+predicted return, probability, confidence, or investment advice.
+
+The final Portal/TradingAgents handoff target changes from 5–10 to **20**
+candidates, without trimming the final Top 20 again. Fusion remains future work.
+The MEDIUM orchestrator currently stops at `parallel_preselection` with zero
+external submissions; this documentation does not enable dispatch or deploy
+the new policy/schema. Explicit SHORT legacy execution remains unchanged.
+
+`LLM_PRESELECTION_ENABLED=false` is the safe deployment default. When enabled
+for a MEDIUM daily run, the backend starts the LLM branch after the shared
+cutoff-fixed input manifest is prepared, before any Qlib export or model
+validation. The daily control plane runs quantitative inference and
+`src/sp500_candidate_engine/llm_preselection/pipeline.py` independently in
+parallel; quantitative inference never starts or waits for an LLM call.
+LLM configuration lives in `config/llm_preselection/`, with dedicated tests in
+`tests/llm_preselection/`. The execution result exposes sibling `candidate_run`
+and `llm_preselection_run` objects, plus `preselection_failures`. One successful
+Top 20 and one failed/shortfall branch yields partial success; neither successful
+Top 20 yields failure. No branch falls back to an older run or the other list.
+
+The LLM pipeline can also run alone with a supplied frozen context:
+
+Local Azure OpenAI credentials belong in the ignored repository-root `.env`,
+not inside the Python package. `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and
+`AZURE_CLIENT_SECRET` support local service-principal authentication through
+`DefaultAzureCredential`; Azure deployments continue to use managed identity.
+The client leaves temperature at the deployment default so deployments that
+reject custom temperature values remain compatible. Strict JSON output is still
+required; identical completed inputs are reused rather than assuming sampling
+is deterministic.
+
+```powershell
+python -m sp500_candidate_engine.llm_preselection --date 2026-10-14 --execution-context-id <context-uuid>
+```
+
+This entry point does not load Qlib exports, Alpha158 features, or LightGBM
+artifacts. The existing `candidate-engine rank-llm-candidates` command remains
+compatible and delegates to the same independent pipeline.
 
 Collection date filters have dataset-specific meanings:
 
@@ -102,12 +149,13 @@ names. Public records exclude raw metadata, request payloads, storage URLs and
 filesystem log paths; failures expose only safe summaries.
 
 All timestamps retain provenance and are serialized as ISO 8601. Predicted return
-is a raw five-session return estimate, **not** a confidence/probability.
+is a raw return estimate for the declared horizon (20 sessions by default,
+5 for explicit SHORT), **not** a confidence/probability.
 
 ```javascript
 // Run on the TradingAgents portal Origin. Reads require no API key.
 const response = await fetch(
-  "https://web-sp500-candidate-8d0218f4.azurewebsites.net/api/v1/candidates?limit=10"
+  "https://web-sp500-candidate-8d0218f4.azurewebsites.net/api/v1/candidates?model_purpose=MEDIUM_20D&limit=20"
 );
 if (!response.ok) throw new Error(`Candidate API: ${response.status}`);
 const candidates = await response.json();

@@ -1,27 +1,28 @@
 # 프로젝트 전체 아키텍처
 
-갱신일: 2026-10-14
+갱신일: 2026-10-16
 
 이 문서는 개발과 함께 갱신하는 `candidate_engine`과 운영 자동화의 기준
 아키텍처다. **이 프로젝트와 저장소의 제품 범위는 아래 다이어그램의
-`candidate_engine` 영역**이며, 원천 수집부터 전처리·점수·후보 통합·검증과
-5~10개 후보 API 제공까지를 책임진다.
+`candidate_engine` 영역**이며, 원천 수집부터 전처리·점수·후보 선정·검증과
+20개 후보 API 제공까지를 책임진다. 최종 통합은 후속 설계다.
 
 포털·TradingAgents·외부 분석 데이터·MySQL·분석 보고서 Blob은 전체 시스템의 연동
 맥락을 보여주기 위해 표시하지만 이 프로젝트의 구현 범위가 아니다. 현재 후보 원본과
 파이프라인 실행 기록의 단일 원본은 Candidate PostgreSQL이다.
 
-다이어그램의 LLM 상위 20 경로는 **candidate_engine의 계획된 확장**이다. 현재 구현된
-운영 후보는 Qlib Alpha158·LightGBM 점수와 selection policy로 생성하며, 현행
-`PROJECT-HARNESS.md`가 후보 LLM 분석을 제외하므로 LLM 경로를 활성화하려면 먼저
-하네스·입력 시점·출력 schema·검증 기준을 versioned 계약으로 변경해야 한다.
+독립 LLM Top 20은 구현된 선택 경로이며 `LLM_PRESELECTION_ENABLED=false`가 기본값이다.
+공통 manifest·cutoff를 준비한 뒤 Qlib Alpha158·LightGBM 정량 Top 20과 병렬 실행한다.
+후속 RRF 통합·최종 20개 전달은 미구현이다. 외부 전달 목표를 기존 5~10개에서
+20개로 변경하며, 현재 MEDIUM은 `parallel_preselection`에서 외부 제출 없이 종료한다.
+SHORT_5D 레거시 5~10개는 유지한다. 문서 계약은 신규 운영 배포 완료를 뜻하지 않는다.
 
 오케스트레이터의 replay·멱등성·상태 전이·보안·배포 상세는
 [Durable Functions 오케스트레이터 아키텍처](orchestrator-architecture.md)를 기준으로 한다.
 
 ## 설계 전제
 
-- 05:30 ET timer는 날짜별 dual 부모를 시작하고, 별도 resource guardian은 15분마다
+- 05:30 ET timer는 날짜별 MEDIUM_20D 단일 실행을 시작하고, 별도 resource guardian은 15분마다
   readiness와 승인된 제한 복구를 수행한다.
 - 거래일에는 직전 완료 세션을 처리하고, 비거래일에는 reference·event refresh만 수행한다.
 - 시장 데이터는 Massive Stocks Basic을 사용한다.
@@ -30,9 +31,9 @@
 - Alpha Vantage earnings calendar는 ticker별 호출이 아니라 전체 목록을 하루 1회 받는다.
 - SEC는 JSON API와 nightly bulk ZIP을 사용하고, 재무 fact는 정규화 후에만 분석 입력으로 사용한다.
 - 현재 Wikipedia·Yahoo 경로는 prototype 이력 재현용으로만 남기며 신규 운영 경로에서는 Massive·SEC·Alpha Vantage를 사용한다.
-- Candidate API의 기본 조회 모델은 `MEDIUM_20D`다. 일일 Durable 부모는
-  `SHORT_5D` child 종료 후 `MEDIUM_20D` child를 시작한다. 단일 모델 endpoint는
-  one-off 진단 경로이며 모델 간 자동 fallback은 없다.
+- Candidate API의 기본 조회와 정기 일일 실행 모델은 `MEDIUM_20D`다.
+  `SHORT_5D`·명시적 API 모델 선택·기존 dual 흐름과 두 모델 주간 재학습은 유지하며
+  모델 간 자동 fallback은 없다.
 - 운영 스케줄은 Python Durable Functions가 담당한다. Candidate Engine은 포털이나
   TradingAgents의 분석 결과를 저장하지 않는다.
 
@@ -41,7 +42,8 @@
 | 영역 | 상태 | 이 저장소의 책임 |
 |---|---|---|
 | 원천 수집·Data Spine·Qlib Alpha158·LightGBM·selection·Candidate API | CURRENT | 포함 |
-| LLM 기업·뉴스 평가 상위 20과 수치 Top 20 통합 | PLANNED | 계약 승인 후 포함 예정 |
+| 독립 LLM 기업·이벤트 Top 20 | IMPLEMENTED / FLAG OFF | manifest-fenced evidence·평가·별도 저장·API |
+| 두 Top 20의 RRF 통합·최종 Top 20 | PLANNED | 후속 구현 |
 | Portal·TradingAgents·외부 분석 data/state·report | EXTERNAL | 제외, API 연동만 유지 |
 
 <!-- mermaid-checked: no braces in labels, all subgraphs closed, unique ids -->
@@ -61,30 +63,35 @@ flowchart LR
             subgraph Quant["Microsoft Qlib · Numeric Top 20 · CURRENT"]
                 Export["Qlib export<br/>adjusted OHLCV · calendar · span"]
                 Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
-                WalkForward["Purged walk-forward<br/>time split · train-only fit"]
-                LightGBM["LightGBM<br/>SHORT_5D · MEDIUM_20D"]
+                Artifact["Pinned artifact<br/>daily inference only"]
+                LightGBM["LightGBM<br/>daily MEDIUM_20D · legacy SHORT_5D"]
                 NumericTop["Predicted return rank<br/>numeric top 20"]
             end
 
-            LlmTop["LLM company and news evaluation<br/>top 20 · PLANNED"]
-            Merge["Candidate merge and validation<br/>deduplication · risk factors · sector diversification"]
-            CandidateApi["Final candidates 5 to 10<br/>Candidate API · not an order"]
+            LlmTop["Independent LLM evidence evaluation<br/>top 20 · optional · default OFF"]
+            QuantApi["Quant Top 20 Store and API"]
+            LlmApi["LLM Top 20 Store and API"]
+            Merge["FUTURE · issuer union and RRF<br/>risk · sector validation"]
+            CandidateApi["FUTURE · Final Top 20 API<br/>no secondary trim · not an order"]
 
             Reference --> DataSpine
             Massive --> DataSpine
             Sec --> DataSpine
             Alpha --> DataSpine
-            DataSpine --> Export --> Features --> WalkForward --> LightGBM --> NumericTop
+            DataSpine --> Export --> Features --> Artifact --> LightGBM --> NumericTop
             DataSpine -.-> LlmTop
-            NumericTop --> Merge
-            LlmTop -.-> Merge
-            Merge --> CandidateApi
+            NumericTop --> QuantApi
+            LlmTop -.-> LlmApi
+            QuantApi -.-> Merge
+            LlmApi -.-> Merge
+            Merge -.-> CandidateApi
         end
 
-        Durable["Python Durable Functions<br/>SHORT_5D then MEDIUM_20D · idempotent control plane"]
+        Durable["Python Durable Functions<br/>daily MEDIUM_20D only · idempotent control plane"]
         CandidateState["Private Storage · Key Vault · App Insights · ACS Email"]
         Durable --> Daily
         CandidateState --> Durable
+        Weekly["Weekly training-only<br/>SHORT and MEDIUM · promotion gate"] --> Artifact
     end
 
     subgraph External["EXTERNAL · jongmok-toronbang and TradingAgents"]
@@ -113,28 +120,27 @@ flowchart LR
         PortalState --> PortalUi
     end
 
-    CandidateApi -->|"selection run batch"| Portal
+    CandidateApi -.->|"future selection run batch · 20 candidates"| Portal
 ```
 
 ### 05:30 ET 실행 계약
 
 1. Functions timer는 UTC 매시 30분 실행되지만 뉴욕 현지 시각이 정확히 05:30일
-   때만 `candidate-dual-YYYY-MM-DD` Durable 부모를 시작한다. DST는
+   때만 `candidate-daily-YYYY-MM-DD-medium_20d` 단일 실행을 시작한다. DST는
    `America/New_York` 변환으로 처리한다.
 2. 대상은 직전 달력 날짜이며 Candidate의 XNYS session API에서 거래일을 확인한다.
    비거래일은 외부 실행 없이 `SUCCEEDED`와 `skipped=true`로 끝난다.
-3. 부모는 `SHORT_5D` child를 terminal까지 실행하고 허용된 결과에서만
-   `MEDIUM_20D` child를 시작한다. SHORT의 core·preflight 실패/timeout은 sequence를
-   중단하고, Portal 실패/timeout·`PARTIAL_FAILED`·`SKIPPED_EXISTING`은 계속한다.
-4. 각 child는 Candidate·Portal App Service의 ARM 상태와 Candidate `/health/ready`, Portal 및
+3. 활성 MEDIUM instance 또는 전환 전 dual 부모가 있으면 새 실행을 시작하지 않는다.
+   정기 실행은 SHORT 결과에 의존하지 않으며 기존 selection 검사가 업무 중복을 차단한다.
+4. 일일 실행은 Candidate·Portal App Service의 ARM 상태와 Candidate `/health/ready`, Portal 및
    TradingAgents `/readyz`를 확인한다.
 5. Candidate 제출 전에 날짜·모델별 기존 terminal selection을 확인한다. 있으면
    `SKIPPED_EXISTING`으로 종료하고 Candidate·Portal·TradingAgents 신규 실행을 하지
    않는다. 없으면 모델 목적을 포함한 `Idempotency-Key`로 접수하고 durable timer로
    polling한다.
-6. Portal service API에는 후보 row를 복제하지 않고 `analysis_date`,
-   `selection_run_id`, `model_purpose`를 일괄 제출한다. Portal이 MySQL에 외부 분석
-   job·결과를 저장하고 TradingAgents Container App 실행을 중개한다.
+6. MEDIUM은 정량 20개 검증 후 `parallel_preselection`에서 종료하고 외부 제출은 0개다.
+   향후 최종 통합 20개의 `analysis_date`, `selection_run_id`, `model_purpose`를
+   Portal에 전달한다. 현재 Portal 제출·poll은 레거시 SHORT 명시 실행에만 적용한다.
 7. 외부 I/O, 모델별 ACS Email, 구조화 telemetry는 activity에서만 실행한다. 모델
    종결 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`, `PARTIAL_FAILED`, `TIMED_OUT`,
    `FAILED`다.
@@ -166,19 +172,15 @@ Durable Task Scheduler는 사용하지 않는다. API key와 email 주소 값은
 ```mermaid
 flowchart LR
     Timer["UTC 매시 30분 timer"] --> Gate["05:30 ET gate"]
-    Gate --> Parent["candidate-dual-date"]
-    Parent --> Short["SHORT_5D child"]
-    Short --> Continue{"SHORT core와<br/>preflight 통과?"}
-    Continue -->|"Yes"| Medium["MEDIUM_20D child"]
-    Continue -->|"No"| ParentTerminal["Parent terminal"]
-    Short --> Existing["기존 모델 selection 확인"]
+    Gate --> Medium["MEDIUM_20D<br/>candidate-daily-date-medium_20d"]
+    Existing["기존 모델 selection 확인"]
     Medium --> Existing
     Existing -->|"Exists"| Skip["SKIPPED_EXISTING"]
-    Existing -->|"Missing"| CandidateSubmit["Candidate DAILY·poll·검증"]
-    CandidateSubmit --> Portal["Portal batch·poll"]
+    Existing -->|"Missing"| CandidateSubmit["Candidate DAILY·poll·정량 20개 검증"]
+    CandidateSubmit --> Stop["parallel_preselection<br/>외부 제출 0개"]
     Skip --> Email["모델별 terminal Email"]
-    Portal --> Email
-    Email --> ParentTerminal
+    Stop --> Email
+    Email --> DailyTerminal["Daily terminal"]
     Guardian["15분 guardian"] --> Ready["readiness·제한 복구"]
 ```
 
@@ -248,9 +250,12 @@ flowchart TD
     end
 
     subgraph Candidate["Candidate Engine"]
-        FeatureRun["Feature and Label Runs"]
-        ScoreRun["Model Scoring and Universe Ranking"]
-        Selector["Daily Five to Ten Candidates"]
+        SharedContext["Shared Cutoff and Manifest"]
+        FeatureRun["Qlib Alpha158 Features"]
+        ScoreRun["Pinned Model Scoring and Universe Ranking"]
+        Selector["MEDIUM Daily Top 20<br/>SHORT Legacy 5 to 10"]
+        LlmRun["Independent LLM Top 20<br/>optional · default OFF"]
+        FutureFusion["FUTURE RRF · Final Top 20"]
     end
 
     Scheduler -->|"daily"| SessionResolver
@@ -296,15 +301,23 @@ flowchart TD
     QualityGate --> Market
     QualityGate --> Fundamental
     QualityGate --> Event
+    Ops --> SharedContext
+    SharedContext --> FeatureRun
+    SharedContext -.-> LlmRun
+    LlmRun -.-> Selection
+    Selector -.-> FutureFusion
+    LlmRun -.-> FutureFusion
 
     Ref --> FeatureRun
     Market --> FeatureRun
-    Fundamental --> FeatureRun
-    Event --> Selector
+    Fundamental -.-> LlmRun
+    Event -.-> LlmRun
+    Market -.-> LlmRun
     FeatureRun --> Analytics
-    Analytics --> ScoreRun
-    ScoreRun --> Selection
-    Selection --> Selector
+    FeatureRun --> ScoreRun
+    ScoreRun --> Analytics
+    ScoreRun --> Selector
+    Selector --> Selection
 ```
 
 ## 파이프라인 실행 아키텍처
@@ -354,7 +367,9 @@ flowchart LR
     subgraph Phase5["Phase 5 Candidate Run"]
         Features["Features"]
         Scores["Scores"]
-        Candidates["Candidates"]
+        Candidates["Quant Top 20"]
+        LlmCandidates["Independent LLM Top 20<br/>optional · default OFF"]
+        FusionCandidates["FUTURE RRF · Final Top 20"]
     end
 
     P0A --> P0B
@@ -396,6 +411,9 @@ flowchart LR
     Manifest --> Features
     Features --> Scores
     Scores --> Candidates
+    Manifest -.-> LlmCandidates
+    Candidates -.-> FusionCandidates
+    LlmCandidates -.-> FusionCandidates
 
     P0B --> Log
     M4 --> Log
@@ -434,13 +452,13 @@ flowchart LR
 | 뉴스 metadata | Massive 291개 적재 | event observation과 instrument mapping | 무료 플랜 과거 범위와 콘텐츠 권리 제한 |
 | 거래 달력·조기 폐장 | `exchange_calendars` XNYS 기준선 | NYSE/Nasdaq 공식 collector 추가 | 비정상 휴장 archive·공식 검증 필요 |
 | 거래정지 | 없음 | Nasdaq halt feed | 별도 collector 필요 |
-| 특징·점수·후보 | Alpha158 158개, SHORT_5D·MEDIUM_20D 후보 각 10개 | Qlib export·LightGBM·selection | 두 모델 모두 SHADOW, champion 승격 기준 미통과 |
+| 특징·점수·후보 | Alpha158 158개, MEDIUM Top 20·SHORT 레거시 5~10개 | Qlib export·LightGBM·selection | 후보 정책 변경은 모델 승격·성능 검증이 아님 |
 
 ## 기술 구성
 
 | 계층 | 선택 기술 |
 |---|---|
-| 엔진 스케줄·CLI | Python 3.13, 일 1회 |
+| 엔진 스케줄·CLI | Python 3.11+, Qlib analytics는 3.11/3.12, 일 1회 |
 | 운영 조정 | Python 3.11 Azure Durable Functions, Linux FC1 |
 | 실행 상태 | Azure Storage Blob·Queue·Table, 관리 ID 인증 |
 | secret·알림 | Key Vault reference, ACS Email |
@@ -469,7 +487,7 @@ flowchart LR
 - Yahoo/Wikipedia prototype, temporal fence, 변경분 upsert와 JSONL 로그
 - XNYS backfill, range action/news, SEC fact cutoff, 자동·수동 재처리와 process 진행 로그
 - private Storage 기반 FC1 Durable Functions와 managed identity data plane
-- `SHORT_5D` 후 `MEDIUM_20D` 순차 부모, 모델별 결정적 child ID
+- 정기 일일 MEDIUM_20D 단일 실행, 모델별 결정적 ID와 legacy SHORT_5D·dual 흐름 보존
 - 날짜·모델별 `SKIPPED_EXISTING` short circuit와 Portal 미제출
 - 15분 resource guardian, 모델별 Email, replay-safe telemetry와 KQL runbook
 
@@ -479,6 +497,6 @@ flowchart LR
 - dataset checkpoint 실제 전진 로직
 - staging COPY·set-based merge 최적화
 - 양의 Rank IC를 충족하는 champion 승격
-- dual 코드의 Bicep/전체 회귀 검증, 비파괴 배포, 수동·정시 E2E와 KQL 확인
+- MEDIUM_20D 단일 정기 실행의 다음 05:30 ET E2E와 KQL 확인
 
 후보 저장이 이 저장소의 마지막 단계다. 후보 이후 분석, agent 실행, report, 비용과 재평가는 별도 프로젝트에서 관리한다.

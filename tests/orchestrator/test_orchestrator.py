@@ -146,14 +146,14 @@ def test_candidate_verification_requires_all_five_to_ten(monkeypatch):
             "price_session_date": "2026-10-09",
             "status": "SUCCEEDED",
             "model_purpose": "MEDIUM_20D",
-            "selected_count": 10,
-            "requested_count": 10,
+            "selected_count": 20,
+            "requested_count": 20,
             "position": position,
             "ticker": f"T{position}",
             "instrument_id": f"instrument-{position}",
             "selection_run_id": "selection",
         }
-        for position in range(1, 11)
+        for position in range(1, 21)
     ]
     monkeypatch.setattr(
         clients,
@@ -163,12 +163,12 @@ def test_candidate_verification_requires_all_five_to_ten(monkeypatch):
     result = clients.fetch_and_verify_candidates(
         {"analysis_date": "2026-10-09", "model_purpose": "MEDIUM_20D"}
     )
-    assert len(result) == 10
-    assert [item["position"] for item in result] == list(range(1, 11))
+    assert len(result) == 20
+    assert [item["position"] for item in result] == list(range(1, 21))
     assert {item["model_purpose"] for item in result} == {"MEDIUM_20D"}
 
 
-def _settings(*, tradingagents_base_url=None):
+def _settings(*, tradingagents_base_url=None, email_enabled=True):
     return settings.Settings(
         candidate_base_url="https://candidate.example.test",
         candidate_api_key="candidate-key",
@@ -207,7 +207,33 @@ def _settings(*, tradingagents_base_url=None):
         email_sender="configured-at-runtime",
         email_recipients=("configured-at-runtime",),
         exchange_mic="XNYS",
+        email_enabled=email_enabled,
     )
+
+
+def test_send_email_returns_disabled_without_calling_provider(monkeypatch):
+    monkeypatch.setattr(
+        clients.Settings,
+        "from_env",
+        lambda: _settings(email_enabled=False),
+    )
+
+    assert clients.send_email({"subject": "not sent", "body": "not sent"}) == {
+        "sent": False,
+        "disabled": True,
+    }
+
+
+@pytest.mark.parametrize(("value", "expected"), [("true", True), ("FALSE", False)])
+def test_email_enabled_setting_parses_boolean_values(monkeypatch, value, expected):
+    monkeypatch.setenv("ORCHESTRATOR_EMAIL_ENABLED", value)
+    assert settings.boolean_flag("ORCHESTRATOR_EMAIL_ENABLED", True) is expected
+
+
+def test_email_enabled_setting_rejects_ambiguous_values(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_EMAIL_ENABLED", "off")
+    with pytest.raises(settings.ConfigurationError):
+        settings.boolean_flag("ORCHESTRATOR_EMAIL_ENABLED", True)
 
 
 def test_portal_batch_contract_uses_bearer_and_preserves_jobs(monkeypatch):
@@ -547,6 +573,46 @@ def test_tradingagents_restores_min_replicas_and_running_state(monkeypatch):
     assert remediated == ["tradingagents:min_replicas", "tradingagents:start"]
 
 
+@pytest.mark.parametrize("min_replicas", [1, 5])
+def test_tradingagents_accepts_minimum_or_higher_without_scaling_down(monkeypatch, min_replicas):
+    resource = {
+        "properties": {
+            "runningStatus": "Running",
+            "template": {"scale": {"minReplicas": min_replicas}},
+        }
+    }
+    monkeypatch.setattr(clients, "_arm_resource", lambda *args: resource)
+    monkeypatch.setattr(
+        clients,
+        "_arm_request",
+        lambda *args, **kwargs: pytest.fail("healthy replicas must not be changed"),
+    )
+    remediated = []
+
+    clients._ensure_tradingagents(_settings(), object(), remediated)
+
+    assert remediated == []
+
+
+@pytest.mark.parametrize("min_replicas", [None, "1", True, -1])
+def test_tradingagents_rejects_invalid_minimum_without_patching(monkeypatch, min_replicas):
+    resource = {
+        "properties": {
+            "runningStatus": "Running",
+            "template": {"scale": {"minReplicas": min_replicas}},
+        }
+    }
+    monkeypatch.setattr(clients, "_arm_resource", lambda *args: resource)
+    monkeypatch.setattr(
+        clients,
+        "_arm_request",
+        lambda *args, **kwargs: pytest.fail("invalid configuration must not be patched"),
+    )
+
+    with pytest.raises(clients.ExternalServiceError, match="scale configuration is invalid"):
+        clients._ensure_tradingagents(_settings(), object(), [])
+
+
 def test_readonly_lock_is_removed_only_after_scope_locked_and_restored(monkeypatch):
     resource_id = "/subscriptions/sub/resourceGroups/rg/providers/Test/resources/example"
     lock_id = f"{resource_id}/providers/Microsoft.Authorization/locks/guard"
@@ -833,7 +899,7 @@ def test_preflight_failure_occurs_before_started_email_and_pipeline_submission()
     assert "STARTED" not in email["subject"]
 
 
-def test_portal_batch_partial_failure_is_preserved_without_stock_retries():
+def test_medium_preselection_stops_before_portal_submission():
     candidates = [
         {
             "ticker": f"T{position}",
@@ -915,14 +981,13 @@ def test_portal_batch_partial_failure_is_preserved_without_stock_retries():
         raise AssertionError(name)
 
     outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
-    assert outcome["state"] == "PARTIAL_FAILED"
+    assert outcome["state"] == "SUCCEEDED"
     assert outcome["model_purpose"] == "MEDIUM_20D"
-    assert outcome["succeeded"] == 4
-    assert outcome["failed"] == 1
-    assert len(outcome["jobs"]) == 5
-    assert outcome["jobs"][-1]["error"] == "analysis_failed"
-    assert submissions == 1
-    assert polls == 1
+    assert outcome["stage"] == "parallel_preselection"
+    assert outcome["candidate_count"] == 5
+    assert outcome["submitted_candidates"] == 0
+    assert submissions == 0
+    assert polls == 0
 
 
 class FakeRequest:

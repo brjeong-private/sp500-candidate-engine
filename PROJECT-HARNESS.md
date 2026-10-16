@@ -18,17 +18,35 @@
 - 시장·기업행위·종목·유니버스·공시·재무·이벤트 데이터 수집
 - 원본 snapshot, 정규화, 품질 검사, point-in-time manifest 생성
 - Qlib 데이터 export, 조정가격, 특징, 라벨, processor, 모델 학습·평가
-- 일일 모델 점수, 전체·그룹 순위, 5~10개 후보와 선정 사유 저장
+- 일일 모델 점수, 전체·그룹 순위, 레거시 5~10개 정량 후보와 일일 MEDIUM_20D
+  정량 분석 후보 20개 및 선정 사유 저장
+- manifest로 제한된 기업·이벤트 evidence의 LLM 점수와 독립적인 20개 분석 후보군 저장
 - 후보 결과를 외부 소비자가 읽을 수 있는 안정적인 조회·파일 계약
 
 ### 제외
 
 - TradingAgents 또는 다른 agent의 실행·상태·prompt·memory·report·비용 관리
-- 후보에 대한 LLM 분석, 매수·매도 판단, 주문 생성과 자동 매매
+- 저장소 밖 자료를 사용하는 후보 LLM 분석, 매수·매도 판단, 주문 생성과 자동 매매
 - 외부 분석 시스템의 재평가·cooldown·중복 실행 정책
 - 외부 소비자의 최신 뉴스·웹 검색에 대한 시점 통제
 
 후보 결과는 **후속 분석 대상 목록**이며 매수 추천이나 포트폴리오 주문이 아니다. 외부 시스템 연동은 이 저장소 밖에서 별도로 구현한다. 이 저장소는 특정 외부 소비자에 종속된 스키마나 실행 상태를 만들지 않는다.
+
+`LLM_PRESELECTION`은 이 저장소가 수집하고 point-in-time manifest로 고정한 evidence만
+평가하는 후보 선정 단계다. 외부 지식·웹 검색·투자 의견을 사용하지 않으며, 정량 후보와
+독립적인 20개 후속 분석 후보군으로만 제공한다.
+
+LLM 구현·실행 진입점은 `src/sp500_candidate_engine/llm_preselection/`, 설정은
+`config/llm_preselection/`, 테스트는 `tests/llm_preselection/`으로 분리한다.
+정량 추론 함수가 LLM을 실행하지 않는다. 공통 일일 control plane은 수집 후 고정한
+context를 두 독립 파이프라인에 전달하고 각각의 결과·실패를 보존한다. 두 목록의
+최종 20개 병합은 후속 범위다.
+
+외부 Portal·TradingAgents에 전달할 최종 후보 계약은 **20개**다(2026-10-16:
+기존 5~10개에서 변경). 최종 Top 20을 다시 5~10개로 축소하거나 두 중간 목록을
+40개로 전달하지 않는다. 이 계약은 SHORT_5D 레거시 정책을 변경하지 않는다.
+현재 MEDIUM 자동 전달은 `parallel_preselection`에서 차단하며, 최종 병합·전달
+활성화는 별도 구현과 소비자 수용 검증 후 진행한다.
 
 오케스트레이터는 Candidate 실행과 외부 소비자 연계를 조정하는 control plane이며,
 Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않는다.
@@ -150,13 +168,18 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
 - 상위 10개를 먼저 자른 뒤 제약을 적용하지 않는다.
 - 전체 적격 universe를 결정적 순서로 순회하면서 issuer 중복, sector 제한 등 정책을 적용하고 목표 개수를 채운다.
 - sector cap처럼 완화 가능한 soft constraint와 데이터·시점 gate 같은 hard constraint를 설정에서 구분한다.
-- 기본 후보 수는 5~10개다. hard gate 통과 종목이 5개 미만이면 `SHORTFALL`로 종료하고 성공 모양의 fallback을 만들지 않는다.
+- 레거시 `QUANTITATIVE` 기본 후보 수는 5~10개다. 일일 MEDIUM_20D 경로는 별도
+  versioned policy로 정량 분석 후보 20개를 생성한다. 각 정책의 최소 수를 충족하지
+  못하면 `SHORTFALL`로 종료하고 성공 모양의 fallback을 만들지 않는다.
 - 초기 정량 경로는 `selection_type=QUANTITATIVE`로 기록한다. 추후 이벤트·재평가 경로를 추가할 때 별도 type과 quota를 사용한다.
+- `LLM_PRESELECTION`은 별도 schema와 policy version으로 정확히 20개를 선정한다. 20개를
+  만들 수 없거나 LLM 호출·검증이 실패하면 `SHORTFALL` 또는 `FAILED`로 종료하며 정량
+  후보나 과거 결과를 fallback으로 사용하지 않는다.
 - 후보 선정 결과는 분석 예산 또는 매수 수량을 의미하지 않는다.
 
 ### 7.3 결과 계약
 
-최소 필드:
+`QUANTITATIVE` 최소 필드:
 
 - `selection_run_id`
 - `selection_type`
@@ -169,6 +192,10 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
 - 후보별 `instrument_id`, 당시 symbol, position, raw score, rank, percentile, 품질 상태, reason codes
 
 후보 run은 단일 transaction으로 저장한다. position·instrument 중복, 점수 누락, rank 불일치가 있으면 전체를 rollback한다.
+
+`LLM_PRESELECTION` 결과는 별도 run ID, `execution_context_id`, prompt/deployment/evidence
+schema version, source evidence lineage, 구조화 score와 reason code를 저장한다.
+LLM score는 예상 수익률·확률·confidence로 표현하지 않는다.
 
 ## 8. 평가 하네스
 
@@ -216,7 +243,8 @@ Qlib `TopkDropoutStrategy` 결과를 본 프로젝트의 일일 후보 정책과
 - processor train-only fit과 feature dimension
 - label entry/exit session, purge, benchmark optionality
 - scoring rank·percentile 결정성
-- 후보 5~10개, hard/soft constraint, `SHORTFALL`, transaction rollback
+- 레거시 정량 후보 5~10개, 일일 MEDIUM_20D 정량 분석 후보 20개와 LLM 분석 후보
+  20개, hard/soft constraint, `SHORTFALL`, transaction rollback
 - 재실행 idempotency와 artifact hash
 
 문서만 바꾸는 경우에도 범위·용어·상태 표현이 다른 기준 문서와 충돌하지 않는지 검색한다.

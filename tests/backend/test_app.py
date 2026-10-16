@@ -104,6 +104,7 @@ def test_readiness_failure_and_errors_keep_cors(app):
         assert "test database unavailable" not in response.text
         schema = client.get("/openapi.json").json()
         assert "/api/v1/candidates" in schema["paths"]
+        assert "/api/v1/llm-preselections" in schema["paths"]
         assert "/api/v1/collection-data/{dataset}" in schema["paths"]
         assert "ErrorResponse" in schema["components"]["schemas"]
 

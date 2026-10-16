@@ -53,14 +53,14 @@ def _settings():
     )
 
 
-def _candidate_items(*, status: str = "SUCCEEDED", count: int = 5):
+def _candidate_items(*, status: str = "SUCCEEDED", count: int = 20):
     return [
         {
             "price_session_date": "2026-10-09",
             "status": status,
             "model_purpose": "MEDIUM_20D",
             "selected_count": count,
-            "requested_count": 10,
+            "requested_count": 20,
             "position": position,
             "ticker": f"T{position}",
             "instrument_id": f"instrument-{position}",
@@ -76,6 +76,10 @@ def _candidate_items(*, status: str = "SUCCEEDED", count: int = 5):
         [],
         _candidate_items(status="SHORTFALL"),
         _candidate_items(count=4),
+        [
+            {**item, "requested_count": 10}
+            for item in _candidate_items(count=10)
+        ],
         [
             {**item, "selection_run_id": f"selection-{item['position']}"}
             for item in _candidate_items()
@@ -121,7 +125,7 @@ def test_existing_gate_queries_exact_date_and_model(monkeypatch):
         }
     )
 
-    assert len(result) == 5
+    assert len(result) == 20
     assert captured["params"]["date"] == "2026-10-09"
     assert captured["params"]["model_purpose"] == "MEDIUM_20D"
 
@@ -130,8 +134,10 @@ def test_submit_gate_does_not_post_when_exact_result_exists(monkeypatch):
     monkeypatch.setattr(clients.Settings, "from_env", _settings)
     methods = []
 
-    def request_json(method, *args, **kwargs):
+    def request_json(method, url, *args, **kwargs):
         methods.append(method)
+        if url.endswith("/api/v1/llm-preselections"):
+            raise AssertionError("Quantitative completion must not depend on LLM")
         return {"items": _candidate_items(), "next_cursor": None}
 
     monkeypatch.setattr(clients, "request_json", request_json)
@@ -143,7 +149,7 @@ def test_submit_gate_does_not_post_when_exact_result_exists(monkeypatch):
     assert result == {
         "status": "SKIPPED_EXISTING",
         "selection_run_id": "selection-id",
-        "candidate_count": 5,
+        "candidate_count": 20,
     }
     assert methods == ["GET"]
 
@@ -160,6 +166,37 @@ def test_submit_gate_fails_closed_when_candidate_lookup_fails(monkeypatch):
         clients.submit_candidate_daily(
             {"analysis_date": "2026-10-09", "model_purpose": "MEDIUM_20D"}
         )
+
+
+def test_submit_gate_reruns_legacy_ten_item_medium_result(monkeypatch):
+    monkeypatch.setattr(clients.Settings, "from_env", _settings)
+    methods = []
+
+    def request_json(method, url, *args, **kwargs):
+        methods.append(method)
+        if method == "POST":
+            assert kwargs["headers"]["Idempotency-Key"] == (
+                "orchestrator-daily-2026-10-09-medium_20d-top20-v1"
+            )
+            return {"process_run_id": "new-run", "status": "PENDING"}
+        if url.endswith("/api/v1/llm-preselections"):
+            raise AssertionError("Quantitative submission must not query LLM")
+        return {
+            "items": [
+                {**item, "requested_count": 10}
+                for item in _candidate_items(count=10)
+            ],
+            "next_cursor": None,
+        }
+
+    monkeypatch.setattr(clients, "request_json", request_json)
+
+    result = clients.submit_candidate_daily(
+        {"analysis_date": "2026-10-09", "model_purpose": "MEDIUM_20D"}
+    )
+
+    assert result["process_run_id"] == "new-run"
+    assert methods == ["GET", "POST"]
 
 
 class FakeContext:
@@ -259,21 +296,12 @@ def test_orchestrator_submits_normally_when_existing_result_is_not_exact():
                     "model_purpose": "MEDIUM_20D",
                     "position": position,
                 }
-                for position in range(1, 6)
+                for position in range(1, 21)
             ]
         if name == "submit_candidate_daily":
             return {"process_run_id": "new-run", "status": "PENDING"}
         if name == "candidate_run_status":
             return {"process_run_id": "new-run", "status": "SUCCEEDED", "terminal": True}
-        if name == "submit_portal_candidate_analysis":
-            return {
-                **payload,
-                "daily_analysis_id": 1,
-                "jobs": [{"status": "completed"} for _ in range(5)],
-                "terminal": True,
-                "succeeded": 5,
-                "failed": 0,
-            }
         raise AssertionError(name)
 
     outcome = _run(workflow.daily_orchestrator(FakeContext()), respond)
@@ -281,4 +309,4 @@ def test_orchestrator_submits_normally_when_existing_result_is_not_exact():
     assert outcome["state"] == "SUCCEEDED"
     names = [name for name, _ in activities]
     assert names.count("submit_candidate_daily") == 1
-    assert names.count("submit_portal_candidate_analysis") == 1
+    assert names.count("submit_portal_candidate_analysis") == 0

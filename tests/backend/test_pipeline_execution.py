@@ -269,6 +269,90 @@ def test_same_idempotency_key_and_canonical_payload_reuses_run(service):
     assert len(service.database.requests) == 1
 
 
+@pytest.mark.parametrize(
+    ("model_purpose", "enabled", "parallel"),
+    [
+        ("MEDIUM_20D", "true", True),
+        ("MEDIUM_20D", "false", False),
+        ("SHORT_5D", "true", False),
+    ],
+)
+def test_daily_routes_parallel_preselection_outside_quantitative_inference(
+    service, monkeypatch, model_purpose, enabled, parallel
+):
+    monkeypatch.setenv("LLM_PRESELECTION_ENABLED", enabled)
+    accepted = service.accept(
+        PipelineRunRequest(
+            mode="DAILY",
+            date=date(2026, 10, 8),
+            with_candidates=True,
+            model_purpose=model_purpose,
+        ),
+        f"parallel-{model_purpose}-{enabled}",
+    )
+    runner = AsyncMock(
+        return_value={
+            "status": "SUCCEEDED",
+            "candidate_run": {"price_session_date": date(2026, 10, 8)},
+        }
+    )
+    monkeypatch.setattr(execution, "run_daily_process", runner)
+
+    service.execute_background(accepted.process_run_id)
+
+    assert callable(runner.call_args.kwargs["preselection_runner"]) == parallel
+
+
+def test_daily_preselection_passes_one_prepared_context_to_both_pipelines(
+    service, monkeypatch
+):
+    from sp500_candidate_engine.analytics.historical_export import (
+        HistoricalInputContext,
+        HistoricalQlibExportService,
+    )
+    from sp500_candidate_engine.llm_preselection import pipeline
+    from sp500_candidate_engine.llm_preselection.service import LlmPreselectionSummary
+
+    target = date(2026, 10, 8)
+    process_id = uuid.uuid4()
+    context = HistoricalInputContext(
+        uuid.uuid4(), uuid.uuid4(), execution.backfill_cutoff(target)
+    )
+    prepare = MagicMock(return_value=context)
+    export = MagicMock(side_effect=AssertionError("Shared preparation must not export Qlib"))
+    quantitative = MagicMock(return_value=SimpleNamespace(candidate_count=20))
+    llm_summary = LlmPreselectionSummary(
+        uuid.uuid4(), uuid.uuid4(), target, "SUCCEEDED", 20, False
+    )
+    llm = AsyncMock(return_value=llm_summary)
+    monkeypatch.setattr(
+        HistoricalQlibExportService, "prepare_preselection_context", prepare
+    )
+    monkeypatch.setattr(HistoricalQlibExportService, "export", export)
+    monkeypatch.setattr(service, "run_candidate_inference", quantitative)
+    monkeypatch.setattr(service, "candidate_history_start", lambda _: date(2025, 10, 8))
+    monkeypatch.setattr(pipeline, "run_llm_preselection", llm)
+
+    result = asyncio.run(
+        service.run_daily_preselections(
+            target_date=target, process_run_id=process_id
+        )
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert result.llm is llm_summary
+    assert quantitative.call_args.kwargs["input_context"] is context
+    assert quantitative.call_args.kwargs["process_run_id"] == process_id
+    assert llm.call_args.kwargs["execution_context_id"] == context.execution_context_id
+    assert llm.call_args.kwargs["target_session"] == target
+    prepare.assert_called_once_with(
+        start_date=date(2025, 10, 8),
+        end_date=target,
+        decision_cutoff=context.cutoff_at,
+    )
+    export.assert_not_called()
+
+
 def test_same_idempotency_key_with_different_payload_conflicts(service):
     service.accept(daily(), "pipeline-request")
     different = PipelineRunRequest(
@@ -748,7 +832,8 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     monkeypatch.setattr(Path, "write_text", writes)
     booster = MagicMock()
     booster.num_feature.return_value = 158
-    booster.predict.return_value = np.arange(5, dtype=float)
+    instrument_count = 20 if model_purpose == "MEDIUM_20D" else 5
+    booster.predict.return_value = np.arange(instrument_count, dtype=float)
     constructor = MagicMock(return_value=booster)
     monkeypatch.setitem(sys.modules, "lightgbm", SimpleNamespace(Booster=constructor))
     monkeypatch.setattr("importlib.metadata.version", lambda _: "test")
@@ -787,11 +872,15 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     database = MagicMock()
     database.connect.return_value.__enter__.return_value = connection
     service.database = database
-    symbols = [f"I{uuid.uuid4().hex.upper()}" for _ in range(5)]
+    symbols = [
+        f"I{uuid.uuid4().hex.upper()}" for _ in range(instrument_count)
+    ]
     index = pd.MultiIndex.from_product(
         [[pd.Timestamp(target)], symbols], names=["datetime", "instrument"]
     )
-    raw_features = pd.DataFrame(np.ones((5, 158)), index=index, columns=names)
+    raw_features = pd.DataFrame(
+        np.ones((instrument_count, 158)), index=index, columns=names
+    )
     if violation == "feature_order":
         raw_features = raw_features[names[::-1]]
     compute = MagicMock(return_value=SimpleNamespace(frame=raw_features))
@@ -811,7 +900,7 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
                 symbol=f"T{index}",
                 sector=f"S{index}",
             )
-            for index in range(5)
+            for index in range(instrument_count)
         ],
         index=symbols,
     )
@@ -834,6 +923,7 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     monkeypatch.setattr(ScoreRepository, "write_scores", write_scores)
     persist = MagicMock(return_value=selection_id)
     monkeypatch.setattr(SelectionRepository, "persist", persist)
+    monkeypatch.setenv("LLM_PRESELECTION_ENABLED", "true")
     if violation is not None:
         with pytest.raises(RuntimeError):
             service.run_candidate_inference(
@@ -854,7 +944,12 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     assert result.model_version_id == model_id
     assert result.scoring_run_id == scoring_id
     assert result.selection_run_id == selection_id
-    assert result.candidate_count == 5
+    assert result.candidate_count == instrument_count
+    assert persist.call_args.kwargs["requested_count"] == (
+        20 if model_purpose == "MEDIUM_20D" else 10
+    )
+    assert not hasattr(result, "llm_preselection_status")
+    assert not hasattr(result, "llm_preselection_run_id")
     assert (
         export.call_args.kwargs["output_root"] == service.workspace_dir / "data" / "output" / "qlib"
     )
@@ -869,6 +964,13 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     train.assert_not_called()
     booster.predict.assert_called_once()
     writes.assert_called_once()
+    output = json.loads(writes.call_args.args[0])
+    assert output["model_purpose"] == model_purpose
+    assert output["prediction_horizon_sessions"] == horizon
+    assert len(output["candidates"]) == instrument_count
+    assert output["policy_version"] == (
+        "medium-20d-top20-v1" if model_purpose == "MEDIUM_20D" else "1"
+    )
 
 
 def test_workspace_and_pinned_manifest_environment_keep_code_separate(service, monkeypatch):

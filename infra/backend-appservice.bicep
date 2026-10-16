@@ -13,6 +13,11 @@ param candidateMediumManifestSha256 string
 param vnetIntegrationSubnetId string
 param appServicePlanSkuName string = 'P3v3'
 param appServicePlanSkuTier string = 'PremiumV3'
+param azureOpenAIAccountName string = ''
+param azureOpenAIEndpoint string = ''
+param azureOpenAIDeployment string = ''
+param azureOpenAIApiVersion string = ''
+param llmPreselectionEnabled bool = false
 @minValue(1)
 param appServicePlanCapacity int = 1
 
@@ -89,8 +94,34 @@ resource app 'Microsoft.Web/sites@2026-08-01' = {
         { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_MEDIUM_20D', value: 'models/medium_20d/manifest.json' }
         { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D', value: candidateMediumManifestSha256 }
         { name: 'HTTP_USER_AGENT', value: httpUserAgent }
+        { name: 'LLM_PRESELECTION_ENABLED', value: string(llmPreselectionEnabled) }
+        { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAIEndpoint }
+        { name: 'AZURE_OPENAI_DEPLOYMENT', value: azureOpenAIDeployment }
+        { name: 'AZURE_OPENAI_API_VERSION', value: azureOpenAIApiVersion }
+        { name: 'AZURE_OPENAI_LLM_PROMPT_VERSION', value: 'llm-preselection-v1' }
+        { name: 'AZURE_OPENAI_TIMEOUT_SECONDS', value: '60' }
       ]
     }
+
+  }
+}
+
+resource azureOpenAI 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = if (!empty(azureOpenAIAccountName)) {
+  name: azureOpenAIAccountName
+}
+
+var cognitiveServicesOpenAIUserRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+)
+
+resource azureOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(azureOpenAIAccountName)) {
+  name: guid(azureOpenAI.id, app.id, cognitiveServicesOpenAIUserRoleId)
+  scope: azureOpenAI
+  properties: {
+    principalId: app.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: cognitiveServicesOpenAIUserRoleId
   }
 }
 

@@ -358,3 +358,10 @@ weekly promotion runtime: NOT YET INTEGRATED
 application/infrastructure rollout: NOT VERIFIED
 promoted model: NONE CLAIMED
 ```
+
+## 일일 후보 수와 재학습 평가 구분 (2026-10-16)
+
+일일 기본 MEDIUM_20D 정량 후보는 정확히 20개다. 별도 LLM Top 20과의 최종
+통합·TradingAgents 전달 목표도 기존 5~10개에서 20개로 변경하되 후속 구현으로 둔다.
+후보 수 변경은 모델 horizon·label·weight 또는 Top-5/10 promotion 지표 변경이 아니다.
+SHORT_5D 레거시 정책과 두 모델의 주간 training-only 계약은 유지한다.

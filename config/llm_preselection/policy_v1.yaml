@@ -1,0 +1,42 @@
+name: daily-llm-preselection
+version: "1"
+selection_type: LLM_PRESELECTION
+score_semantics: LLM_EVIDENCE_SCORE
+evidence_schema_version: "1"
+prompt_version: llm-preselection-v1
+requested_count: 20
+first_stage_pool_size: 60
+batch_size: 5
+windows:
+  news_days: 30
+  earnings_events: 2
+  filings_days: 365
+  fact_quarters: 8
+  corporate_actions_days: 365
+  price_sessions: 60
+limits:
+  news_items: 30
+  filings: 20
+  facts: 80
+  corporate_actions: 20
+  rationale_characters: 600
+  packet_characters: 48000
+  total_input_tokens: 2500000
+retries:
+  max_attempts: 3
+  base_delay_seconds: 1.0
+rubric:
+  business_momentum: 30
+  fundamental_quality: 25
+  event_significance: 20
+  market_confirmation: 15
+  evidence_quality: 10
+tie_break:
+  - final_score_desc
+  - first_stage_score_desc
+  - instrument_id_asc
+hard_gates:
+  - manifest_and_cutoff
+  - current_membership
+  - instrument_state
+  - no_blocking_quality_issue

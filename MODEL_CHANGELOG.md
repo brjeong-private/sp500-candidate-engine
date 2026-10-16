@@ -2,6 +2,14 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## 후보 수·외부 전달 계약 — 2026-10-16
+
+일일 MEDIUM_20D 정량 선정은 `medium-20d-top20-v1` 정책으로 정확히 20개이며,
+향후 최종 TradingAgents 전달도 기존 5~10개에서 20개로 변경한다. 별도 LLM Top 20과의
+RRF 통합·전달은 아직 미구현이다. 모델 weight·label·20거래일 horizon은 바뀌지 않으며,
+SHORT_5D 레거시와 Top-5/10 평가·promotion 지표, 과거 10개 검증 기록을 보존한다.
+후보 수 변경은 Top-20 수익률 검증이나 신규 champion 승격 기록이 아니다.
+
 ## Weekly retraining control contract — 2026-10-16
 
 이 항목은 모델 release나 승격 기록이 아니라 주간 재학습 control contract의 구현

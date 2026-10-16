@@ -2,7 +2,10 @@
 
 갱신일: 2026-10-16
 
-이 문서는 point-in-time 원천 데이터가 Qlib 특징, label, 모델 평가, 일일 score와 5~10개 후보로 변환되는 계약을 정의한다. 후보는 후속 상세 분석 대상이며 매수 신호나 수익 보장이 아니다.
+이 문서는 point-in-time 원천 데이터가 Qlib 특징, label, 모델 평가, 일일 score와
+MEDIUM 정량 후보 20개로 변환되는 계약을 정의한다. SHORT_5D 레거시 5~10개는 유지한다.
+외부 전달 목표는 기존 5~10개에서 20개로 변경하되 최종 통합·전달은 후속 구현이다.
+후보는 후속 상세 분석 대상이며 매수 신호나 수익 보장이 아니다.
 
 ## 적용 범위와 상태 표기
 
@@ -47,7 +50,7 @@ flowchart LR
     Registry --> Score["Daily Prediction<br/>Predicted 5D or 20D Return"]
     Score --> Rank["Overall Rank<br/>Sector Rank Percentile"]
     Rank --> Select["Full Universe Selection<br/>Issuer and Sector Limits"]
-    Select --> Candidates["Five to Ten Candidates<br/>Reasons and Temporal Identity"]
+    Select --> Candidates["MEDIUM Top 20 · SHORT Legacy 5 to 10<br/>Reasons and Temporal Identity"]
 ```
 
 ## 1. 전처리와 Qlib export
@@ -467,10 +470,10 @@ flowchart TD
     Hard --> Sort["Sort Predicted Return Desc<br/>Instrument ID Asc"]
     Sort --> Issuer["One Security per Issuer"]
     Issuer --> Sector["Sector Cap Two"]
-    Sector --> Count{"At Least Five?"}
-    Count -->|"Yes"| Top["Stop at Ten"]
-    Count -->|"No"| Relax["Relax Sector Cap to Three"]
-    Relax --> Shortfall{"At Least Five?"}
+    Sector --> Count{"At Least Twenty?"}
+    Count -->|"Yes"| Top["Stop at Twenty"]
+    Count -->|"No"| Relax["Relax Sector Cap to Four"]
+    Relax --> Shortfall{"At Least Twenty?"}
     Shortfall -->|"Yes"| Top
     Shortfall -->|"No"| Fail["SHORTFALL"]
     Top --> Persist["Candidate and Reasons<br/>Single Transaction"]
@@ -480,11 +483,12 @@ flowchart TD
 - 음수 예측도 순위가 높으면 후보가 될 수 있으며 `NON_POSITIVE_PREDICTION` reason을 기록한다.
 - 품질·시점·artifact gate는 후보 수를 채우기 위해 완화하지 않는다.
 - 동일 issuer 중복 제거와 sector cap을 적용한다.
-- sector cap만 2에서 3으로 명시적으로 완화할 수 있다.
-- 적격 후보가 5개 미만이면 `SHORTFALL`이다.
-- 모델 원점수 내림차순으로 전체 적격 universe를 검토하며 상위 10개를 먼저 자른 뒤 제약을 적용하지 않는다.
+- MEDIUM은 sector cap만 2에서 4로 명시적으로 완화할 수 있다.
+- MEDIUM 적격 후보가 20개 미만이면 `SHORTFALL`이며 성공 전달하지 않는다.
+- 모델 원점수 내림차순으로 전체 적격 universe를 검토하며 상위 20개를 먼저 자른 뒤 제약을 적용하지 않는다.
 - issuer당 하나의 증권만 선정한다.
-- 최대 10개, 최소 5개를 목표로 한다.
+- MEDIUM은 `medium-20d-top20-v1` 정책으로 정확히 20개를 선정한다.
+- 위 도식은 MEDIUM이다. SHORT는 기존 최소 5·최대 10개, sector cap 2→3을 유지한다.
 - 별도의 가중합 최종 점수는 현재 계약에 없다. sector cap도 점수 가산·감산이 아니다.
 
 ## 9. 결과 계약
@@ -520,9 +524,8 @@ score·rank·percentile은 scoring run에, 후보 position·선정 사유는 sel
 
 저장 계약은 기간별 독립 model·scoring·selection run을 사용한다. 후보 API의
 기본 목적은 `MEDIUM_20D`이며 `model_purpose=SHORT_5D`로 기존 모델을
-조회한다. API 기본 조회와 별개로 일일 Durable control plane은 날짜별 부모에서
-`SHORT_5D` child를 terminal까지 실행한 다음 `MEDIUM_20D` child를 실행한다. 두
-child는 각자 Candidate 제출, scoring/selection identity, Portal batch를 가진다.
+조회한다. 정기 일일 Durable은 `MEDIUM_20D`만 실행한다. 기존 SHORT 수동/API 선택과
+dual 호환 흐름은 유지하며 각 목적의 scoring/selection identity를 분리한다.
 한 목적의 결과가 없으면 다른 모델로 자동 대체하지 않는다.
 
 DAILY inference도 조회 필터만 바꾸지 않는다. `SHORT_5D`와 `MEDIUM_20D`는 각각
@@ -535,7 +538,11 @@ child는 `SKIPPED_EXISTING`으로 끝난다. 이는 모델 결과 재계산이�
 Candidate POST와 Portal/TradingAgents 신규 분석을 모두 생략한다. 단일 모델 수동
 endpoint는 one-off 진단·호환 경로로 유지된다.
 
-이 순차 실행과 외부 Portal 전달은 orchestration control-plane 계약이다. 모델 학습,
+현재 MEDIUM은 정량 Top 20 완료 후 `parallel_preselection`에서 종료하며 자동
+Portal 제출은 하지 않는다. LLM Top 20은 별도 구현·저장소·API로 제공하고 기본
+비활성이다. 공통 manifest 이후 활성화된 두 분기는 병렬 실행하며 정량 완료는
+LLM에 의존하지 않는다. 향후 RRF 최종 20개를 축소 없이 전달한다.
+이 외부 Portal 전달은 orchestration control-plane 계약이다. 모델 학습,
 점수, 후보 저장까지가 Candidate Engine의 범위이고 외부 분석·리포트·비용·재평가는
 모델 아키텍처와 Candidate PostgreSQL의 범위 밖이다.
 
@@ -568,6 +575,8 @@ readiness에 기록하지만 non-LLM 후보 분석을 실패시키지 않는다.
 - `config/analytics/label_forward_return_20d_v1.yaml`
 - `config/analytics/model_lightgbm_20d_v1.yaml`
 - `config/analytics/selection_v1.yaml`
+- `config/analytics/selection_medium_20d_v1.yaml`
+- `config/llm_preselection/policy_v1.yaml` (독립 LLM, 정량 특징·label과 분리)
 - `notebooks/phase4_5_training_selection.ipynb`
 - `MODEL_CHANGELOG.md`
 
