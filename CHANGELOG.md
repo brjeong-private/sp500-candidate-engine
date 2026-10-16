@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-16 | README Horizontal Architecture | 메인 README의 후보 파이프라인·모델 아키텍처 다이어그램을 좌에서 우로 흐르는 가로 방향으로 변경했다.
 - 2026-10-16 | README Model Architecture | 메인 README에 시점 고정·조정가격·Alpha158·주간 학습과 승격·일일 고정 추론·Top 20 선정·독립 LLM 및 후속 RRF의 모델 아키텍처를 명시했다.
 
 - 2026-10-16 | README Full Architecture | 메인 README에 후보 엔진·Portal·TradingAgents agent 계층·외부 데이터·MySQL·보고서 Blob·UI를 포함한 전체 시스템 아키텍처를 복원하고 기존 후보 파이프라인 상세도를 유지했다.

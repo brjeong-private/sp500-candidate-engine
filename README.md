@@ -135,7 +135,7 @@ flowchart LR
 ## 후보 파이프라인 아키텍처
 
 ```mermaid
-flowchart TD
+flowchart LR
     Timer["05:30 America/New_York<br/>MEDIUM_20D daily"] --> Collect["공통 수집·정규화·품질 검사"]
     Collect --> Spine[("Candidate PostgreSQL<br/>snapshot·manifest·cutoff")]
     Spine --> Quant["Qlib export·Alpha158<br/>고정 LightGBM 추론"]
@@ -240,7 +240,7 @@ final manifest를 거쳐 후보 입력을 확정합니다.
 label과 walk-forward 평가를 사용하며, 일일 추론은 등록된 artifact로 점수를 계산합니다.
 
 ```mermaid
-flowchart TD
+flowchart LR
     Context["Execution Context<br/>immutable manifest · cutoff · universe"] --> Source["Manifest-scoped OHLCV · VWAP<br/>corporate actions · session calendar"]
     Source --> Adjust["Split Adjustment<br/>price factor · volume · lineage validation"]
     Adjust --> Export["Qlib Export<br/>calendar · instrument spans · binaries"]
