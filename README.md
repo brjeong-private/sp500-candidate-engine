@@ -38,7 +38,101 @@ issuer 중복 제거와 sector cap을 적용합니다. hard gate를 완화해 �
 후보 수 변경은 모델 재학습이나 예측값 변경이 아닙니다. Top-5/10 평가 지표와
 과거 10개 후보 검증 기록은 그대로 유효하며 20개 성능으로 바꿔 해석하지 않습니다.
 
-## 파이프라인 아키텍처
+## 전체 시스템 아키텍처
+
+전체 연동 구조는 아래에 유지합니다. `candidate_engine`이 이 저장소의 구현 범위이며,
+Portal·TradingAgents와 외부 데이터·분석 저장소·UI는 연동 맥락을 보여주는 외부 영역입니다.
+외부 영역의 표시는 이 저장소에서 해당 기능을 구현·배포한다는 뜻이 아닙니다.
+
+```mermaid
+flowchart LR
+    subgraph CandidateScope["PROJECT SCOPE · candidate_engine"]
+        subgraph Inputs["S&P 500 Universe and Source Data"]
+            Reference["Wikipedia and SEC<br/>S&P 500 · GICS · CIK · ticker · exchange"]
+            Massive["Massive<br/>OHLCV · VWAP · SPY · actions · news"]
+            Sec["SEC EDGAR<br/>filings · normalized XBRL"]
+            Alpha["Alpha Vantage<br/>earnings calendar · estimate · reported EPS"]
+        end
+
+        Collect["Shared Collection and Normalization<br/>quality gates · cutoff fence"]
+        DataSpine[("Candidate PostgreSQL<br/>immutable snapshot · manifest · execution context")]
+        subgraph Quantitative["Independent Quantitative Pipeline"]
+            Export["Qlib Export<br/>adjusted OHLCV · calendar · span"]
+            Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
+            Model["Pinned LightGBM Artifact<br/>daily MEDIUM_20D · legacy SHORT_5D"]
+            QuantTop["Quant Top 20<br/>issuer · sector policy"]
+        end
+        subgraph LlmPipeline["Independent LLM Pipeline · optional · default OFF"]
+            Evidence["Manifest-fenced Evidence<br/>news · SEC · earnings · actions · prices"]
+            AzureOpenAI["Azure OpenAI<br/>batch evaluation · final ranking"]
+            LlmTop["LLM Top 20<br/>schema · source validation"]
+        end
+        QuantApi["Quant Store and Candidate API"]
+        LlmApi["Separate LLM Store and API"]
+        Fusion["FUTURE · issuer union · RRF<br/>risk · sector validation"]
+        FinalApi["FUTURE · Final Top 20 API<br/>no secondary trim · not an order"]
+
+        Reference --> Collect
+        Massive --> Collect
+        Sec --> Collect
+        Alpha --> Collect
+        Collect --> DataSpine
+        DataSpine --> Export --> Features --> Model --> QuantTop --> QuantApi
+        DataSpine -.-> Evidence
+        Evidence -.-> AzureOpenAI
+        AzureOpenAI -.-> LlmTop
+        LlmTop -.-> LlmApi
+        QuantApi -.-> Fusion
+        LlmApi -.-> Fusion
+        Fusion -.-> FinalApi
+
+        Durable["Python Durable Functions<br/>05:30 ET daily · idempotent control plane"]
+        Operations["Private Storage · Key Vault<br/>App Insights · ACS Email flag"]
+        Weekly["Weekly Training-only<br/>SHORT and MEDIUM · promotion gate"]
+        Registry["Immutable Artifacts<br/>active assignment · generation CAS"]
+        Operations --> Durable
+        Durable --> Collect
+        Durable --> Weekly
+        Weekly --> Registry --> Model
+    end
+
+    subgraph External["EXTERNAL · Portal and TradingAgents"]
+        Portal["Portal and Analysis API<br/>selection validation · idempotent dispatch"]
+        subgraph Agents["TradingAgents · Agents Layer"]
+            Analysts["Analysts<br/>market · fundamentals · news · sentiment"]
+            Debate["Bull and Bear<br/>evidence debate"]
+            Research["Research Manager<br/>debate synthesis"]
+            Trader["Trader<br/>proposal"]
+            Risk["Risk and Portfolio<br/>final rating"]
+            Analysts --> Debate --> Research --> Trader --> Risk
+        end
+        subgraph ExternalData["External Data and State"]
+            YFinance["yfinance<br/>OHLCV · fundamentals · news"]
+            Macro["FRED and Polymarket<br/>macro · prediction"]
+            MySQL[("MySQL<br/>analysis jobs · decisions")]
+            Blob[("Private Blob<br/>analysis reports")]
+        end
+        PortalUi["Portal UI<br/>DailyAnalysis · job status · reports"]
+        Portal --> Analysts
+        YFinance --> Analysts
+        Macro --> Analysts
+        Risk --> MySQL
+        Risk --> Blob
+        MySQL --> PortalUi
+        Blob --> PortalUi
+    end
+
+    FinalApi -.->|"future selection run batch · 20 candidates"| Portal
+```
+
+독립 LLM 경로는 구현됐지만 기본 비활성이며, RRF 통합과 최종 20개 자동 전달은
+후속 구현입니다. 현재 MEDIUM은 후보 저장 후 `parallel_preselection`에서 종료합니다.
+외부 분석 데이터는 Candidate manifest와 별도이며 이 저장소가 그 시점을 통제하지 않습니다.
+전체 시스템 구조를 제거하지 않고 아래 후보 파이프라인 상세도와 함께 관리합니다.
+상세 기준은 [전체 아키텍처 문서](.github/modernize/assessment/engines/facts/architecture-diagram.md)를
+참고하세요.
+
+## 후보 파이프라인 아키텍처
 
 ```mermaid
 flowchart TD
@@ -139,6 +233,65 @@ final manifest를 거쳐 후보 입력을 확정합니다.
 수집 흐름은 [수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)을 따릅니다.
 
 ## 정량 모델과 독립 LLM
+
+### 모델 아키텍처
+
+모델의 학습·평가·등록과 일일 고정 모델 추론을 구분합니다. 주간 재학습에서만
+label과 walk-forward 평가를 사용하며, 일일 추론은 등록된 artifact로 점수를 계산합니다.
+
+```mermaid
+flowchart TD
+    Context["Execution Context<br/>immutable manifest · cutoff · universe"] --> Source["Manifest-scoped OHLCV · VWAP<br/>corporate actions · session calendar"]
+    Source --> Adjust["Split Adjustment<br/>price factor · volume · lineage validation"]
+    Adjust --> Export["Qlib Export<br/>calendar · instrument spans · binaries"]
+    Export --> Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
+
+    subgraph Training["Weekly Training-only · SHORT and MEDIUM"]
+        Labels["Mature Labels<br/>D+1 open to D+5 or D+20 close"]
+        Split["Expanding Purged Walk-forward<br/>time split · train-only processor fit"]
+        Baselines["Momentum and Ridge<br/>comparison baselines"]
+        LightGBM["Qlib LightGBM<br/>purpose-specific model"]
+        Evaluate["IC · Rank IC · Top-5/10 return<br/>cost · drawdown · coverage"]
+        Promotion["Absolute and Relative Promotion Gates<br/>reject keeps incumbent"]
+        Registry["Immutable Artifact Registry<br/>hash · schema · purpose · horizon"]
+        Assignment["Active Assignment<br/>generation CAS · rollback history"]
+        Labels --> Split
+        Split --> Baselines
+        Split --> LightGBM
+        Baselines --> Evaluate
+        LightGBM --> Evaluate
+        Evaluate --> Promotion --> Registry --> Assignment
+    end
+
+    Adjust --> Labels
+    Features --> Split
+
+    subgraph DailyInference["Daily Inference · no training or processor refit"]
+        Pin["Pin and Validate Artifact<br/>context · purpose · hash · generation"]
+        Predict["LightGBM Prediction<br/>raw 20D return · legacy 5D return"]
+        Rank["Full Eligible Universe Ranking<br/>finite score · deterministic tie-break"]
+        Policy["Issuer Deduplication · Sector Cap<br/>MEDIUM 2 then 4 · hard gates unchanged"]
+        QuantResult["MEDIUM Quant Top 20<br/>SHORT legacy 5 to 10 · shortfall explicit"]
+        QuantStore["Scoring Run · Selection Run<br/>positions · reasons · model lineage"]
+        Pin --> Predict --> Rank --> Policy --> QuantResult --> QuantStore
+    end
+
+    Assignment --> Pin
+    Features --> Predict
+    Context --> Pin
+
+    Context -.-> Evidence["Independent LLM Evidence<br/>news · SEC · earnings · actions · prices"]
+    Evidence -.-> LlmRank["Azure OpenAI · strict JSON<br/>batch assessment · final reranking"]
+    LlmRank -.-> LlmResult["Separate LLM Top 20<br/>LLM_EVIDENCE_SCORE · source lineage"]
+    QuantStore -.-> FutureFusion["FUTURE · RRF and Policy Validation<br/>Final Top 20 · no secondary trim"]
+    LlmResult -.-> FutureFusion
+```
+
+LLM 경로는 정량 특징·예측값을 입력받는 후처리 모델이 아니라 동일 context를 사용하는
+독립 후보 선정 경로이며 기본 비활성입니다. RRF는 후속 설계입니다. 예측 기간과
+후보 개수, Top-5/10 평가 지표는 서로 다른 계약으로 유지합니다.
+전처리·label·score·선정 계약의 상세는
+[모델 아키텍처 문서](.github/modernize/assessment/engines/facts/model-architecture.md)를 따릅니다.
 
 ### Alpha158·LightGBM
 

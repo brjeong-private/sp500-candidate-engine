@@ -1,5 +1,9 @@
 # Change Log
 
+- 2026-10-16 | README Model Architecture | 메인 README에 시점 고정·조정가격·Alpha158·주간 학습과 승격·일일 고정 추론·Top 20 선정·독립 LLM 및 후속 RRF의 모델 아키텍처를 명시했다.
+
+- 2026-10-16 | README Full Architecture | 메인 README에 후보 엔진·Portal·TradingAgents agent 계층·외부 데이터·MySQL·보고서 Blob·UI를 포함한 전체 시스템 아키텍처를 복원하고 기존 후보 파이프라인 상세도를 유지했다.
+
 - 2026-10-16 | Final Candidate Handoff Docs | TradingAgents 최종 전달 목표를 기존 5~10개에서 20개로 통일하고 재축소 금지·SHORT 레거시 보존·현재 MEDIUM 전달 차단을 구분했다.
 - 2026-10-16 | RRF Design Contract | RRF 설계서에 후보 수 변경 이력과 병렬 중간 Top 20·후속 최종 Top 20 전달 계약을 명시하고 현행 LLM과 제안 screening·schema를 구분했다.
 - 2026-10-16 | Main README Refresh | 메인 README 전체를 재구성해 현재 상태 섹션을 제거하고 범위·20개 계약·독립 파이프라인·재학습·API·설치·배포 경계를 갱신했다.
