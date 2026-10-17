@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from sp500_candidate_engine.analytics.azure_openai import AzureOpenAIResponse
+from sp500_candidate_engine.database import _canonical_hash
 from sp500_candidate_engine.llm_preselection.config import RateLimits, load_llm_preselection_config
 from sp500_candidate_engine.llm_preselection.event_ranker import EventPreselectionRanker
 from sp500_candidate_engine.llm_preselection.evidence import (
@@ -35,10 +36,18 @@ def packet(index, *, event=True, available=None, event_at=None, kind="NEWS", iss
         UUID(int=index + 10000), UUID(int=index + 20000), kind, str(index),
         available or CUTOFF - timedelta(days=1), CUTOFF - timedelta(days=1), event_at,
     )
+    payload = {
+        "identity": {"instrument_id": str(instrument)},
+        "cutoff_at": CUTOFF.isoformat(), "target_session": CUTOFF.date().isoformat(),
+        "execution_context_id": str(UUID(int=999)),
+        ("earnings" if kind == "EARNINGS" else "news"): [
+            {"event_revision_id": str(index), "title": "Earnings update"}
+        ] if event else [],
+    }
     return EvidencePacket(
         instrument, UUID(int=issuer or index), f"T{index}", f"Company {index}", "Tech",
-        {"identity": {"instrument_id": str(instrument)}, "news": [{"title": "Earnings update"}]},
-        str(index), 20, {"news": int(event)}, (), (), (link,) if event else (),
+        payload, _canonical_hash(payload), 20, {"news": int(event)}, (), (),
+        (link,) if event else (),
     )
 
 
@@ -159,12 +168,13 @@ class Client:
                 "instrument_id": row["instrument_id"],
                 "scores": {key: score if key in supported else None
                            for key, score in scores.items()},
-                "missing_reasons": {key: None if key in supported else "No supplied evidence"
+                "missing_reasons": {key: None if key in supported else "제공된 근거가 부족합니다."
                                     for key in criteria},
-                "evidence_quality": "MEDIUM", "uncertainty": "HIGH", "summary": "Supplied news.",
+                "evidence_quality": "MEDIUM", "uncertainty": "HIGH",
+                "summary": "제공된 뉴스를 평가했습니다.",
                 "evidence": [
                     {"criterion": key, "evidence_link_id": row["evidence"][0]["evidence_link_id"],
-                     "reason": "Reported change in supplied news"}
+                     "reason": "제공된 뉴스의 사업 변화를 평가에 반영했습니다."}
                     for key in supported
                 ],
             }
@@ -194,6 +204,43 @@ def test_normalized_scoring_and_no_second_stage(supported, expected):
     assert result.assessments[0].supported_count == supported
     assert client.calls == ["event_assessments_v2"] * 4
     assert result.attempts[0].response_output is not None
+    assert "실적:" in result.assessments[0].rationale
+
+
+def test_event_prompt_requires_korean_without_translating_protocol_identifiers():
+    ranker = EventPreselectionRanker(
+        LlmRankerSettings("https://example.openai.azure.com", "test", "test"),
+        config(), client=Client(),
+    )
+    messages = ranker._assessment_messages([packet(1)])
+    assert config().prompt_version == "llm-event-preselection-v3-ko"
+    assert "반드시 한국어 문장" in messages[0]["content"]
+    assert "cutoff_at" in messages[0]["content"]
+    assert "JSON 키·criterion·enum·UUID" in messages[0]["content"]
+    data = json.loads(messages[1]["content"])
+    assert data[0]["packet"] == packet(1).packet
+    assert data[0]["evidence"][0]["evidence_link_id"] == str(packet(1).links[0].evidence_link_id)
+
+
+@pytest.mark.parametrize("field", ["summary", "missing_reason", "evidence_reason"])
+def test_english_natural_language_response_is_rejected_with_bounded_repair(field):
+    class EnglishClient(Client):
+        async def complete(self, **kwargs):
+            response = await super().complete(**kwargs)
+            item = response.output["assessments"][0]
+            if field == "summary":
+                item["summary"] = "Only supplied evidence was evaluated."
+            elif field == "missing_reason":
+                item["missing_reasons"]["financial"] = "Insufficient supplied evidence."
+            else:
+                item["evidence"][0]["reason"] = "Reported operating change."
+            return response
+
+    client = EnglishClient()
+    with pytest.raises(LlmRankingError) as failed:
+        rank(client)
+    assert len(client.calls) == config().max_attempts
+    assert all(item.error_code == "OUTPUT_VALIDATION_FAILED" for item in failed.value.attempts)
 
 
 def test_insufficient_evidence_is_explicit_and_not_neutral_score():
@@ -246,7 +293,7 @@ def test_valid_citations_for_unscored_criteria_do_not_increase_coverage_or_score
                 citation = assessment["evidence"][0]
                 assessment["evidence"].append({
                     **citation, "criterion": "industry",
-                    "reason": "This supplied source does not establish an industry outlook.",
+                    "reason": "제공된 자료만으로는 산업 전망을 판단할 수 없습니다.",
                 })
             return response
 

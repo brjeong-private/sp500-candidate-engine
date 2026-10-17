@@ -30,6 +30,22 @@
 
 ## LLM 데이터 계약 변경 — 2026-10-17
 
+### 기간 검색과 LLM 전용 일자 정밀도
+
+추가 v5는 [policy_event_period_v5.yaml](../../../../../config/llm_preselection/policy_event_period_v5.yaml)을
+명시 선택해 Foundry `bing_grounding.search_configurations[].freshness`에 날짜 범위를 전달한다.
+지원 리소스/연결을 실제 생성하고 VLO의 고정 16일 입력으로 시험했다.
+발견일 필터가 원문 공개일/과거 version을 입증하지는 않으므로 원문 gate는 유지한다.
+
+LLM의 공개/원문 버전일 판정에만 `America/New_York` 날짜 규칙을 적용한다.
+전일 이전은 시각 없이 날짜만 허용하고, 당일은 05:30 이전의 timezone-aware 시각을 요구한다.
+더 이른 명시 cutoff는 유지한다. raw 선언값과 NY local date·DAY/TIMESTAMP precision·
+보수적 day-end bound를 분리하고 이를 실제 생성 시각으로 표현하지 않는다.
+수집·Quant temporal fence와 기존 DB timestamp는 변경하지 않는다.
+
+실제 데이터 확보 판정·6개 후보 URL·평가 사용 0건의 근거는
+[VLO 기간 검색 검증 보고서](../../../../../VLO-2026-10-16-PERIOD-SEARCH-VALIDATION.md)에 보존했다.
+
 기존 DB 수집 원천의 범위를 늘리는 대신 별도 v4 정책에서 **LLM native 검색 도구로
 취득하고, 과거 원문 버전 gate를 통과한 발췌만 격리된 평가 모델에 제공**한다.
 기존 v2·정량 모델·과거 run·RRF 산식은 유지한다. 이 변경은 로컬 구현이며 운영 배포가 아니다.

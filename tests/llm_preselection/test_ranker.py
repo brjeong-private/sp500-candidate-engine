@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sp500_candidate_engine.analytics.azure_openai import AzureOpenAIResponse
-from sp500_candidate_engine.database import _stable_uuid
+from sp500_candidate_engine.database import _canonical_hash, _stable_uuid
 from sp500_candidate_engine.llm_preselection.config import (
     load_llm_preselection_config,
 )
@@ -103,6 +103,11 @@ def _packets() -> tuple[EvidencePacket, ...]:
     for index in range(20):
         instrument_id = uuid.UUID(int=index + 1)
         link_id = _stable_uuid("test-evidence", str(instrument_id))
+        payload = {
+            "identity": {"instrument_id": str(instrument_id)},
+            "cutoff_at": datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
+            "target_session": "2026-01-01", "news": [{"event_revision_id": str(index)}],
+        }
         result.append(
             EvidencePacket(
                 instrument_id=instrument_id,
@@ -110,8 +115,8 @@ def _packets() -> tuple[EvidencePacket, ...]:
                 symbol=f"T{index}",
                 company_name=f"Company {index}",
                 sector="Technology",
-                packet={"identity": {"instrument_id": str(instrument_id)}},
-                packet_hash=str(index),
+                packet=payload,
+                packet_hash=_canonical_hash(payload),
                 estimated_tokens=10,
                 section_counts={"news": 1},
                 missing_sections=(),

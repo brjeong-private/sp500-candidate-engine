@@ -1,0 +1,50 @@
+name: daily-llm-search-preselection
+version: "4"
+selection_type: LLM_PRESELECTION
+score_semantics: LLM_EVIDENCE_SCORE
+evaluation_mode: EVENT_SCREENED
+evidence_schema_version: "4"
+prompt_version: llm-event-preselection-v8-ko-ny
+requested_count: 20
+first_stage_pool_size: 20
+batch_size: 5
+screening:
+  maximum_issuers: 100
+  control_issuers: 10
+  lookback_days: 7
+  earnings_window_days: 7
+windows:
+  news_days: 30
+  earnings_events: 2
+  filings_days: 365
+  fact_quarters: 8
+  corporate_actions_days: 365
+  price_sessions: 0
+limits:
+  news_items: 30
+  filings: 20
+  facts: 80
+  corporate_actions: 20
+  rationale_characters: 600
+  packet_characters: 48000
+  total_input_tokens: 2500000
+external_enrichment:
+  provider: AZURE_OPENAI_WEB_SEARCH
+  max_documents: 2
+  max_response_bytes: 1048576
+  max_facts: 8
+  reserved_characters: 8192
+  max_tool_calls: 2
+retries:
+  max_attempts: 3
+  base_delay_seconds: 1.0
+rate_limits:
+  requests_per_minute: 60
+  tokens_per_minute: 250000
+  output_token_reserve: 4096
+rubric:
+  earnings: 25
+  business: 25
+  event: 20
+  financial: 15
+  industry: 15

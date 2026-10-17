@@ -61,6 +61,27 @@ class RateLimits:
 
 
 @dataclass(frozen=True)
+class ExternalEnrichmentConfig:
+    provider: str
+    max_documents: int
+    max_response_bytes: int
+    max_facts: int
+    reserved_characters: int
+    max_tool_calls: int
+
+    def __post_init__(self) -> None:
+        if self.provider not in {"AZURE_OPENAI_WEB_SEARCH", "AZURE_BING_GROUNDING_PERIOD"} or any(
+            type(value) is not int or value <= 0 for value in (
+                self.max_documents, self.max_response_bytes, self.max_facts,
+                self.reserved_characters,
+                self.max_tool_calls,
+            )
+        ) or self.max_documents > 2 or self.max_response_bytes > 8 * 1024 * 1024 \
+                or self.max_facts > 20 or self.max_tool_calls > 3:
+            raise ValueError("Invalid external enrichment configuration")
+
+
+@dataclass(frozen=True)
 class LlmPreselectionConfig:
     versioned: VersionedConfig
     requested_count: int
@@ -76,6 +97,7 @@ class LlmPreselectionConfig:
     screening: ScreeningConfig | None = None
     rate_limits: RateLimits | None = None
     max_delay_seconds: float = 60.0
+    enrichment: ExternalEnrichmentConfig | None = None
 
     @property
     def policy_version(self) -> str:
@@ -166,6 +188,19 @@ def load_llm_preselection_config(path: Path) -> LlmPreselectionConfig:
     if not isfinite(max_delay) or max_delay <= 0 or delay > max_delay:
         raise ValueError("Retry delays must fit the finite delay budget")
     rate_limits = None
+    enrichment = None
+    if "external_enrichment" in payload:
+        external = _mapping(payload, "external_enrichment")
+        enrichment = ExternalEnrichmentConfig(
+            str(external["provider"]), _positive_int(external, "max_documents"),
+            _positive_int(external, "max_response_bytes"),
+            _positive_int(external, "max_facts"),
+            _positive_int(external, "reserved_characters"),
+            _positive_int(external, "max_tool_calls"),
+        )
+        if screening is None or str(payload["evidence_schema_version"]) != "4" \
+                or enrichment.reserved_characters >= _positive_int(limits, "packet_characters"):
+            raise ValueError("External enrichment requires event schema 3 and a bounded reserve")
     if "rate_limits" in payload:
         raw_limits = payload["rate_limits"]
         if not isinstance(raw_limits, dict):
@@ -207,4 +242,5 @@ def load_llm_preselection_config(path: Path) -> LlmPreselectionConfig:
         screening=screening,
         rate_limits=rate_limits,
         max_delay_seconds=max_delay,
+        enrichment=enrichment,
     )

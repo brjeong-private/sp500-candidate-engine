@@ -1,5 +1,5 @@
 # Local design-review notes
-# Plans stay local at every depth; architecture/design contracts and runbooks remain versioned.
+# Plans and checklists stay local at every depth; architecture/design contracts and runbooks remain versioned.
 [Pp][Ll][Aa][Nn].[Mm][Dd]
 *.[Pp][Ll][Aa][Nn].[Mm][Dd]
 *-[Pp][Ll][Aa][Nn].[Mm][Dd]
@@ -7,6 +7,8 @@
 [Pp][Ll][Aa][Nn]-*.[Mm][Dd]
 [Pp][Ll][Aa][Nn]_*.[Mm][Dd]
 [Pp][Ll][Aa][Nn][Ss]/
+*[Cc][Hh][Ee][Cc][Kk][Ll][Ii][Ss][Tt]*.[Mm][Dd]
+*체크리스트*.[Mm][Dd]
 /architecture-design-review-summary.md
 /data-collection-review.md
 /backfill-execution-result.tmp.md

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import uuid
 from datetime import UTC, datetime
@@ -161,12 +162,37 @@ class CandidateStageService:
             from sp500_candidate_engine.llm_preselection.service import load_runtime_llm_config
 
             config = load_runtime_llm_config(self.root)
+            from sp500_candidate_engine.llm_preselection.summaries import SUMMARY_VERSION
+            from sp500_candidate_engine.llm_preselection.temporal import TEMPORAL_HARNESS_VERSION
+
             contract["llm_policy"] = {
                 "policy_version": config.policy_version,
                 "policy_hash": config.versioned.config_hash,
                 "prompt_version": config.prompt_version,
                 "evidence_schema_version": config.evidence_schema_version,
+                "temporal_harness_version": TEMPORAL_HARNESS_VERSION,
+                "summary_version": SUMMARY_VERSION if config.event_policy else None,
             }
+            if config.enrichment:
+                from sp500_candidate_engine.llm_preselection.enrichment_contract import (
+                    ENRICHMENT_VERSION,
+                )
+
+                contract["external_enrichment_version"] = ENRICHMENT_VERSION
+                if config.enrichment.provider == "AZURE_BING_GROUNDING_PERIOD":
+                    from sp500_candidate_engine.analytics.azure_openai import (
+                        BingGroundingConnection,
+                    )
+
+                    binding = BingGroundingConnection(
+                        os.getenv("BING_GROUNDING_PROJECT_ENDPOINT", "").strip(),
+                        os.getenv("BING_GROUNDING_CONNECTION_ID", "").strip(),
+                        config.windows.news_days,
+                    )
+                    contract["period_search_connection"] = {
+                        "endpoint": binding.project_endpoint,
+                        "connection_id": binding.connection_id,
+                    }
             if payload.stage == "LLM_PRESELECTION":
                 from sp500_candidate_engine.llm_preselection.ranker import LlmRankerSettings
 
@@ -189,6 +215,12 @@ class CandidateStageService:
                     "quant_policy_version": quant_policy.version,
                     "quant_policy_hash": quant_policy.config_hash,
                 }
+                from sp500_candidate_engine.fusion.explanations import explanation_config
+
+                contract["explanation"] = explanation_config(
+                    config.rubric, config.limits.rationale_characters,
+                    verified_external=config.enrichment is not None,
+                )
         return contract
 
     def accept(

@@ -1279,8 +1279,16 @@ def portal_candidate_analysis_status(analysis: dict[str, Any]) -> dict[str, Any]
 def send_email(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         settings = Settings.from_env()
-        if not settings.email_enabled:
+        category = payload.get("category", "pipeline")
+        if category not in {"pipeline", "weekly_training"}:
+            return {"sent": False, "error": "INVALID_EMAIL_CATEGORY"}
+        weekly = category == "weekly_training"
+        enabled = settings.weekly_email_enabled if weekly else settings.email_enabled
+        recipients = settings.weekly_email_recipients if weekly else settings.email_recipients
+        if not enabled:
             return {"sent": False, "disabled": True}
+        if not recipients:
+            return {"sent": False, "error": "EMAIL_RECIPIENTS_EMPTY"}
 
         from azure.communication.email import EmailClient
         from azure.identity import DefaultAzureCredential
@@ -1289,7 +1297,7 @@ def send_email(payload: dict[str, Any]) -> dict[str, Any]:
         message = {
             "senderAddress": settings.email_sender,
             "recipients": {
-                "to": [{"address": address} for address in settings.email_recipients],
+                "to": [{"address": address} for address in recipients],
             },
             "content": {
                 "subject": str(payload["subject"])[:200],
@@ -1297,6 +1305,14 @@ def send_email(payload: dict[str, Any]) -> dict[str, Any]:
             },
         }
         result = client.begin_send(message).result(timeout=60)
-        return {"sent": True, "id": getattr(result, "id", None)}
+        operation_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
+        logging.getLogger(__name__).info(json.dumps({
+            "event": "orchestrator.email.sent", "category": category,
+            "recipient_count": len(recipients), "operation_id": operation_id,
+        }))
+        return {"sent": True, "id": operation_id}
     except Exception as error:
+        logging.getLogger(__name__).error(
+            "orchestrator.email.failed", extra={"error_type": type(error).__name__},
+        )
         return {"sent": False, "error": type(error).__name__}

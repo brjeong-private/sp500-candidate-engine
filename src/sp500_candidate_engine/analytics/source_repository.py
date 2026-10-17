@@ -213,6 +213,14 @@ class SourceRepository:
             raise ValueError(f"Unknown execution context: {execution_context_id}")
         return rows[0]
 
+    def read_issuer_cik(self, *, issuer_id: uuid.UUID) -> str:
+        rows = self.connection.execute(
+            "SELECT cik FROM ref.issuer WHERE issuer_id = %s", (issuer_id,),
+        ).fetchall()
+        if len(rows) != 1 or not isinstance(rows[0]["cik"], str) or not rows[0]["cik"].isdigit():
+            raise ValueError("Verified external evidence requires an issuer CIK")
+        return rows[0]["cik"].zfill(10)
+
     def read_universe_members(
         self,
         *,
@@ -352,6 +360,7 @@ class SourceRepository:
                   AND mapping.instrument_id = %s
                   AND event.event_type = %s
                   AND revision.source_available_at <= ec.cutoff_at
+                  AND (revision.revision_no = 1 OR revision.observed_at <= ec.cutoff_at)
                   AND {clocks[clock]} BETWEEN %s AND {upper_bound}
                   AND (
                       ec.knowledge_mode <> 'OPERATIONAL_REPLAY'

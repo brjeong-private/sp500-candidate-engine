@@ -150,6 +150,8 @@ class Settings:
     email_recipients: tuple[str, ...]
     exchange_mic: str
     email_enabled: bool = True
+    weekly_email_enabled: bool = False
+    weekly_email_recipients: tuple[str, ...] = ()
     fusion_enabled: bool = False
     fusion_external_delivery_enabled: bool = False
     fusion_external_contract_version: str = ""
@@ -181,6 +183,14 @@ class Settings:
         )
         if not recipients:
             raise ConfigurationError("ORCHESTRATOR_EMAIL_RECIPIENTS is empty")
+        weekly_email_enabled = boolean_flag("ORCHESTRATOR_WEEKLY_EMAIL_ENABLED", False)
+        weekly_recipients = tuple(
+            item.strip()
+            for item in os.getenv("ORCHESTRATOR_WEEKLY_EMAIL_RECIPIENTS", "").split(",")
+            if item.strip()
+        )
+        if weekly_email_enabled and not weekly_recipients:
+            raise ConfigurationError("ORCHESTRATOR_WEEKLY_EMAIL_RECIPIENTS is empty")
         return cls(
             candidate_base_url=https_base_url("CANDIDATE_API_URL"),
             candidate_api_key=required("CANDIDATE_API_KEY"),
@@ -212,6 +222,8 @@ class Settings:
             email_recipients=recipients,
             exchange_mic=os.environ.get("ORCHESTRATOR_EXCHANGE_MIC", "XNYS").strip().upper(),
             email_enabled=boolean_flag("ORCHESTRATOR_EMAIL_ENABLED", True),
+            weekly_email_enabled=weekly_email_enabled,
+            weekly_email_recipients=weekly_recipients,
             fusion_enabled=fusion,
             fusion_external_delivery_enabled=delivery,
             fusion_external_contract_version=contract,

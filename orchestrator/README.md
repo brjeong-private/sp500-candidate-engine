@@ -11,6 +11,8 @@
 Application Insights/Log Analytics 운영 조회는
 [텔레메트리 KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을
 따른다.
+2026-10-19 비거래일 skip과 10월19일 거래 세션을 처리하는 10월20일 실행은
+루트의 로컬 체크리스트 `DAILY-FUSION-2026-10-19-CHECKLIST.md`로 구분해 점검한다.
 
 private Storage 기반 FC1 일일 실행 기준선은 기존 배포 상태다. 주간 재학습 API client,
 New York 주말 gate, weekly parent/model orchestration, Container Apps Job start/status와
@@ -47,7 +49,7 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
 
 ## 실행 흐름
 
-코드의 안전한 기본값과 현재 운영 설정을 구분한다. 승인된2026-10-17 운영은
+코드의 안전한 기본값과 현재 운영 설정을 구분한다. 승인된 2026-10-17 운영은
 event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candidate Backend에
 배포됐다. gate·고정 input·ACK·오류 재시도는 이 문서의 계약과
 [Telemetry·KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을 따른다.
@@ -58,6 +60,9 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    재사용한다. terminal instance는 정기 시각에 재시작할 수 있지만 기존 selection
    검사가 업무 중복을 막는다. 전환 전 dual 부모가 활성 상태이면 새 실행을 시작하지 않는다.
    기존 dual orchestration과 `SHORT_5D` 수동·API 모델 선택은 호환 경로로 유지한다.
+   신규 정규 실행은 Fusion 전용이며 `FUSION_ENABLED`가 누락되거나 `false`이면
+   설정 오류로 시작을 차단한다. 이 타이머 차단은 로컬 변경이며 이번 작업에서
+   배포하지 않았다. 운영 Fusion 활성 설정은 읽기 전용으로 재확인했다.
 2. Candidate `exchange-sessions` 조회로 XNYS 거래일인지 확인한다.
 3. `DefaultAzureCredential`로 Candidate/Portal App Service, Candidate PostgreSQL,
    Portal MySQL을 읽고 중지 상태이면 `start`한다. TradingAgents Container App은
@@ -76,7 +81,7 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    고정했으며 `ANALYSIS_WORKER_COUNT=3`은 변경하지 않았다.
 4. 날짜와 모델 목적 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
    timer로 상태를 확인한다. 제출 전 같은 날짜·모델의 완전한 terminal selection을
-   조회한다. Fusion 비활성 시에는 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와
+   조회한다. Fusion 비활성 수동·호환 경로에서는 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와
    Portal batch를 생략한다. Fusion 활성 시에는 같은 고정 원천·정책의 Fusion까지 확인하고
    미완료 handoff만 재개한다. Candidate API는 canonical 요청 hash를 저장해 같은 key·payload에는
    원래 run을 반환하고 다른 payload에는 `409`를 반환한다. MEDIUM_20D 완료 후 정량
@@ -84,7 +89,8 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    인정하지 않으며 MEDIUM 제출 key의 `top20-v1` suffix로 기존 10개 요청과 구분한다.
    정량 Top 20 완료는 LLM 결과 유무에 의존하지 않는다. LLM 파이프라인은 별도이며
    `LLM_PRESELECTION_ENABLED`를 활성화할 때만 병렬 실행한다.
-5. 기본 `FUSION_ENABLED=false`이면 MEDIUM은 `parallel_preselection`에서 제출 0개로 종료한다.
+5. 기본 `FUSION_ENABLED=false`인 수동·호환 MEDIUM은 `parallel_preselection`에서 제출 0개로 종료한다.
+   신규 정규 타이머는 이 경로로 진행하지 않으며 Fusion 활성 설정이 필수다.
    Fusion 활성 시에는 신규 이벤트 LLM 정책과 정량 Top 20을 병합하고 별도 API에서
    고정 run을 검증한다. 외부 전달은 추가 플래그·수신처 계약이 모두 충족될 때만 실행한다.
    레거시 SHORT_5D 명시 실행은 기존 Portal batch·분석 poll 계약을 유지한다.
@@ -92,7 +98,9 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    다시 축소하지 않는다. 현재 승인된 운영은 Fusion·전량 handoff가 활성화돼 있으며
    코드·예제의 기본 비활성과 구분한다.
 6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. 정기 일일 실행은
-   `MEDIUM_20D` 정량 Top 20을 생성하며 SHORT 실행이나 LLM 결과에 의존하지 않는다. 외부 I/O와 이메일은
+   `MEDIUM_20D` 정량·LLM Top 20을 원천으로 최종 Fusion Top 20을 생성하며
+   SHORT 실행에 의존하지 않는다. 정량 분기 성공은 LLM 실패와 별도로 보존하지만
+   Fusion 완료로 간주하지 않는다. 외부 I/O와 이메일은
    activity에서만 실행되어 orchestrator replay가 부작용을 반복하지 않는다.
 7. `resource_guardian_timer`는 15분마다 같은 readiness와 승인된 start/replica/private
    Storage 복구 계약을 독립 실행한다. 실패는 telemetry에 남기며 guardian Email은

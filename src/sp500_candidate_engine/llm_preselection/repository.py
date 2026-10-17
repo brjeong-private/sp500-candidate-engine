@@ -12,6 +12,7 @@ from sp500_candidate_engine.llm_preselection.ranker import (
     CallAttempt,
     RankingResult,
 )
+from sp500_candidate_engine.llm_preselection.temporal import validate_packet, validate_revision_time
 
 
 class LlmPreselectionRepository:
@@ -30,7 +31,7 @@ class LlmPreselectionRepository:
             FROM analytics.llm_ranking_run ranking
             WHERE execution_context_id=%s AND price_session_date=%s
               AND policy_hash=%s AND evidence_schema_version=%s
-              AND window_config->>'input_identity_version' IN ('2','3')
+              AND window_config->>'input_identity_version' IN ('2','3','4','5')
               AND eligible_count >= 20
               AND (SELECT count(*) FROM analytics.llm_evidence_packet packet
                    WHERE packet.llm_ranking_run_id=ranking.llm_ranking_run_id)
@@ -49,8 +50,15 @@ class LlmPreselectionRepository:
         if len(rows) != run["eligible_count"]:
             raise ValueError("Cached LLM packet count mismatch")
         links = self.connection.execute(  # type: ignore[attr-defined]
-            "SELECT * FROM analytics.llm_evidence_link WHERE llm_ranking_run_id=%s "
-            "ORDER BY instrument_id,source_kind,entity_key,source_snapshot_id", (run_id,),
+            """
+            SELECT link.*, revision.revision_no, revision.observed_at AS revision_observed_at
+            FROM analytics.llm_evidence_link link
+            LEFT JOIN event.event_revision revision ON revision.event_revision_id = CASE
+                WHEN link.source_kind IN ('NEWS', 'EARNINGS', 'EVENT')
+                THEN link.entity_key::uuid END
+            WHERE link.llm_ranking_run_id=%s
+            ORDER BY link.instrument_id,link.source_kind,link.entity_key,link.source_snapshot_id
+            """, (run_id,),
         ).fetchall()
         snapshots = self.connection.execute(  # type: ignore[attr-defined]
             """
@@ -81,6 +89,10 @@ class LlmPreselectionRepository:
             for link in links:
                 if link["instrument_id"] != row["instrument_id"]:
                     continue
+                validate_revision_time(
+                    source_kind=link["source_kind"], revision_no=link["revision_no"],
+                    revision_observed_at=link["revision_observed_at"], cutoff_at=cutoff_at,
+                )
                 snapshot = by_snapshot.get(link["source_snapshot_id"])
                 if (
                     snapshot is None
@@ -115,6 +127,10 @@ class LlmPreselectionRepository:
                 row["estimated_tokens"], row["section_counts"], tuple(row["missing_sections"]),
                 tuple(row["truncated_sections"]), tuple(packet_links),
             ))
+            validate_packet(
+                packets[-1], cutoff_at=cutoff_at, target_session=target_session,
+                execution_context_id=execution_context_id, knowledge_mode=knowledge_mode,
+            )
         decisions = tuple(row["decision"] for row in audit)
         selected = {str(row["instrument_id"]) for row in decisions if row["selected"]}
         if selected != {str(packet.instrument_id) for packet in packets}:

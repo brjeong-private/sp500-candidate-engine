@@ -735,6 +735,9 @@ class ProductionRepository:
             revision_id = current["event_revision_id"]
         else:
             revision_id = _stable_uuid("event-revision", f"{event_id}:{revision}")
+            if current is not None:
+                # Original publication time does not date a later corrected payload.
+                source_available_at = max(source_available_at, observed_at)
             connection.execute(
                 """
                 INSERT INTO event.event_revision(

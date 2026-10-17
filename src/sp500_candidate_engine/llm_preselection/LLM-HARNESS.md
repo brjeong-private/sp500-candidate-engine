@@ -4,6 +4,8 @@
 기존 v1/v2의 DB-only 평가는 보존한다. 새 검색 경로는
 `config/llm_preselection/policy_event_search_v4.yaml`을
 명시 선택한다. 서버의 SEC 원문 다운로드·HTML 파싱 보강 경로는 제거했다.
+기간 필터가 필요한 경로는 [policy_event_period_v5.yaml](../../../config/llm_preselection/policy_event_period_v5.yaml)의
+Foundry Bing Grounding을 선택하며 `freshness`를 도구 파라미터에 고정한다.
 
 ## 1. 취득 주체와 데이터 경계
 
@@ -23,6 +25,12 @@ Azure 검색은 Bing Grounding을 사용하며 별도 비용·데이터 처리 �
 ## 2. 미래 정보 사용 금지 — 강제 admission gate
 
 - 업무 날짜와 cutoff는 기존 실행 값을 고정한다. 재실행 시 현재 시각으로 이동하지 않는다.
+- **LLM만 적용:** cutoff의 뉴욕 날짜보다 이전 공개/원문 버전일은 일자만 판정한다.
+  생성 시각 부재를 이유로 전일 자료를 거부하지 않는다. 당일은 timezone-aware 시각이
+  뉴욕 05:30보다 엄격히 이전이어야 한다. 당일 날짜만 있거나 정각/이후이면 거부한다.
+  별도 cutoff가 더 이르면 그 경계를 넘기지 않는다. 사건일이 아닌 공개/버전일 기준이다.
+  시각이 있으면 NY 날짜로 변환하고 날짜만 있으면 NY 달력일로 본다.
+  이 규칙은 Python `asof.py`가 강제하며 수집/정량 규칙은 바꾸지 않는다.
 - **날짜가 과거인 일반 뉴스 페이지는 과거 원문 revision 증거가 아니다.**
   LLM이 주장한 공개일·URL·검색 쿼리의 날짜 제한도 검증 증거가 아니다.
 - 초기 승인 범위는 기존 packet에 고정된 CIK/accession의 SEC 원문 버전이다.
@@ -41,6 +49,15 @@ Azure 검색은 Bing Grounding을 사용하며 별도 비용·데이터 처리 �
   원문 revision 검증을 모델 metadata 검증으로 대체하지 않는다.
 - `HISTORICAL_RECONSTRUCTION`만 늦은 검색을 허용한다.
   `OPERATIONAL_REPLAY`는 검색 관찰도 cutoff 이내여야 하며 늦은 검색은 호출 전에 차단한다.
+- Bing `freshness`는 발견일 범위이며 공개일 증명이 아니다. 기간 검색(`AZURE_BING_GROUNDING_PERIOD`)은
+  **Python `source_dates.py`가 인용 URL·페이지에서 직접 읽은 게시일/시각**으로 판정한다
+  (`candidate-citations.json` 같은 별도 원문 파일에 의존하지 않는다).
+  URL 경로 날짜와 페이지 게시 metadata(`article:published_time`·`datePublished`·`<time datetime>`)
+  중 더 늦은 값을 쓰며 수정 시각은 보지 않는다. 뉴욕 기준 전일 이전은 일자만으로 승인하고,
+  당일은 timezone이 있는 시각이 05:30 이전일 때만 승인한다. 날짜 미확인·당일 시각 부재·
+  미래 날짜·HTTPS 공개 호스트가 아닌 URL·fetch 실패는 해당 출처만 거부(fail closed)한다.
+  승인된 문단의 날짜 라벨은 모델 값이 아니라 Python이 쓴 값이며 재생 시 같은 규칙으로 재검증한다.
+  모델이 쓴 공개일은 증거로 쓰지 않는다.
 
 ## 3. 보증 범위와 한계
 

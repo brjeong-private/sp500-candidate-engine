@@ -14,8 +14,10 @@ from sp500_candidate_engine.llm_preselection.config import (
     LlmPreselectionConfig,
     load_llm_preselection_config,
 )
+from sp500_candidate_engine.llm_preselection.enrichment_contract import ENRICHMENT_VERSION
 from sp500_candidate_engine.llm_preselection.event_ranker import EventPreselectionRanker
 from sp500_candidate_engine.llm_preselection.evidence import EvidencePacketBuilder
+from sp500_candidate_engine.llm_preselection.external_enrichment import LlmSearchEnricher
 from sp500_candidate_engine.llm_preselection.ranker import (
     AzureOpenAIPreselectionRanker,
     CachedCompletion,
@@ -24,6 +26,11 @@ from sp500_candidate_engine.llm_preselection.ranker import (
 )
 from sp500_candidate_engine.llm_preselection.repository import (
     LlmPreselectionRepository,
+)
+from sp500_candidate_engine.llm_preselection.summaries import SUMMARY_VERSION
+from sp500_candidate_engine.llm_preselection.temporal import (
+    TEMPORAL_HARNESS_VERSION,
+    validate_packet,
 )
 
 
@@ -43,8 +50,12 @@ def _reused_summary(row: dict[str, object], target_session: date) -> LlmPreselec
     if type(count) is not int or count != 20:
         raise ValueError("Stored successful LLM run must contain exactly 20 candidates")
     return LlmPreselectionSummary(
-        uuid.UUID(str(row["llm_ranking_run_id"])), uuid.UUID(str(row["run_id"])),
-        target_session, "SUCCEEDED", count, True,
+        uuid.UUID(str(row["llm_ranking_run_id"])),
+        uuid.UUID(str(row["run_id"])),
+        target_session,
+        "SUCCEEDED",
+        count,
+        True,
     )
 
 
@@ -56,25 +67,32 @@ class LlmPreselectionService:
         ranker_settings: LlmRankerSettings,
         *,
         ranker: AzureOpenAIPreselectionRanker | None = None,
+        enricher: LlmSearchEnricher | None = None,
     ) -> None:
         self.database = database
         self.config = config
         self.ranker_settings = ranker_settings
+        self.enricher = enricher
+        if config.enrichment is not None and enricher is None:
+            raise ValueError("Verified scoring requires an external artifact verifier")
+        if config.enrichment is None and enricher is not None:
+            raise ValueError("External scoring must not change an existing policy implicitly")
         ranker_class = (
             EventPreselectionRanker if config.event_policy else AzureOpenAIPreselectionRanker
         )
-        self.ranker = ranker or ranker_class(
-            ranker_settings, config
-        )
+        self.ranker = ranker or ranker_class(ranker_settings, config)
         if config.event_policy:
             self.ranker.response_cache = self._read_cached_completion
+        if self.enricher is not None:
+            self.enricher.rate_limiter = self.ranker.rate_limiter
 
     def _read_cached_completion(
         self, input_hash: str, execution_context_id: uuid.UUID, include_failed: bool
     ) -> CachedCompletion | None:
         with self.database.connect() as connection:
             cached = LlmPreselectionRepository(connection).find_cached_call(
-                input_hash=input_hash, policy_hash=self.config.versioned.config_hash,
+                input_hash=input_hash,
+                policy_hash=self.config.versioned.config_hash,
                 deployment=self.ranker_settings.deployment,
                 api_version=self.ranker_settings.api_version,
                 execution_context_id=execution_context_id,
@@ -96,18 +114,23 @@ class LlmPreselectionService:
         execution_context_id: uuid.UUID,
     ) -> LlmPreselectionSummary:
         if not self.config.event_policy:
-            return await self._run(target_session=target_session,
-                                   execution_context_id=execution_context_id)
-        key = "llm-evaluate-" + _canonical_hash({
-            "context": execution_context_id, "session": target_session,
-            "policy": self.config.versioned.config_hash,
-            "deployment": self.ranker_settings.deployment,
-            "api_version": self.ranker_settings.api_version,
-        })
+            return await self._run(
+                target_session=target_session, execution_context_id=execution_context_id
+            )
+        key = "llm-evaluate-" + _canonical_hash(
+            {
+                "context": execution_context_id,
+                "session": target_session,
+                "policy": self.config.versioned.config_hash,
+                "deployment": self.ranker_settings.deployment,
+                "api_version": self.ranker_settings.api_version,
+            }
+        )
         with self.database.connect(autocommit=True) as lock_connection:
             await asyncio.to_thread(
                 lock_connection.execute,
-                "SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,),
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                (key,),
             )
             try:
                 return await self._run(
@@ -116,7 +139,8 @@ class LlmPreselectionService:
             finally:
                 await asyncio.to_thread(
                     lock_connection.execute,
-                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (key,),
+                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                    (key,),
                 )
 
     async def _run(
@@ -125,9 +149,7 @@ class LlmPreselectionService:
         started_at = datetime.now(UTC)
         with self.database.connect() as connection:
             source = SourceRepository(connection)
-            context = source.read_context(
-                execution_context_id=execution_context_id
-            )
+            context = source.read_context(execution_context_id=execution_context_id)
             builder = EvidencePacketBuilder(source, self.config)
             cached = None
             if self.config.event_policy:
@@ -136,10 +158,12 @@ class LlmPreselectionService:
                 if not isinstance(cutoff, datetime):
                     raise TypeError("Context cutoff must be a datetime")
                 cached = LlmPreselectionRepository(connection).read_cached_inputs(
-                    execution_context_id=execution_context_id, target_session=target_session,
+                    execution_context_id=execution_context_id,
+                    target_session=target_session,
                     policy_hash=self.config.versioned.config_hash,
                     schema_version=self.config.evidence_schema_version,
-                    cutoff_at=cutoff, knowledge_mode=str(context["knowledge_mode"]),
+                    cutoff_at=cutoff,
+                    knowledge_mode=str(context["knowledge_mode"]),
                 )
             if cached is not None:
                 _, packets, builder.screening_audit = cached
@@ -149,36 +173,77 @@ class LlmPreselectionService:
                     target_session=target_session,
                 )
             if self.config.event_policy:
-                packets = tuple(replace(
-                    packet, links=tuple(sorted(
-                        packet.links,
-                        key=lambda link: (link.source_kind, link.entity_key,
-                                          str(link.source_snapshot_id)),
-                    )),
-                ) for packet in sorted(packets, key=lambda item: item.instrument_id.hex))
+                packets = tuple(
+                    replace(
+                        packet,
+                        links=tuple(
+                            sorted(
+                                packet.links,
+                                key=lambda link: (
+                                    link.source_kind,
+                                    link.entity_key,
+                                    str(link.source_snapshot_id),
+                                ),
+                            )
+                        ),
+                    )
+                    for packet in sorted(packets, key=lambda item: item.instrument_id.hex)
+                )
         cutoff_at = context["cutoff_at"]
         if not isinstance(cutoff_at, datetime):
             raise TypeError("execution context cutoff_at must be datetime")
+        if self.enricher is not None:
+            packets = await self.enricher.enrich(
+                packets,
+                knowledge_mode=str(context["knowledge_mode"]),
+            )
+        if (
+            sum(packet.estimated_tokens for packet in packets)
+            + (self.enricher.search_input_tokens if self.enricher else 0)
+            > self.config.limits.total_input_tokens
+        ):
+            raise ValueError("Enriched LLM input exceeds its total token budget")
+        for packet in packets:
+            validate_packet(
+                packet,
+                cutoff_at=cutoff_at,
+                target_session=target_session,
+                execution_context_id=execution_context_id if self.config.event_policy else None,
+                knowledge_mode=str(context["knowledge_mode"]),
+            )
         input_payload: dict[str, object] = {
-                "input_identity_version": 3 if self.config.event_policy else 2,
-                "execution_context_id": execution_context_id,
-                "policy_hash": self.config.versioned.config_hash,
-                "packet_hashes": [
-                    {
-                        "instrument_id": packet.instrument_id,
-                        "packet_hash": packet.packet_hash,
-                        "lineage_hash": _canonical_hash([
-                            (link.source_kind, link.entity_key, link.source_snapshot_id,
-                             link.source_available_at, link.observed_at)
+            "input_identity_version": 5
+            if self.config.enrichment
+            else (3 if self.config.event_policy else 2),
+            "temporal_harness_version": TEMPORAL_HARNESS_VERSION,
+            "execution_context_id": execution_context_id,
+            "policy_hash": self.config.versioned.config_hash,
+            "packet_hashes": [
+                {
+                    "instrument_id": packet.instrument_id,
+                    "packet_hash": packet.packet_hash,
+                    "lineage_hash": _canonical_hash(
+                        [
+                            (
+                                link.source_kind,
+                                link.entity_key,
+                                link.source_snapshot_id,
+                                link.source_available_at,
+                                link.observed_at,
+                            )
                             for link in packet.links
-                        ]),
-                    }
-                    for packet in packets
-                ],
+                        ]
+                    ),
+                }
+                for packet in packets
+            ],
         }
         if self.config.event_policy:
+            input_payload["summary_version"] = SUMMARY_VERSION
             input_payload["screening"] = builder.screening_audit
             input_payload["api_version"] = self.ranker_settings.api_version
+        if self.config.enrichment:
+            input_payload["external_enrichment_version"] = ENRICHMENT_VERSION
         input_hash = _canonical_hash(input_payload)
         with self.database.connect() as connection:
             reusable = LlmPreselectionRepository(connection).find_successful_run(
@@ -247,7 +312,8 @@ class LlmPreselectionService:
                 policy_version=self.config.policy_version,
                 prompt_version=self.config.prompt_version,
                 deployment=self.ranker_settings.deployment,
-                evidence_schema_version=self.config.evidence_schema_version, input_hash=input_hash,
+                evidence_schema_version=self.config.evidence_schema_version,
+                input_hash=input_hash,
             )
             if reusable is not None:
                 return _reused_summary(reusable, target_session)
@@ -265,7 +331,14 @@ class LlmPreselectionService:
                 evidence_schema_version=self.config.evidence_schema_version,
                 window_config={
                     **asdict(self.config.windows),
-                    "input_identity_version": 3 if self.config.event_policy else 2,
+                    "temporal_harness_version": TEMPORAL_HARNESS_VERSION,
+                    "summary_version": SUMMARY_VERSION if self.config.event_policy else None,
+                    "input_identity_version": 5
+                    if self.config.enrichment
+                    else (3 if self.config.event_policy else 2),
+                    "external_enrichment_version": ENRICHMENT_VERSION
+                    if self.config.enrichment
+                    else None,
                     "packet_cache_source_run_id": str(cached[0]) if cached is not None else None,
                 },
                 input_hash=input_hash,
@@ -300,15 +373,48 @@ def create_llm_preselection_service(
 
     if fusion_enabled() and not config.event_policy:
         raise ValueError("Fusion requires an explicitly selected event LLM policy")
-    return LlmPreselectionService(
-        Database(settings), config, LlmRankerSettings.from_env(),
-    )
+    ranker_settings = LlmRankerSettings.from_env()
+    if config.enrichment:
+        from sp500_candidate_engine.analytics.azure_openai import (
+            AzureOpenAIClient,
+            BingGroundingConnection,
+            BingGroundingSearchClient,
+        )
+        from sp500_candidate_engine.llm_preselection.external_enrichment import NativeSearchClient
+
+        ranker = EventPreselectionRanker(ranker_settings, config)
+        if not isinstance(ranker.client, AzureOpenAIClient):
+            raise ValueError("Native search requires the configured Azure OpenAI client")
+        search_client: NativeSearchClient = ranker.client
+        if config.enrichment.provider == "AZURE_BING_GROUNDING_PERIOD":
+            project = os.getenv("BING_GROUNDING_PROJECT_ENDPOINT", "").strip()
+            connection_id = os.getenv("BING_GROUNDING_CONNECTION_ID", "").strip()
+            if not project or not connection_id:
+                raise ValueError(
+                    "Period search requires a Foundry project endpoint and Bing connection"
+                )
+            search_client = BingGroundingSearchClient(
+                ranker.client,
+                BingGroundingConnection(project, connection_id, config.windows.news_days),
+            )
+        return LlmPreselectionService(
+            Database(settings),
+            config,
+            ranker_settings,
+            ranker=ranker,
+            enricher=LlmSearchEnricher(
+                config,
+                artifact_directory=settings.raw_data_dir / "llm-search-evidence",
+                client=search_client,
+            ),
+        )
+    return LlmPreselectionService(Database(settings), config, ranker_settings)
 
 
 def load_runtime_llm_config(repository_root: Path) -> LlmPreselectionConfig:
-    policy_path = Path(os.getenv(
-        "LLM_PRESELECTION_POLICY_PATH", "config/llm_preselection/policy_v1.yaml"
-    ))
+    policy_path = Path(
+        os.getenv("LLM_PRESELECTION_POLICY_PATH", "config/llm_preselection/policy_v1.yaml")
+    )
     path = (repository_root / policy_path).resolve()
     if not path.is_relative_to((repository_root / "config" / "llm_preselection").resolve()):
         raise ValueError("LLM policy must reside in config/llm_preselection")

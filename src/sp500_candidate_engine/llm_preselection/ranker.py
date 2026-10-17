@@ -171,6 +171,9 @@ class AzureOpenAIPreselectionRanker:
         llm_ranking_run_id: uuid.UUID,
         packets: tuple[EvidencePacket, ...],
     ) -> RankingResult:
+        from sp500_candidate_engine.llm_preselection.temporal import validate_model_packets
+
+        validate_model_packets(packets)
         if len(packets) < self.config.requested_count:
             raise LlmRankingError("Insufficient eligible evidence packets", ())
         attempts: list[CallAttempt] = []
@@ -259,9 +262,10 @@ class AzureOpenAIPreselectionRanker:
         execution_context_id: uuid.UUID | None = None,
         attempt_offset: int = 0,
     ) -> tuple[dict[str, object], str, tuple[CallAttempt, ...]]:
-        input_hash = _canonical_hash(
-            {"messages": messages, "schema_name": schema_name, "schema": schema}
-        )
+        request_identity: dict[str, object] = {
+            "messages": messages, "schema_name": schema_name, "schema": schema,
+        }
+        input_hash = _canonical_hash(request_identity)
         if self.response_cache is not None:
             if execution_context_id is None:
                 raise LlmRankingError("Cached evaluation requires an execution context", ())
@@ -294,9 +298,7 @@ class AzureOpenAIPreselectionRanker:
                     estimated = (len(json.dumps(messages)) + len(json.dumps(schema)) + 3) // 4
                     await self.rate_limiter.acquire(estimated)
                 response = await self.client.complete(
-                    messages=messages,
-                    schema_name=schema_name,
-                    schema=schema,
+                    messages=messages, schema_name=schema_name, schema=schema,
                 )
                 if self.rate_limiter is not None:
                     self.rate_limiter.record_usage(response.total_tokens)

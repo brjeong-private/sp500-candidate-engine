@@ -16,6 +16,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from sp500_candidate_engine.analytics.config import load_versioned_config
+from sp500_candidate_engine.database import _canonical_hash, _stable_uuid
 from sp500_candidate_engine.fusion.policy import FusionInput, FusionPolicy, fuse_candidates
 from sp500_candidate_engine.fusion.repository import FusionConflictError, FusionRepository
 from sp500_candidate_engine.fusion.service import FusionService
@@ -210,6 +211,49 @@ def service_fixture(monkeypatch):
         "input_hash": "llm-input", "prompt_version": config.prompt_version,
         "deployment": "test", "api_version": "test", "evidence_schema_version": "2",
     }
+    llm["candidates"] = copy.deepcopy(candidate_rows)
+    for row in quant["candidates"]:
+        row["reason_codes"] = ["MODEL_TOP_RANK"]
+    for row in llm["candidates"]:
+        event_id = str(UUID(int=row["position"] + 20000))
+        snapshot_id = UUID(int=row["position"] + 30000)
+        evidence_id = str(_stable_uuid("llm-run-evidence-link", (
+            f"{llm['llm_ranking_run_id']}:{row['instrument_id']}:NEWS:{event_id}:{snapshot_id}"
+        )))
+        row["evidence_ids"] = [evidence_id]
+        row.update(
+            score=80.0,
+            sub_scores={"earnings": 80, "business": 80, "event": 80,
+                        "financial": None, "industry": None},
+            missing_reasons={"financial": "No supplied facts", "industry": "No industry evidence"},
+            rationale="Unverified free-form summary.",
+            criterion_evidence=[
+                {"evidence_link_id": evidence_id, "criterion": criterion,
+                 "reason": f"Provided operating update supports {criterion} evaluation"}
+                for criterion in ("earnings", "business", "event")
+            ],
+            packet={
+                "schema_version": "2",
+                "execution_context_id": str(CONTEXT), "target_session": DAY.isoformat(),
+                "cutoff_at": NOW.isoformat(),
+                "identity": {"instrument_id": str(row["instrument_id"]),
+                             "issuer_id": str(row["issuer_id"])},
+                "news": [{
+                    "event_revision_id": event_id, "title": "Actual provided operating update",
+                    "published_at": (NOW - timedelta(hours=1)).isoformat(),
+                }],
+            },
+            evidence_links=[{
+                "evidence_link_id": evidence_id, "instrument_id": str(row["instrument_id"]),
+                "source_snapshot_id": str(snapshot_id),
+                "source_kind": "NEWS", "entity_key": event_id, "manifest_member": True,
+                "source_available_at": (NOW - timedelta(hours=1)).isoformat(),
+                "observed_at": (NOW - timedelta(minutes=30)).isoformat(),
+                "revision_no": 1,
+                "revision_observed_at": (NOW - timedelta(minutes=30)).isoformat(),
+            }],
+        )
+        row["packet_hash"] = _canonical_hash(row["packet"])
     context = {
         "execution_context_id": CONTEXT, "input_manifest_id": UUID(int=1005),
         "cutoff_at": NOW, "knowledge_mode": "OPERATIONAL_REPLAY",
@@ -292,3 +336,249 @@ def test_source_mismatch_is_persisted_failed_not_fallback(monkeypatch, source, f
     assert result.selected_count == 0
     assert database.connection.tables.get("selection.fusion_candidate", []) == []
     assert database.connection.tables["selection.fusion_run"][0]["failure_code"]
+
+
+def stored_read_row(database):
+    from backend.app.schemas.fusions import FusionRun
+
+    run = database.connection.tables["selection.fusion_run"][-1]
+    row = {key: value for key, value in run.items() if key in FusionRun.model_fields}
+    row["candidates"] = [
+        copy.deepcopy(item["candidate"])
+        for item in database.connection.tables.get("selection.fusion_candidate", [])
+        if item["fusion_run_id"] == run["fusion_run_id"]
+    ]
+    return row
+
+
+def test_explanation_preserves_scores_scored_pairs_and_deterministic_identity(monkeypatch):
+    from backend.app.repositories.fusions import FusionReadRepository
+    from sp500_candidate_engine.fusion.explanations import explanation_output_hash
+
+    database, service, quant, llm = service_fixture(monkeypatch)
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    row = stored_read_row(database)
+    monkeypatch.setattr(FusionReadRepository, "fetch", lambda *args: [copy.deepcopy(row)])
+    repository = FusionReadRepository(database)
+    explanations = repository.explanations(result.fusion_run_id)
+    assert explanations.status == "RECORDED"
+    assert len(explanations.candidates) == 20
+    snapshot = explanations.candidates[0].explanation
+    assert snapshot.quant.score == quant["candidates"][0]["score"]
+    assert snapshot.quant.reason_codes == ("MODEL_TOP_RANK",)
+    assert snapshot.llm.score == 80
+    assert snapshot.llm.sub_scores["financial"] is None
+    assert snapshot.llm.supported_count == 3 and snapshot.llm.weight_denominator == 70
+    assert len(snapshot.llm.evidence) == 3
+    assert len({item.evidence_link_id for item in snapshot.llm.evidence}) == 1
+    assert {item.criterion for item in snapshot.llm.evidence} == {"earnings", "business", "event"}
+    assert snapshot.llm.summary_method == "DETERMINISTIC_CITATIONS"
+    assert "Unverified" not in snapshot.llm.summary
+    assert all(item.metadata_status == "PARTIAL" and item.source_url is None
+               for item in snapshot.llm.evidence)
+    assert row["provenance"]["explanation_output_hash"] == explanation_output_hash({
+        str(item["instrument_id"]): item["explanation"] for item in row["candidates"]
+    })
+    with_explanation = repository.handoff(result.fusion_run_id)
+    for item in row["candidates"]:
+        item.pop("explanation")
+        item["unrelated_future_field"] = "must not enter v1"
+    without_explanation = repository.handoff(result.fusion_run_id)
+    assert with_explanation == without_explanation
+    assert not any("explanation" in item or "unrelated_future_field" in item
+                   for item in with_explanation["candidates"])
+
+
+@pytest.mark.parametrize("corruption", [
+    "future_source", "future_published", "instrument", "snapshot", "manifest",
+    "trimmed", "packet_hash", "criterion", "score", "denominator", "duplicate",
+    "backdated_correction",
+])
+def test_invalid_explanation_fails_closed_without_losing_upstream(monkeypatch, corruption):
+    database, service, quant, llm = service_fixture(monkeypatch)
+    before_quant = copy.deepcopy(quant)
+    candidate = llm["candidates"][0]
+    link = candidate["evidence_links"][0]
+    if corruption == "future_source":
+        link["source_available_at"] = (NOW + timedelta(microseconds=1)).isoformat()
+    elif corruption == "backdated_correction":
+        link.update(revision_no=2, revision_observed_at=(NOW + timedelta(days=1)).isoformat())
+    elif corruption == "future_published":
+        candidate["packet"]["news"][0]["published_at"] = (
+            NOW + timedelta(microseconds=1)
+        ).isoformat()
+        candidate["packet_hash"] = _canonical_hash(candidate["packet"])
+    elif corruption == "instrument":
+        link["instrument_id"] = str(UUID(int=999))
+    elif corruption == "snapshot":
+        link["source_snapshot_id"] = str(UUID(int=999))
+    elif corruption == "manifest":
+        link["manifest_member"] = False
+    elif corruption == "trimmed":
+        candidate["packet"]["news"] = []
+        candidate["packet_hash"] = _canonical_hash(candidate["packet"])
+    elif corruption == "packet_hash":
+        candidate["packet_hash"] = "invalid"
+    elif corruption == "criterion":
+        candidate["criterion_evidence"][0]["criterion"] = "financial"
+    elif corruption == "score":
+        candidate["sub_scores"]["earnings"] = 81
+    elif corruption == "denominator":
+        candidate["weight_denominator"] = 71
+    else:
+        candidate["criterion_evidence"].append(copy.deepcopy(candidate["criterion_evidence"][0]))
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert result.status == "FAILED" and result.selected_count == 0
+    assert result.failure_code == "FUSION_EXPLANATION_VALIDATION_FAILED"
+    assert not database.connection.tables.get("selection.fusion_candidate")
+    assert quant == before_quant
+
+
+def test_explanation_routes_legacy_snapshots_and_integrity_errors(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.repositories.fusions import FusionReadRepository
+    from backend.app.routers.fusions import explanations_router
+
+    database, service, _, _ = service_fixture(monkeypatch)
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    row = stored_read_row(database)
+    monkeypatch.setattr(FusionReadRepository, "fetch", lambda *args: [copy.deepcopy(row)])
+    app = FastAPI()
+    app.state.database = database
+    app.include_router(explanations_router)
+    with TestClient(app) as client:
+        url = f"/api/v2/fusion-selections/{result.fusion_run_id}/explanations"
+        response = client.get(url)
+        assert response.status_code == 200
+        assert response.json()["status"] == "RECORDED"
+        assert response.json()["cutoff_at"].startswith("2026-10-15T09:30:00")
+        saved = copy.deepcopy(row)
+        row["candidates"][0]["explanation"]["quant"]["score"] += 1
+        assert client.get(url).status_code == 500
+        row = copy.deepcopy(saved)
+        row["candidates"][0].pop("explanation")
+        assert client.get(url).status_code == 500
+        row = copy.deepcopy(saved)
+        row["provenance"] = {"manifest_hash": "historical"}
+        for item in row["candidates"]:
+            item.pop("explanation")
+        legacy = copy.deepcopy(row)
+        old = client.get(url)
+        assert old.status_code == 200 and old.json()["status"] == "NOT_RECORDED"
+        assert all(item["status"] == "NOT_RECORDED" and item["explanation"] is None
+                   for item in old.json()["candidates"])
+        assert row == legacy
+        monkeypatch.setattr(FusionReadRepository, "fetch", lambda *args: [])
+        assert client.get(url).status_code == 404
+
+
+def test_null_criterion_citations_remain_unscored_and_partial_metadata_is_explicit(monkeypatch):
+    database, service, _, llm = service_fixture(monkeypatch)
+    candidate = llm["candidates"][0]
+    candidate["criterion_evidence"].append({
+        "evidence_link_id": candidate["evidence_ids"][0], "criterion": "financial",
+        "reason": "The supplied news has no financial figures",
+    })
+    candidate["packet"]["news"][0].pop("title")
+    candidate["packet"]["news"][0]["source_url"] = "http://unsafe.example.test"
+    candidate["packet_hash"] = _canonical_hash(candidate["packet"])
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert result.status == "SUCCEEDED"
+    snapshot = stored_read_row(database)["candidates"][0]["explanation"]
+    assert snapshot["llm"]["score"] == 80 and snapshot["llm"]["supported_count"] == 3
+    assert len(snapshot["llm"]["evidence"]) == 3
+    assert all(item["source_label"] is None and item["source_url"] is None
+               and item["metadata_status"] == "PARTIAL"
+               for item in snapshot["llm"]["evidence"])
+    assert "no financial figures" not in snapshot["llm"]["summary"]
+
+
+def test_explanation_contract_changes_do_not_reuse_old_run(monkeypatch):
+    database, service, _, llm = service_fixture(monkeypatch)
+    first = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    llm["candidates"][0]["rationale"] = "Different unverified rationale"
+    second = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert second.status == "SUCCEEDED" and second.fusion_run_id != first.fusion_run_id
+    assert not second.reused
+
+
+def test_explanation_single_source_never_copies_other_share_class(monkeypatch):
+    database, service, _, llm = service_fixture(monkeypatch)
+    candidate = llm["candidates"][0]
+    candidate["instrument_id"] = UUID(int=9999)
+    candidate["packet"]["identity"]["instrument_id"] = str(candidate["instrument_id"])
+    candidate["packet_hash"] = _canonical_hash(candidate["packet"])
+    link = candidate["evidence_links"][0]
+    link["instrument_id"] = str(candidate["instrument_id"])
+    evidence_id = str(_stable_uuid("llm-run-evidence-link", (
+        f"{llm['llm_ranking_run_id']}:{candidate['instrument_id']}:NEWS:"
+        f"{link['entity_key']}:{link['source_snapshot_id']}"
+    )))
+    link["evidence_link_id"] = evidence_id
+    candidate["evidence_ids"] = [evidence_id]
+    for citation in candidate["criterion_evidence"]:
+        citation["evidence_link_id"] = evidence_id
+    from sp500_candidate_engine.fusion import service as service_module
+
+    members, gates = service_module.read_selection_eligibility(None)
+    members.append({**candidate, "universe_version_id": UNIVERSE})
+    gates[candidate["instrument_id"]] = ()
+    monkeypatch.setattr(
+        "sp500_candidate_engine.fusion.service.read_selection_eligibility",
+        lambda *args, **kwargs: (members, gates),
+    )
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert result.status == "SUCCEEDED"
+    first = next(item for item in stored_read_row(database)["candidates"]
+                 if item["issuer_id"] == str(UUID(int=101)))
+    snapshot = first["explanation"]
+    assert first["instrument_id"] == str(UUID(int=1))
+    assert snapshot["llm"]["selected_in_source"] is False
+    assert snapshot["llm"]["score"] is None and snapshot["llm"]["evidence"] == []
+    assert snapshot["fusion"]["llm_contribution"] is None
+
+
+def test_explanation_bounds_source_labels_safe_urls_and_summary(monkeypatch):
+    database, service, _, llm = service_fixture(monkeypatch)
+    candidate = llm["candidates"][0]
+    candidate["packet"]["news"][0].update(
+        title="Actual title " * 100, source_url="https://news.example.test/article/123",
+    )
+    for citation in candidate["criterion_evidence"]:
+        citation["reason"] = "Specific reported operating change. " * 15
+    candidate["packet_hash"] = _canonical_hash(candidate["packet"])
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert result.status == "SUCCEEDED"
+    snapshot = stored_read_row(database)["candidates"][0]["explanation"]
+    assert len(snapshot["llm"]["summary"]) == 600
+    assert all(
+        len(item["source_label"]) == 256 and len(item["summary"]) <= 600
+        and item["metadata_status"] == "AVAILABLE"
+        and item["source_url"] == "https://news.example.test/article/123"
+        for item in snapshot["llm"]["evidence"]
+    )
+
+
+def test_explanation_contract_is_part_of_fusion_input_identity(monkeypatch):
+    from sp500_candidate_engine.fusion.repository import source_payload_hash
+
+    _, service, quant, llm = service_fixture(monkeypatch)
+    original = source_payload_hash(quant, llm, {}, service.policy)
+    current = source_payload_hash(
+        quant, llm, {"explanation_schema_version": "candidate-explanation-v1"}, service.policy,
+    )
+    newer = source_payload_hash(
+        quant, llm, {"explanation_schema_version": "candidate-explanation-v2"}, service.policy,
+    )
+    assert len({original, current, newer}) == 3
+
+
+def test_explanation_hash_survives_jsonb_numeric_normalization_without_changing_v1_hash():
+    from sp500_candidate_engine.fusion.explanations import explanation_output_hash
+
+    fractional = {"candidate": {"llm": {"score": 80.0, "sub_scores": {"earnings": 75.0}}}}
+    integral = {"candidate": {"llm": {"score": 80, "sub_scores": {"earnings": 75}}}}
+    assert explanation_output_hash(fractional) == explanation_output_hash(integral)
+    assert _canonical_hash(fractional) != _canonical_hash(integral)

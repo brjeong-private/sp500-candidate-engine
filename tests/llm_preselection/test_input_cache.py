@@ -44,6 +44,7 @@ def data():
             "cutoff_at": CUTOFF.isoformat(), "schema_version": "2",
             "identity": {"instrument_id": str(instrument), "issuer_id": str(UUID(int=100 + index)),
                          "symbol": f"T{index}", "company_name": f"Company {index}", "sector": None},
+            "news": [{"event_revision_id": str(index), "title": f"Supplied news {index}"}],
         }
         packets.append({
             "instrument_id": instrument, "packet": payload, "packet_hash": _canonical_hash(payload),
@@ -54,6 +55,7 @@ def data():
             "instrument_id": instrument, "source_snapshot_id": SNAPSHOT, "source_kind": "NEWS",
             "entity_key": str(index), "source_available_at": CUTOFF - timedelta(days=1),
             "observed_at": CUTOFF - timedelta(hours=1), "event_at": CUTOFF - timedelta(days=1),
+            "revision_no": 1, "revision_observed_at": CUTOFF - timedelta(hours=1),
         })
         audit.append({"decision": {"instrument_id": str(instrument), "selected": True}})
     snapshots = [{
@@ -82,12 +84,26 @@ def test_operational_cache_rejects_later_observed_snapshot():
 
 
 @pytest.mark.parametrize(
-    "invalid", ["future_row", "outside_manifest", "hash", "screening", "count"]
+    "invalid", [
+        "future_row", "future_packet_publication", "unlinked_packet", "backdated_correction",
+        "outside_manifest", "hash", "screening", "count",
+    ]
 )
 def test_invalid_cache_is_not_silently_rebuilt(invalid):
     results = deepcopy(data())
     if invalid == "future_row":
         results[2][0]["source_available_at"] = CUTOFF + timedelta(seconds=1)
+    elif invalid == "backdated_correction":
+        results[2][0].update(
+            revision_no=2, revision_observed_at=CUTOFF + timedelta(days=1),
+        )
+    elif invalid in {"future_packet_publication", "unlinked_packet"}:
+        packet = results[1][0]["packet"]
+        if invalid == "future_packet_publication":
+            packet["news"][0]["published_at"] = (CUTOFF + timedelta(microseconds=1)).isoformat()
+        else:
+            packet["news"].append({"event_revision_id": "not-provided"})
+        results[1][0]["packet_hash"] = _canonical_hash(packet)
     elif invalid == "outside_manifest":
         results[3] = []
     elif invalid == "hash":

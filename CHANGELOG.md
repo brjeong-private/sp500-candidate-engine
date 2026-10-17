@@ -1,5 +1,13 @@
 # Change Log
 
+- 2026-10-18 | Rank IC Guide | 순위 예측력과 수익률의 차이·확인된 모델 지표·승격 조건을 쉬운 예시로 설명하고 독립 재계산·동일 조건 비교·별도 학습 실험과 미사용 테스트의 개선 원칙을 별도 문서로 정리했다.
+- 2026-10-17 | VLO Period Search Report | 승인 리소스에서 기간 필터의 요청/응답 echo와 실제 검색 후보를 확인하고 원문 version proof 미노출로 자동 평가 사용 0건임을 별도 문서·Git 제외 증적으로 남겼다.
+- 2026-10-17 | Period-filtered LLM Search | 승인된 Bing Grounding 리소스·프로젝트 연결을 생성하고 freshness 날짜 범위를 실제 도구 설정에 전달하는 별도 v5 검색 정책을 추가했다.
+- 2026-10-17 | LLM NY Day Boundary | LLM에 한해 뉴욕 전일 이전 공개/버전 자료는 일자만 허용하고 당일은 05:30 이전의 명확한 시각을 요구하며 수집·정량 fence는 유지했다.
+- 2026-10-18 | Local-only Checklists | 모든 깊이의 checklist·체크리스트 Markdown 문서를 Git 제외하고 기존 점검표는 로컬 보존하며 공유 README의 링크를 로컬 문서 안내로 변경했다.
+- 2026-10-17 | MEDIUM Duplicate Report Cleanup | 10월 1~7일의 현재 후보 run에 연결된 5일·50개 분석을 보존하고 이전 MEDIUM_20D 분석 5회·작업 50건·이벤트 500건·dispatch 50건·Blob 50개를 삭제했으며 후보 원본·다른 분석·나머지 Blob 398개·기존 네트워크 차단을 보존했다.
+- 2026-10-17 | Daily Fusion Only | 공통 하네스와 실행 가이드에 정규 데일리 Fusion 전용 정책을 고정하고 신규 타이머의 Fusion 비활성·누락 차단과 수동·주간·기존 replay 보존을 구현했으며 차단 코드 미배포를 명시했다.
+- 2026-10-17 | October Daily Fusion Checklist | 운영 Fusion·LLM 활성 설정을 읽기 전용 재확인하고 기존 일정에 따른 10/19 비거래일 skip·10/20 실제 Fusion의 원천 lineage·최종 20개·전량 ACK 점검표와 사후 기록 양식을 추가했다.
 - 2026-10-17 | Pipeline Architecture Refresh | 공통 context 이후 독립 Quant·LLM 병렬 실행과 부분 성공 보존·고정 Fusion·전량 ACK 흐름을 현재 운영 ON/기본 OFF 상태에 맞춰 갱신했다.
 - 2026-10-17 | LLM Architecture Refresh | 운영 DB-only v2와 로컬 native 검색 v4를 구분하고 전체 출처·공개 시점·원문 버전 admission 및 새 평가 대화 격리·감사용 모델 metadata 계약을 정리했다.
 - 2026-10-17 | Orchestrator Architecture Refresh | 배포된 주간 전용 메일·최대 네 차례 요약·공통 메일 OFF와 terminal parent 재진입 시 DB acceptance로 중복을 막는 구조를 문서에 반영했다.
@@ -395,3 +403,5 @@
 - 2026-10-10 | Documentation | 데이터 수집 보완 10개 항목의 반영 여부·제한과 1년 변경분 재처리·멱등 검증 결과를 기록했다.
 - 2026-10-10 | Data | 2025-10-09~2026-04-08 parent run 123일과 manual retry 1일을 완료해 총 251거래일·126,233 logical bars를 확보했다.
 - 2026-10-10 | Review | Qlib readiness 문서를 1년 실측 coverage·VWAP·adjustment·benchmark·outlier·temporal integrity 지표로 갱신했다.
+- 2026-10-17 | LLM | 기간 검색 뉴스를 인용 URL·페이지에서 Python이 읽은 게시일/시각으로 판정하도록 재구현했다(전일 이전은 일자, 당일은 05:30 이전 시각만 승인, 미확인은 거부).
+- 2026-10-17 | Documentation | 프로젝트·LLM 하네스에 인용 페이지 게시일 판정 규칙과 candidate-citations.json 비의존을 명시했다.

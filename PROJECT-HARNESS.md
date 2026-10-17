@@ -50,6 +50,14 @@ context를 두 독립 파이프라인에 전달하고 각각의 결과·실패�
 Fusion은 두 성공 run 이후의 별도 후보 선정 단계이며 앞으로도 `MEDIUM_20D` 전용이다.
 기존 SHORT_5D 정량·외부 전달 경로는 유지하며 SHORT Fusion은 지원하지 않는다.
 
+2026-10-17 사용자 승인 이후 **데일리 정규 실행은 MEDIUM_20D Fusion 경로만 사용**한다.
+공통 수집·전처리와 고정 context의 독립 Quant Top 20·LLM Top 20은 Fusion의 필수 원천으로
+유지하며, 최종 결과는 Fusion Top 20이다. 정량 단독 완료를 정규 실행 성공으로 대체하지 않는다.
+신규 정규 타이머는 Fusion 비활성·설정 누락 시 명시적으로 실패하고 다른 경로로 진행하지 않는다.
+안전한 기본 비활성 설정·기존 Durable history·명시적 독립/수동 실행·주간 두 모델 재학습은
+유지한다. 기존 05:30 뉴욕 시각·직전 달력 날짜·비거래일 skip 규칙도 변경하지 않는다.
+외부 전달은 계속 별도 승인 플래그와 전량 ACK 계약을 요구한다.
+
 독립 후보 실행은 기존 execution context에서 QUANTITATIVE·LLM_PRESELECTION·FUSION
 중 한 단계만 실행한다. 수집·학습·다른 후보 분기·외부 분석을 암묵 실행하지 않는다.
 독립 stage run과 immutable 사업 결과 run ID를 구분하고, 수락 당시 context·artifact·
@@ -73,8 +81,9 @@ null·결측 사유를 보존한다. OHLCV·Quant 점수·검증되지 않은 �
 외부 Portal·TradingAgents에 전달할 최종 후보 계약은 **20개**다(2026-10-16:
 기존 5~10개에서 변경). 최종 Top 20을 다시 5~10개로 축소하거나 두 중간 목록을
 40개로 전달하지 않는다. 이 계약은 SHORT_5D 레거시 정책을 변경하지 않는다.
-Fusion·전달 어댑터는 기본 비활성으로 구현한다. `FUSION_ENABLED=false`인 MEDIUM은
-`parallel_preselection`에서 제출 없이 종료한다. 운영 migration·배포·소비자 전량 수용과
+Fusion·전달 어댑터는 기본 비활성으로 구현한다. `FUSION_ENABLED=false`인 MEDIUM 호환 실행은
+`parallel_preselection`에서 제출 없이 종료하며 신규 정규 타이머는 시작을 차단한다.
+운영 migration·배포·소비자 전량 수용과
 멱등성 검증 및 명시적 승인 전에는 자동 전달을 활성화하지 않는다.
 
 오케스트레이터는 Candidate 실행과 외부 소비자 연계를 조정하는 control plane이며,
@@ -198,6 +207,26 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
 - 검증·원문 접근·artifact 재현 실패는 명시적 실패이며 구 정책/영문 cache/무보강 성공으로
   조용히 대체하지 않는다. 본문 미확보도 보강 성공이 아니며 승인 문단이 없으면 평가하지 않는다.
   운영 활성화에는 별도 정책 선택·artifact 보존·배포 검증이 필요하다.
+
+### 4.3.3 LLM 전용 뉴욕 일자·05:30 규칙
+
+- 이 예외는 **LLM 입력·검색 보강의 공개일/해당 원문 버전일 판정에만** 적용한다.
+  수집·정량·Qlib·일반 temporal fence와 DB 원천 timestamp는 변경하지 않는다.
+- 기준일은 실행 cutoff를 `America/New_York`로 변환한 날짜다. 전일 이전 공개/버전 자료는
+  **일자만 확인**하며 생성 시각이 없다는 이유로 거부하지 않는다.
+- 기준일 당일 자료만 뉴욕 **05:30 이전**의 신뢰 가능한 timezone-aware 시각을 요구한다.
+  당일 날짜만 있거나 05:30 정각/이후이면 거부한다. 명시 context cutoff가 더 이르면 그 경계를 유지한다.
+- timestamp가 있으면 뉴욕 날짜로 변환해 전일/당일을 판단한다. 날짜만 있으면 뉴욕 달력일이다.
+  DST는 고정 UTC offset이 아니라 IANA timezone으로 계산한다.
+- 사건 발생일·회계 대상일이 아니라 **자료 공개일과 해당 원문 버전 공개일** 기준이다.
+  전일 기사라도 당일 05:30 이후 수정본이면 사용할 수 없다. 원문 버전 증명 자체는 생략하지 않는다.
+- 날짜 단위 허용의 저장 bound는 해당 NY 날짜의 종료 시각이며 실제 생성 시각을 만든 값이 아니다.
+  declared publication·NY local date·DAY/TIMESTAMP precision을 함께 기록한다.
+- source 날짜와 version은 Python admission 코드가 검증한다. LLM이 주장한 날짜를
+  독립 원천 증명으로 취급하지 않으며 모델 이름/버전도 승인 기준이 아니다.
+- 기간 검색 뉴스는 Python이 **인용 URL과 해당 페이지에서 직접 읽은** 게시일/시각으로 판정한다.
+  전일 이전은 일자만, 당일은 페이지에서 읽은 timezone 시각이 05:30 이전일 때만 승인한다.
+  날짜·당일 시각을 읽지 못하거나 미래 날짜이면 해당 출처를 거부하며 별도 원문 파일은 요구하지 않는다.
 
 ### 4.4 학습 누수
 

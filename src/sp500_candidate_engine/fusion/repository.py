@@ -8,6 +8,13 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 
 from sp500_candidate_engine.database import _canonical_hash
+from sp500_candidate_engine.fusion.explanations import (
+    EXPLANATION_VERSIONS,
+    CandidateExplanation,
+    explanation_output_hash,
+    explanation_payload,
+    validate_stored_explanation,
+)
 from sp500_candidate_engine.fusion.policy import FusionPolicy, FusionResult, rrf_score
 
 
@@ -52,7 +59,13 @@ class FusionRepository:
                         'sector', member.sector, 'position', candidate.position,
                         'score', candidate.predicted_return,
                         'original_rank', candidate.rank_overall,
-                        'quality_status', candidate.quality_status
+                        'quality_status', candidate.quality_status,
+                        'reason_codes', COALESCE((
+                            SELECT jsonb_agg(reason.reason_code ORDER BY reason.priority)
+                            FROM selection.candidate_reason reason
+                            WHERE reason.selection_run_id = candidate.selection_run_id
+                              AND reason.instrument_id = candidate.instrument_id
+                        ), '[]'::jsonb)
                     ) ORDER BY candidate.position)
                     FROM selection.candidate candidate
                     JOIN ref.instrument instrument USING (instrument_id)
@@ -74,6 +87,7 @@ class FusionRepository:
             SELECT run.*, ranking.execution_context_id, ranking.policy_hash,
                 ranking.input_hash, ranking.prompt_version, ranking.deployment,
                 ranking.api_version, ranking.evidence_schema_version,
+                ranking.window_config AS assessment_config,
                 ranking.status AS ranking_status,
                 COALESCE((
                     SELECT jsonb_agg(jsonb_build_object(
@@ -84,6 +98,38 @@ class FusionRepository:
                         'original_rank', candidate.first_stage_rank,
                         'supported_count', assessment.supported_count,
                         'weight_denominator', assessment.weight_denominator,
+                        'rationale', assessment.rationale,
+                        'sub_scores', assessment.sub_scores,
+                        'missing_reasons', assessment.missing_reasons,
+                        'criterion_evidence', assessment.criterion_evidence,
+                        'packet', packet.packet, 'packet_hash', packet.packet_hash,
+                        'evidence_links', COALESCE((
+                            SELECT jsonb_agg(jsonb_build_object(
+                                'evidence_link_id', link.evidence_link_id,
+                                'instrument_id', link.instrument_id,
+                                'source_snapshot_id', link.source_snapshot_id,
+                                'source_kind', link.source_kind, 'entity_key', link.entity_key,
+                                'source_available_at', link.source_available_at,
+                                'observed_at', link.observed_at,
+                                'event_at', link.event_at,
+                                'revision_no', revision.revision_no,
+                                'revision_observed_at', revision.observed_at,
+                                'manifest_member', EXISTS (
+                                    SELECT 1 FROM ops.execution_context context
+                                    JOIN ops.input_manifest_member member USING (input_manifest_id)
+                                    WHERE context.execution_context_id =
+                                          ranking.execution_context_id
+                                      AND member.source_snapshot_id = link.source_snapshot_id
+                                )
+                            ) ORDER BY link.evidence_link_id)
+                            FROM analytics.llm_evidence_link link
+                            LEFT JOIN event.event_revision revision
+                              ON revision.event_revision_id = CASE
+                                WHEN link.source_kind IN ('NEWS', 'EARNINGS', 'EVENT')
+                                THEN link.entity_key::uuid END
+                            WHERE link.llm_ranking_run_id = run.llm_ranking_run_id
+                              AND link.instrument_id = candidate.instrument_id
+                        ), '[]'::jsonb),
                         'evidence_ids', COALESCE((
                             SELECT jsonb_agg(evidence.evidence_link_id ORDER BY evidence.priority)
                             FROM selection.llm_preselection_evidence evidence
@@ -119,6 +165,7 @@ class FusionRepository:
         llm_id: uuid.UUID | None, target_session: date, cutoff_at: datetime,
         policy: FusionPolicy, payload_hash: str, idempotency_key: str,
         provenance: dict[str, object], result: FusionResult | None, failure_code: str | None,
+        explanations: dict[str, CandidateExplanation] | None = None,
     ) -> dict[str, object]:
         self.connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (idempotency_key,)
@@ -132,6 +179,18 @@ class FusionRepository:
                 raise FusionConflictError("Fusion idempotency payload conflict")
             return {**existing, "reused": True}
         candidates = result.candidates if result is not None else ()
+        if (
+            provenance.get("explanation_schema_version") in EXPLANATION_VERSIONS
+            and result is not None
+            and (
+                explanations is None
+                or set(explanations) != {str(item.instrument_id) for item in candidates}
+                or provenance.get("explanation_output_hash") != explanation_output_hash({
+                    key: explanation_payload(value) for key, value in explanations.items()
+                })
+            )
+        ):
+            raise ValueError("Fusion explanation snapshot/hash mismatch")
         if result is not None:
             audit = {row["instrument_id"]: row for row in result.audit}
             if (
@@ -198,6 +257,14 @@ class FusionRepository:
                 "reason_codes": list(item.reason_codes),
                 "source_evidence_refs": list(item.llm.evidence_ids) if item.llm else [],
             }
+            if explanations is not None:
+                explanation = explanations[str(item.instrument_id)]
+                explanation.__post_init__()
+                validate_stored_explanation(
+                    explanation, candidate, context_id=context_id, target_session=target_session,
+                    cutoff_at=cutoff_at, rrf_k=policy.k, quant_id=quant_id, llm_id=llm_id,
+                )
+                candidate["explanation"] = explanation_payload(explanation)
             self.connection.execute(
                 """
                 INSERT INTO selection.fusion_candidate(

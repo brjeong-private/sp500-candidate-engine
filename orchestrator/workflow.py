@@ -637,7 +637,7 @@ def weekly_model_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any
         )
         weekly_run_id = str(accepted["weekly_run_id"])
         if accepted["status"] in WEEKLY_TERMINAL:
-            run_status = accepted
+            run_status = yield context.call_activity("weekly_training_status", weekly_run_id)
         else:
             started = yield context.call_activity(
                 "start_weekly_training_job",
@@ -705,6 +705,14 @@ def weekly_model_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any
             "model_purpose": model_purpose,
             "weekly_run_id": weekly_run_id,
             "status": run_status["status"],
+            **{
+                key: run_status[key]
+                for key in (
+                    "anchor_session", "challenger_model_version_id", "champion_model_version_id",
+                    "error_code",
+                )
+                if run_status.get(key) is not None
+            },
         }
     except Exception:
         return {
@@ -714,6 +722,40 @@ def weekly_model_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any
             "model_purpose": model_purpose,
             "weekly_run_id": weekly_run_id,
         }
+
+
+def _weekly_email(
+    iso_week: str, state: str, models: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    lines = [
+        "프로젝트: S&P 500 Candidate Engine",
+        f"작업: 주말 모델 재학습·평가·업데이트 / {iso_week}",
+        f"진행 상태: {state}",
+    ]
+    descriptions = {
+        "SUCCEEDED": "신규 모델 승격·활성 검증 완료",
+        "REJECTED": "승격 기준 미충족, 기존 모델 유지",
+        "FAILED": "업데이트 실패, 성공·승격으로 처리하지 않음",
+        "TIMED_OUT": "제한 시간 초과, 승격 확정 아님",
+    }
+    if not models:
+        lines.append("SHORT_5D 다음 MEDIUM_20D 순서로 학습·평가를 진행합니다.")
+    for purpose, outcome in models.items():
+        outcome_state = str(outcome["state"])
+        lines.append(f"{purpose}: {descriptions.get(outcome_state, outcome_state)}")
+        for key, label in (
+            ("weekly_run_id", "실행"),
+            ("challenger_model_version_id", "신규 모델"),
+            ("champion_model_version_id", "기존 모델"),
+            ("stage", "단계"),
+        ):
+            if outcome.get(key) is not None:
+                lines.append(f"  {label}: {outcome[key]}")
+    return {
+        "category": "weekly_training",
+        "subject": f"[candidate-engine] 주말 모델 업데이트 {iso_week} {state}",
+        "body": "\n".join(lines),
+    }
 
 
 def weekly_parent_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
@@ -728,6 +770,12 @@ def weekly_parent_orchestrator(context: Any) -> Generator[Any, Any, dict[str, An
             "models": {},
         }
     models: dict[str, dict[str, Any]] = {}
+    notifications = request.get("weekly_email_notifications") is True
+    email_results = []
+    if notifications:
+        email_results.append((yield from _send_email(
+            context, request, _weekly_email(iso_week, "STARTED", models), stage="weekly_started",
+        )))
     for model_purpose in MODEL_SEQUENCE:
         child_result = yield context.call_sub_orchestrator(
             "weekly_model_orchestrator",
@@ -740,6 +788,26 @@ def weekly_parent_orchestrator(context: Any) -> Generator[Any, Any, dict[str, An
             request["child_instance_ids"][model_purpose],
         )
         models[model_purpose] = child_result
+        if notifications:
+            email_results.append((yield from _send_email(
+                context, request,
+                _weekly_email(iso_week, f"{model_purpose} {child_result['state']}", {
+                    model_purpose: child_result,
+                }),
+                stage="weekly_model_result",
+            )))
     states = {item["state"] for item in models.values()}
     state = "SUCCEEDED" if states <= {"SUCCEEDED", "REJECTED"} else "FAILED"
-    return {"state": state, "iso_week": iso_week, "models": models}
+    final = {"state": state, "iso_week": iso_week, "models": models}
+    if notifications:
+        email_results.append((yield from _send_email(
+            context, request, _weekly_email(iso_week, state, models), stage="weekly_terminal",
+        )))
+        final["email_status"] = (
+            "FAILED" if any(_email_delivery_failed(response) for response in email_results)
+            else "DISABLED" if all(
+                isinstance(response, dict) and response.get("disabled") is True
+                for response in email_results
+            ) else "SENT"
+        )
+    return final

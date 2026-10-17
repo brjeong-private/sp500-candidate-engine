@@ -106,6 +106,18 @@ existing input JSONB. No new source tables or DDL are required. Replay reruns th
 Fusion search snapshots use `candidate-explanation-v3`; old v1 snapshots/handoff remain unchanged.
 The mandatory source/time contract is [LLM-HARNESS.md](../src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md).
 
+For tool-level historical date filtering select
+`config/llm_preselection/policy_event_period_v5.yaml` and configure
+`BING_GROUNDING_PROJECT_ENDPOINT` plus `BING_GROUNDING_CONNECTION_ID`.
+The provider sends `freshness=YYYY-MM-DD..YYYY-MM-DD` in the actual `bing_grounding` tool
+configuration. This is Bing discovery-date filtering, not historical source-version proof.
+The original-version gate remains mandatory; unavailable provenance fails closed.
+
+LLM publication/version checks use NY calendar dates: prior days need no creation timestamp;
+same-day sources require a trusted timezone-aware time strictly before 05:30 New York.
+An earlier explicit context cutoff remains stricter. Collection/Quant fences are unchanged.
+DAY precision is recorded with its conservative day-end bound, not as an invented publication time.
+
 Responses use `{ "items": [...], "next_cursor": null }`. When `next_cursor` is
 non-null, resend it with the same dataset and filters; page size may change.
 Cursors are authenticated, versioned, and bound to the request filters. They

@@ -8,6 +8,12 @@ from decimal import Decimal
 
 from sp500_candidate_engine.analytics.source_repository import SourceRepository
 from sp500_candidate_engine.database import Database, _canonical_hash
+from sp500_candidate_engine.fusion.explanations import (
+    build_explanations,
+    explanation_config,
+    explanation_output_hash,
+    explanation_payload,
+)
 from sp500_candidate_engine.fusion.policy import FusionInput, FusionPolicy, fuse_candidates
 from sp500_candidate_engine.fusion.repository import FusionRepository, source_payload_hash
 from sp500_candidate_engine.llm_preselection.config import LlmPreselectionConfig
@@ -41,6 +47,7 @@ def _inputs(row: dict[str, object]) -> tuple[FusionInput, ...]:
             str(item["symbol"]), str(item["sector"]) if item["sector"] is not None else None,
             item["position"], float(item["score"]), item["original_rank"],
             tuple(str(value) for value in item.get("evidence_ids", ())),
+            tuple(str(value) for value in item.get("reason_codes", ())),
         ))
     return tuple(result)
 
@@ -85,7 +92,20 @@ class FusionService:
                 "expected_quant_policy_version": self.quantitative_policy_version,
                 "expected_quant_policy_hash": self.quantitative_policy_hash,
             }
+            config = explanation_config(
+                self.llm_config.rubric, self.llm_config.limits.rationale_characters,
+                verified_external=self.llm_config.enrichment is not None,
+            )
+            provenance.update(
+                explanation_schema_version=config["schema_version"], explanation_config=config,
+                explanation_config_hash=_canonical_hash(config),
+                explanation_input_hash=_canonical_hash({
+                    "quant": quant, "llm": llm, "context": context, "config": config,
+                }),
+            )
             result = None
+            explanations = None
+            explanation_started = False
             failure_code = None
             try:
                 if quant is None or llm is None:
@@ -151,11 +171,25 @@ class FusionService:
                     quantitative=quant_inputs, llm=llm_inputs,
                     gate_reasons=gates, policy=self.policy,
                 )
+                explanation_started = True
+                explanations = build_explanations(
+                    result, quant=quant, llm=llm, context=context, target_session=target_session,
+                    rubric=self.llm_config.rubric,
+                    rationale_limit=min(600, self.llm_config.limits.rationale_characters),
+                    rrf_k=self.policy.k,
+                )
+                provenance["explanation_output_hash"] = explanation_output_hash({
+                    key: explanation_payload(value) for key, value in explanations.items()
+                })
                 if result.status == "SHORTFALL":
                     failure_code = "INSUFFICIENT_UNION_CANDIDATES"
             except (ValueError, KeyError, TypeError, OverflowError) as error:
                 logger.exception("fusion_input_validation_failed")
-                failure_code = "FUSION_INPUT_VALIDATION_FAILED"
+                result, explanations = None, None
+                failure_code = (
+                    "FUSION_EXPLANATION_VALIDATION_FAILED" if explanation_started
+                    else "FUSION_INPUT_VALIDATION_FAILED"
+                )
                 provenance["validation_error_type"] = type(error).__name__
                 provenance["validation_error_code"] = (
                     str(error) if isinstance(error, ValueError) else "INVALID_SOURCE_SHAPE"
@@ -189,6 +223,7 @@ class FusionService:
                 target_session=target_session, cutoff_at=cutoff, policy=self.policy,
                 payload_hash=payload_hash, idempotency_key=key,
                 provenance=provenance, result=result, failure_code=failure_code,
+                explanations=explanations,
             )
             selected_count, failure = row["selected_count"], row["failure_code"]
             if type(selected_count) is not int or not (

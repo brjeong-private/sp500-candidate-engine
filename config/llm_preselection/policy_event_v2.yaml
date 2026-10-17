@@ -4,7 +4,7 @@ selection_type: LLM_PRESELECTION
 score_semantics: LLM_EVIDENCE_SCORE
 evaluation_mode: EVENT_SCREENED
 evidence_schema_version: "2"
-prompt_version: llm-event-preselection-v2
+prompt_version: llm-event-preselection-v3-ko
 requested_count: 20
 first_stage_pool_size: 20
 batch_size: 5

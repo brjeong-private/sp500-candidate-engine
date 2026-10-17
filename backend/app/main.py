@@ -163,6 +163,7 @@ def create_app(
         collection_data.router,
         execution.router,
         fusions.router,
+        fusions.explanations_router,
         llm_preselections.router,
         pipeline_runs.router,
         weekly_training.router,

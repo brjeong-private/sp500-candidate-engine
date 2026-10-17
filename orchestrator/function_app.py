@@ -56,7 +56,7 @@ from scheduler import (
     weekly_model_instance_id,
     weekly_parent_instance_id,
 )
-from settings import boolean_flag, fusion_policy_identity
+from settings import ConfigurationError, boolean_flag, fusion_policy_identity
 from telemetry import emit_pipeline_telemetry as emit_pipeline_telemetry_client
 from workflow import daily_orchestrator as daily_orchestrator_generator
 from workflow import dual_model_parent as dual_model_parent_generator
@@ -117,6 +117,7 @@ def _parent_orchestration_input(analysis_date) -> dict[str, object]:
 def _weekly_parent_input(iso_week: str) -> dict[str, object]:
     return {
         "iso_week": iso_week,
+        "weekly_email_notifications": True,
         "timeout_minutes": _positive_int("ORCHESTRATOR_WEEKLY_TIMEOUT_MINUTES", 720),
         "poll_seconds": _positive_int("ORCHESTRATOR_WEEKLY_POLL_SECONDS", 60),
         "child_instance_ids": {
@@ -255,10 +256,13 @@ async def _hourly_timer(client: df.DurableOrchestrationClient) -> None:
     instance_id = orchestration_instance_id(analysis_date, model_purpose)
     if _is_active_instance(await client.get_status(instance_id)):
         return
+    daily_input = _orchestration_input(analysis_date, model_purpose)
+    if daily_input.get("fusion_enabled") is not True:
+        raise ConfigurationError("Scheduled daily pipeline requires FUSION_ENABLED=true")
     await client.start_new(
         "daily_orchestrator",
         instance_id,
-        _orchestration_input(analysis_date, model_purpose),
+        daily_input,
     )
 
 

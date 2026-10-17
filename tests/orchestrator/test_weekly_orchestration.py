@@ -12,6 +12,7 @@ sys.path.insert(0, str(ORCHESTRATOR_ROOT))
 
 import clients  # noqa: E402
 import function_app  # noqa: E402
+import pytest  # noqa: E402
 import scheduler  # noqa: E402
 import workflow  # noqa: E402
 
@@ -67,6 +68,110 @@ def test_weekly_parent_runs_both_models_after_short_failure():
     assert outcome["models"]["MEDIUM_20D"]["state"] == "SUCCEEDED"
 
 
+@pytest.mark.parametrize("email_result", [
+    {"sent": True}, {"sent": False, "disabled": True}, {"sent": False, "error": "ProviderError"},
+])
+def test_weekly_notifications_report_progress_and_results_without_blocking_models(email_result):
+    class Context(ParentContext):
+        def get_input(self):
+            return {**super().get_input(), "weekly_email_notifications": True}
+
+    context = Context()
+    events = []
+    generator = workflow.weekly_parent_orchestrator(context)
+    try:
+        event = next(generator)
+        while True:
+            events.append(event)
+            if event[:2] == ("activity", "weekly_eligibility"):
+                response = {"eligible": True}
+            elif event[:2] == ("activity", "send_email"):
+                response = email_result
+            elif event[:2] == ("activity", "emit_pipeline_telemetry"):
+                response = {"emitted": True}
+            else:
+                assert event[0] == "sub"
+                purpose = event[2]["model_purpose"]
+                response = {
+                    "state": "FAILED" if purpose == "SHORT_5D" else "SUCCEEDED",
+                    "model_purpose": purpose,
+                    "weekly_run_id": f"run-{purpose}",
+                    "challenger_model_version_id": f"challenger-{purpose}",
+                    "champion_model_version_id": f"champion-{purpose}",
+                }
+            event = generator.send(response)
+    except StopIteration as stopped:
+        outcome = stopped.value
+
+    assert [event[2]["model_purpose"] for event in events if event[0] == "sub"] == [
+        "SHORT_5D", "MEDIUM_20D",
+    ]
+    assert outcome["state"] == "FAILED"
+    assert outcome["models"]["MEDIUM_20D"]["state"] == "SUCCEEDED"
+    expected_status = "SENT" if email_result.get("sent") else (
+        "DISABLED" if email_result.get("disabled") else "FAILED"
+    )
+    assert outcome["email_status"] == expected_status
+    emails = [event[2] for event in events if event[:2] == ("activity", "send_email")]
+    assert len(emails) == 4
+    assert {email["category"] for email in emails} == {"weekly_training"}
+    assert emails[0]["subject"].endswith("STARTED")
+    assert emails[1]["subject"].endswith("SHORT_5D FAILED")
+    assert emails[2]["subject"].endswith("MEDIUM_20D SUCCEEDED")
+    assert emails[3]["subject"].endswith("FAILED")
+    assert "challenger-MEDIUM_20D" in emails[-1]["body"]
+    assert "champion-MEDIUM_20D" in emails[-1]["body"]
+    assert "프로젝트: S&P 500 Candidate Engine" in emails[-1]["body"]
+
+
+def test_ineligible_weekly_parent_does_not_send_email():
+    class Context(ParentContext):
+        def get_input(self):
+            return {**super().get_input(), "weekly_email_notifications": True}
+
+    outcome, events = _run(
+        workflow.weekly_parent_orchestrator(Context()),
+        iter([{"eligible": False, "reason": "ALREADY_ACCEPTED"}]),
+    )
+    assert outcome["state"] == "SKIPPED"
+    assert [event[1] for event in events] == ["weekly_eligibility"]
+
+
+def test_new_weekly_input_enables_notifications_without_changing_existing_history():
+    assert function_app._weekly_parent_input("2026-W42")["weekly_email_notifications"] is True
+    assert "weekly_email_notifications" not in ParentContext().get_input()
+
+
+def test_weekly_model_summary_includes_stored_versions_after_activation():
+    class Context(ParentContext):
+        current_utc_datetime = datetime(2026, 10, 17, 4, tzinfo=UTC)
+
+        def get_input(self):
+            return {
+                **super().get_input(), "model_purpose": "MEDIUM_20D",
+            }
+
+    outcome, events = _run(
+        workflow.weekly_model_orchestrator(Context()),
+        iter([
+            {"weekly_run_id": "weekly-id", "status": "PENDING"},
+            {"execution_name": "execution-id"},
+            {"terminal": True, "succeeded": True},
+            {
+                "status": "PROMOTED", "anchor_session": "2026-10-16",
+                "challenger_model_version_id": "challenger-id",
+                "champion_model_version_id": "incumbent-id",
+                "unexpected_provider_payload": "must-not-leak",
+            },
+            {"passed": True},
+        ]),
+    )
+    assert outcome["state"] == "SUCCEEDED"
+    assert outcome["challenger_model_version_id"] == "challenger-id"
+    assert outcome["champion_model_version_id"] == "incumbent-id"
+    assert "unexpected_provider_payload" not in outcome
+
+
 def test_weekly_ids_and_new_york_weekend_gate_are_deterministic():
     assert scheduler.scheduled_weekly_iso_week(
         datetime(2026, 10, 17, 4, tzinfo=UTC)
@@ -120,6 +225,7 @@ def test_hourly_weekend_gate_restarts_terminal_weekly_parent(monkeypatch):
 
 
 def test_weekend_daily_tick_keeps_weekly_models_but_starts_only_medium_daily(monkeypatch):
+    monkeypatch.setenv("FUSION_ENABLED", "true")
     monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: "2026-W42")
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 16))
     client = TimerClient()
@@ -132,6 +238,7 @@ def test_weekend_daily_tick_keeps_weekly_models_but_starts_only_medium_daily(mon
     ]
     assert set(client.started[0][2]["child_instance_ids"]) == {"SHORT_5D", "MEDIUM_20D"}
     assert client.started[1][2]["model_purpose"] == "MEDIUM_20D"
+    assert client.started[1][2]["fusion_enabled"] is True
 
 
 def test_weekly_job_template_preserves_runtime_contract_and_overrides_inputs():

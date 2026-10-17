@@ -73,6 +73,11 @@ param emailRecipients string
 
 @description('Whether orchestrator email notifications are sent.')
 param emailEnabled bool = false
+@description('Enable only weekly model-update email, independently of pipeline and guardian email.')
+param weeklyEmailEnabled bool = false
+@secure()
+@description('Weekly model-update recipients, independent of other notifications.')
+param weeklyEmailRecipients string = ''
 param fusionEnabled bool = false
 param fusionExternalDeliveryEnabled bool = false
 param fusionExternalContractVersion string = ''
@@ -662,6 +667,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'ORCHESTRATOR_EMAIL_ENABLED'
           value: string(emailEnabled)
+        }
+        {
+          name: 'ORCHESTRATOR_WEEKLY_EMAIL_ENABLED'
+          value: string(weeklyEmailEnabled)
+        }
+        {
+          name: 'ORCHESTRATOR_WEEKLY_EMAIL_RECIPIENTS'
+          value: weeklyEmailRecipients
         }
         {
           name: 'ORCHESTRATOR_EXCHANGE_MIC'

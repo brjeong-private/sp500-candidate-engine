@@ -177,6 +177,14 @@ class EvidencePacketBuilder:
             )
             for member in members
         )
+        from sp500_candidate_engine.llm_preselection.temporal import validate_packet
+
+        for packet in packets:
+            validate_packet(
+                packet, cutoff_at=cutoff_at, target_session=target_session,
+                execution_context_id=execution_context_id if self.config.event_policy else None,
+                knowledge_mode=str(context["knowledge_mode"]),
+            )
         if self.config.screening is not None:
             from sp500_candidate_engine.llm_preselection.screening import screen_packets
 
@@ -336,17 +344,22 @@ class EvidencePacketBuilder:
         }
         if self.config.event_policy:
             packet["execution_context_id"] = str(execution_context_id)
+        if self.config.enrichment is not None:
+            packet["identity"]["cik"] = self.repository.read_issuer_cik(issuer_id=issuer_id)
         packet = _json_value(packet)  # type: ignore[assignment]
         assert isinstance(packet, dict)
         encoded = json.dumps(
             packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        base_budget = self.config.limits.packet_characters - (
+            self.config.enrichment.reserved_characters if self.config.enrichment else 0
         )
         if self.config.event_policy:
             raw_sections = {
                 "news": news, "earnings": earnings, "filings": filings,
                 "facts": facts, "corporate_actions": actions, "events": other_events,
             }
-            while len(encoded) > self.config.limits.packet_characters:
+            while len(encoded) > base_budget:
                 nonempty = [key for key, values in raw_sections.items() if values]
                 if not nonempty:
                     break
@@ -367,7 +380,7 @@ class EvidencePacketBuilder:
                 encoded = json.dumps(
                     packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True
                 )
-        if len(encoded) > self.config.limits.packet_characters:
+        if len(encoded) > base_budget:
             raise ValueError(
                 f"Evidence packet exceeds character budget for {instrument_id}"
             )

@@ -1,8 +1,8 @@
 # S&P 500 Candidate Engine
 
 미국 거래일마다 수집한 point-in-time 데이터로 후속 분석 후보를 선정하는 엔진입니다.
-일일 기본 경로는 **MEDIUM_20D 정량 후보 20개**이며, 별도 LLM 후보 20개와
-RRF 최종 통합 후보 20개를 생성합니다. **성공한 최종 Fusion 20개 전체를 외부에 전달**하며
+데일리 정규 실행은 **MEDIUM_20D Fusion 전용**입니다. 공통 수집 후 독립 정량·LLM 후보
+각 20개를 원천으로 RRF 최종 20개를 생성합니다. **성공한 최종 Fusion 20개 전체를 외부에 전달**하며
 기존 SHORT_5D 5~10개 경로는 별도로 유지합니다. 후보는 매수 추천이나 주문이 아닙니다.
 
 공통 범위·무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를
@@ -24,9 +24,12 @@ RRF 최종 통합 후보 20개를 생성합니다. **성공한 최종 Fusion 20�
   예정된 실행의 성공 여부는 실제 run으로 확인해야 합니다.
 - 실행·재시도 계약은 [오케스트레이터 가이드](orchestrator/README.md),
   오류 조회는 [Telemetry·KQL 런북](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을 따릅니다.
+- 로컬 체크리스트 `DAILY-FUSION-2026-10-19-CHECKLIST.md`는
+  10/19 비거래일 skip과 10/20의 10/19 거래 세션 처리·최종 20개·전량 ACK를 구분합니다.
+  신규 타이머의 Fusion 비활성 차단은 로컬 변경이며 이번 작업에서 배포하지 않았습니다.
 - 신규 후보 근거 snapshot·v2 설명/결과 통합 조회와 과거일 LLM cutoff 강제 하네스는
   로컬 구현이며 아직 운영에 배포하지 않았습니다. 추가 DDL·요약용 LLM 호출은 없습니다.
-  로컬 회귀 626건·Ruff·관련 모듈 타입 검사와 격리 PostgreSQL의 설명 조회·JSONB hash
+  로컬 회귀 649건·Ruff·관련 모듈 타입 검사와 격리 PostgreSQL의 설명 조회·JSONB hash
   왕복·미래 수정본 차단·원자적 rollback·기존 handoff/ACK를 검증했습니다.
 - 이벤트 LLM의 로컬 prompt는 `llm-event-preselection-v3-ko`로 변경했습니다.
   질문·재질의와 요약·인용 이유·결측 사유는 한국어이며 JSON 식별자와 원문은 보존합니다.
@@ -40,6 +43,11 @@ RRF 최종 통합 후보 20개를 생성합니다. **성공한 최종 Fusion 20�
   [LLM 전용 하네스](src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md)에 따라
   미래/현재/버전 미확인 출처가 섞이면 검색 전체를 거부하고 점수를 만들지 않습니다.
   일반 뉴스는 날짜 표기만으로 승인하지 않으며 기존 v2·운영 설정은 유지합니다.
+- 기간 필터가 필요한 [v5 Bing Grounding 정책](config/llm_preselection/policy_event_period_v5.yaml)은
+  실제 tool 설정에 `freshness`를 고정합니다. LLM만 전일 이전 자료는 NY 일자 판정,
+  당일 자료는 NY 05:30 이전의 시각 검증을 적용합니다. 수집·정량 규칙은 유지합니다.
+  [10월16일 VLO 실측 보고서](VLO-2026-10-16-PERIOD-SEARCH-VALIDATION.md)에
+  승인 리소스 생성·기간 검색 성공·후보 출처 확보와 원문 검증 미충족에 따른 평가 사용 0건을 기록했습니다.
   v4 코드·정책은 로컬 변경이며 이번 문서 푸시나 운영 활성화와 구분합니다.
 - 주간 모델 업데이트 메일은 운영에 별도 활성화했습니다. 시작·모델별 결과·최종 요약을
   승인된 단일 수신처에 보내며 일일 파이프라인·리소스 가디언 메일은 계속 비활성입니다.
@@ -165,7 +173,8 @@ flowchart LR
 
 독립 LLM, 이벤트 정책, RRF·최종 20개 전달 어댑터는 구현·운영 배포됐습니다.
 기본값과 현재 승인된 운영 설정은 위 표처럼 구분합니다. Fusion을 비활성화한 환경의
-MEDIUM은 기존처럼 `parallel_preselection`에서 종료하고 외부로 전달하지 않습니다.
+수동·호환 MEDIUM은 `parallel_preselection`에서 종료하고 외부로 전달하지 않습니다.
+신규 정규 타이머는 Fusion 비활성 시 시작을 차단합니다.
 외부 분석 데이터는 Candidate manifest와 별도이며 이 저장소가 그 시점을 통제하지 않습니다.
 전체 시스템 구조를 제거하지 않고 아래 후보 파이프라인 상세도와 함께 관리합니다.
 상세 기준은 [전체 아키텍처 문서](.github/modernize/assessment/engines/facts/architecture-diagram.md)를
@@ -229,7 +238,9 @@ LLM 결과 유무에 의존하지 않습니다. LLM을 활성화한 병렬 실�
 `PARTIAL_SUCCESS`, 양쪽 모두 성공하지 못하면 `FAILED`로 집계하고 성공한 결과는
 보존합니다. 실패한 LLM을 과거 결과나 정량 목록으로 대체하지 않습니다.
 
-**자동 전달 경계:** `FUSION_ENABLED=false`이면 MEDIUM은 기존처럼 제출 0개로 종료합니다.
+**자동 전달 경계:** 신규 정규 타이머는 `FUSION_ENABLED=true`가 필수이며,
+비활성·누락이면 명시적으로 실패합니다. 기존 수동·호환 MEDIUM 실행의
+`FUSION_ENABLED=false` 경로는 제출 0개로 종료합니다.
 Fusion만 활성화하면 성공 최종 20개를 저장·조회하지만 전송은 하지 않습니다.
 별도 `FUSION_EXTERNAL_DELIVERY_ENABLED`와 수신처 계약 확인이 모두 필요하며,
 실패·SHORTFALL·중간 Quant/LLM 목록은 전달하지 않습니다. 상세 활성화 조건과 ACK는
@@ -243,10 +254,11 @@ ACK는 외부 접수 확인이지 분석 보고서 완료가 아닙니다. 포�
 
 1. UTC 매시 30분 timer가 뉴욕 현지 `05:30`일 때만 직전 달력 날짜의
    `candidate-daily-YYYY-MM-DD-medium_20d`를 시작합니다. DST는 timezone으로 처리합니다.
+   신규 정규 실행은 Fusion 활성·정책/hash를 고정하며 비활성이면 시작하지 않습니다.
 2. Candidate XNYS session 조회에서 비거래일이면 외부 실행 없이 skip합니다.
-3. readiness를 확인하고 날짜·모델별 유효한 정량 20개가 이미 있으면
-   기본 경로는 `SKIPPED_EXISTING`으로 신규 제출을 생략합니다. Fusion 활성 시에는
-   같은 원천 Quant run·Fusion 정책/hash의 성공 Fusion이 있어야 다음 전달 단계로 재개합니다.
+3. readiness를 확인하고 날짜·모델별 유효한 정량 20개가 이미 있어도 정규 실행을
+   완료로 간주하지 않습니다. 같은 원천 Quant run·Fusion 정책/hash의 성공 Fusion이
+   있어야 다음 전달 단계로 재개합니다. 비활성 수동·호환 경로만 `SKIPPED_EXISTING`을 사용합니다.
 4. MEDIUM은 `top20-v1` suffix가 있는 `Idempotency-Key`로 DAILY를 접수합니다.
    같은 key·payload는 같은 run, 다른 payload는 충돌로 처리합니다.
 5. 공통 수집 후 고정 artifact로 추론하고 정량 20개를 저장·검증합니다.

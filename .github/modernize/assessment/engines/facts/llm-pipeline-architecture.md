@@ -128,6 +128,24 @@ standalone legacy LLM이 Fusion flag에 묶이지 않으며 event v2 선정 계�
 
 ## 8. 실제 LLM 입력과 외부 보강의 분리
 
+### v5 기간 검색·NY 날짜 정책 추가
+
+[v5 설정](../../../../../config/llm_preselection/policy_event_period_v5.yaml)은
+Foundry project endpoint와 승인된 Bing connection을 사용한다.
+`freshness=시작일..종료일`은 모델 문장이 아니라 실제 Bing tool 설정에 들어간다.
+종료일은 NY 기준 cutoff 날짜이며 정확한 당일 시각 검증은 별도로 수행한다.
+Bing의 발견일 제한은 공개일/원문 version 검증을 대체하지 않는다.
+
+LLM만 전일 이전 공개/버전 자료는 **일자 정밀도**로 허용한다.
+당일 날짜만 있거나 05:30 정각/이후이면 사용하지 않는다. DST와 source timezone을
+`America/New_York`로 변환하며 수집·정량의 시간 하네스에는 이 예외를 적용하지 않는다.
+metadata의 시각은 실제 source 선언값으로 보존하고 DAY bound는 실제 생성 시각과 구분한다.
+
+현재 Bing tool 응답이 전체 original-version ledger를 노출하지 않으면
+`PERIOD_SEARCH_ORIGINAL_VERSION_PROOF_NOT_EXPOSED`로 평가를 차단한다.
+검색 후보가 존재하는 것과 평가 사용 가능 자료가 확보된 것은 다른 상태다.
+결과는 [VLO 실측 보고서](../../../../../VLO-2026-10-16-PERIOD-SEARCH-VALIDATION.md)를 따른다.
+
 | 입력 | 내용 | 한계 |
 |---|---|---|
 | 기업 식별 | instrument/issuer·symbol·업종·상태; v4에서 CIK 추가 | 검색에는 공개 회사 metadata만 전달 |
@@ -143,8 +161,9 @@ LLM은 DB에 직접 연결하지 않는다. 서버의 SEC 추가 다운로드·H
 이 모델에는 내부 UUID·전체 DB packet·계약 payload를 주지 않는다.
 검색 결과 전체를 검사하고 승인된 문단만 새 평가 대화에 전달한다. 평가 모델은 검색 도구나
 검색 대화·reasoning·previous_response_id를 받지 않는다.
-초기 source gate는 기존 고정 공시 원문 버전만 승인한다. 일반 뉴스의 과거 revision을
-증명할 수 없으면 날짜가 과거여도 점수에서 배제한다. 본문을 얻지 못한 결과도 보강 성공이 아니다.
+초기 source gate(`web_search` v4)는 고정 공시 원문 버전만 승인한다. 기간 검색(Bing, v5)은
+Python이 인용 URL·페이지에서 읽은 게시일/시각으로 승인한다(전일 이전 일자, 당일 05:30 이전 시각).
+날짜·시각을 읽지 못한 출처와 본문 미확보 결과는 보강 성공이 아니다.
 
 ## 9. v4 검색 정책·인용·저장 계약
 

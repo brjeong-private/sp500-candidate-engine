@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -222,6 +223,73 @@ def test_send_email_returns_disabled_without_calling_provider(monkeypatch):
         "sent": False,
         "disabled": True,
     }
+
+
+def test_weekly_email_uses_only_its_recipients_with_pipeline_and_guardian_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    import guardian
+
+    configured = replace(
+        _settings(email_enabled=False),
+        weekly_email_enabled=True,
+        weekly_email_recipients=("weekly@example.test",),
+        email_recipients=("pipeline@example.test", "guardian@example.test"),
+    )
+    messages = []
+
+    class EmailClient:
+        def __init__(self, *args):
+            pass
+
+        def begin_send(self, message):
+            messages.append(message)
+            return SimpleNamespace(result=lambda **kwargs: SimpleNamespace(id="email-id"))
+
+    monkeypatch.setattr(clients.Settings, "from_env", lambda: configured)
+    monkeypatch.setitem(
+        sys.modules, "azure.communication.email", SimpleNamespace(EmailClient=EmailClient),
+    )
+    monkeypatch.setitem(
+        sys.modules, "azure.identity", SimpleNamespace(DefaultAzureCredential=lambda: object()),
+    )
+    assert clients.send_email({
+        "category": "weekly_training", "subject": "weekly", "body": "weekly summary",
+    })["sent"] is True
+    assert messages[0]["recipients"] == {"to": [{"address": "weekly@example.test"}]}
+    assert clients.send_email({"subject": "pipeline", "body": ""})["disabled"] is True
+
+    def fail_preflight():
+        raise RuntimeError("preflight failed")
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        guardian.run_guardian(
+            preflight=fail_preflight, email_client=clients.send_email, telemetry=lambda _: {},
+        )
+    assert len(messages) == 1
+
+
+def test_weekly_email_is_disabled_independently_of_enabled_pipeline(monkeypatch):
+    monkeypatch.setattr(clients.Settings, "from_env", lambda: _settings(email_enabled=True))
+    assert clients.send_email({
+        "category": "weekly_training", "subject": "weekly", "body": "",
+    }) == {"sent": False, "disabled": True}
+
+
+def test_weekly_email_configuration_requires_an_explicit_recipient(monkeypatch):
+    values = json.loads(
+        (ORCHESTRATOR_ROOT / "local.settings.example.json").read_text(encoding="utf-8")
+    )["Values"]
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    assert settings.Settings.from_env().weekly_email_enabled is False
+    monkeypatch.setenv("ORCHESTRATOR_WEEKLY_EMAIL_ENABLED", "true")
+    with pytest.raises(settings.ConfigurationError, match="WEEKLY_EMAIL_RECIPIENTS"):
+        settings.Settings.from_env()
+    monkeypatch.setenv("ORCHESTRATOR_WEEKLY_EMAIL_RECIPIENTS", "weekly@example.test")
+    configured = settings.Settings.from_env()
+    assert configured.weekly_email_recipients == ("weekly@example.test",)
+    assert configured.email_enabled is False
 
 
 @pytest.mark.parametrize(("value", "expected"), [("true", True), ("FALSE", False)])
@@ -836,6 +904,35 @@ def _run(generator, responder):
                 event = generator.send(response)
     except StopIteration as stopped:
         return stopped.value
+
+
+def test_october_19_fusion_tick_skips_sunday_without_submission(monkeypatch):
+    monkeypatch.setenv("FUSION_ENABLED", "true")
+    monkeypatch.setenv("FUSION_EXTERNAL_DELIVERY_ENABLED", "true")
+    analysis_date = scheduler.scheduled_analysis_date(datetime(2026, 10, 19, 9, 30, tzinfo=UTC))
+    request = function_app._orchestration_input(analysis_date, "MEDIUM_20D")
+    context = FakeContext()
+    monkeypatch.setattr(context, "get_input", lambda: request)
+    activities = []
+
+    def respond(event):
+        assert event[0] == "activity"
+        activities.append(event[1])
+        assert event[1] == "check_exchange_session"
+        assert event[2] == "2026-10-18"
+        return {"is_session": False, "data_complete": False}
+
+    outcome = _run(workflow.daily_orchestrator(context), respond)
+
+    assert request["fusion_enabled"] is True
+    assert outcome == {
+        "state": "SUCCEEDED",
+        "analysis_date": "2026-10-18",
+        "model_purpose": "MEDIUM_20D",
+        "skipped": True,
+        "reason": "not_exchange_session",
+    }
+    assert activities == ["check_exchange_session"]
 
 
 def test_started_email_contains_only_safe_preflight_summary():
