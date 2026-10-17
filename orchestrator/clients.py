@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -11,6 +12,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import httpx
+from fusion_contract import canonical_hash, verify_ack, verify_envelope
 from settings import Settings
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -33,6 +35,10 @@ ARM_RECHECK_SECONDS = 10
 
 class ExternalServiceError(RuntimeError):
     """외부 서비스 호출 또는 응답 계약 위반을 나타낸다."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class ArmRequestError(ExternalServiceError):
@@ -104,10 +110,13 @@ def request_json(
             if 300 <= response.status_code < 400:
                 raise ExternalServiceError("redirect response rejected")
             if response.status_code not in set(expected_statuses):
-                raise ExternalServiceError(f"external service returned HTTP {response.status_code}")
+                raise ExternalServiceError(
+                    f"external service returned HTTP {response.status_code}",
+                    retryable=response.status_code in {408, 429, 500, 502, 503, 504},
+                )
             return _read_limited_json(response)
     except httpx.HTTPError as error:
-        raise ExternalServiceError("external service request failed") from error
+        raise ExternalServiceError("external service request failed", retryable=True) from error
 
 
 def request_status(
@@ -838,12 +847,50 @@ def readiness_preflight() -> dict[str, str]:
     }
 
 
-def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
+def submit_candidate_daily(request: dict[str, Any]) -> dict[str, Any]:
     settings = Settings.from_env()
     analysis_date = request["analysis_date"]
     model_purpose = request["model_purpose"]
+    use_fusion = request.get("fusion_enabled") is True and model_purpose == "MEDIUM_20D"
+    if use_fusion != (settings.fusion_enabled and model_purpose == "MEDIUM_20D"):
+        raise ExternalServiceError("Frozen Fusion configuration does not match this activity")
+    for key, expected in (
+        ("fusion_policy_version", settings.fusion_policy_version),
+        ("fusion_config_hash", settings.fusion_config_hash),
+    ):
+        if use_fusion and key in request and request[key] != expected:
+            raise ExternalServiceError("Frozen Fusion policy changed during orchestration")
     existing_candidates = fetch_and_verify_candidates({**request, "existing_only": True})
-    if existing_candidates:
+    if existing_candidates and use_fusion:
+        page = request_json(
+            "GET", f"{settings.candidate_base_url}/api/v1/fusion-selections",
+            headers=_candidate_headers(settings),
+            params={"date": analysis_date, "limit": 1,
+                    "quant_selection_run_id": existing_candidates[0]["selection_run_id"],
+                    "policy_version": settings.fusion_policy_version,
+                    "config_hash": settings.fusion_config_hash},
+        )
+        items = page.get("items")
+        if not isinstance(items, list):
+            raise ExternalServiceError("Fusion completion response is invalid")
+        if items:
+            run = items[0]
+            if (
+                not isinstance(run, dict) or len(items) != 1
+                or run.get("status") != "SUCCEEDED"
+                or run.get("price_session_date") != analysis_date
+                or run.get("policy_version") != settings.fusion_policy_version
+                or run.get("config_hash") != settings.fusion_config_hash
+                or run.get("quant_selection_run_id") != existing_candidates[0]["selection_run_id"]
+                or run.get("requested_count") != 20 or run.get("selected_count") != 20
+            ):
+                raise ExternalServiceError("Fusion completion identity is invalid")
+            return {
+                "status": "FUSION_READY", "fusion_run_id": run["fusion_run_id"],
+                "candidate_selection_run_id": run["quant_selection_run_id"],
+                "llm_preselection_run_id": run["llm_preselection_run_id"],
+            }
+    if existing_candidates and not use_fusion:
         return {
             "status": "SKIPPED_EXISTING",
             "selection_run_id": existing_candidates[0]["selection_run_id"],
@@ -852,26 +899,46 @@ def submit_candidate_daily(request: dict[str, str]) -> dict[str, Any]:
     idempotency_key = f"orchestrator-daily-{analysis_date}-{model_purpose.lower()}"
     if model_purpose == "MEDIUM_20D":
         idempotency_key += "-top20-v1"
-    payload = request_json(
-        "POST",
-        f"{settings.candidate_base_url}/api/v1/pipeline-runs",
-        headers={
-            **_candidate_headers(settings),
-            "Idempotency-Key": idempotency_key,
-        },
-        json_body={
-            "mode": "DAILY",
-            "date": analysis_date,
-            "with_candidates": True,
-            "model_purpose": model_purpose,
-        },
-        expected_statuses=(202,),
-        timeout=PORTAL_SUBMIT_TIMEOUT,
-    )
-    run_id = payload.get("process_run_id")
-    if not isinstance(run_id, str) or not run_id:
-        raise ExternalServiceError("Candidate response omitted process_run_id")
-    return {"process_run_id": run_id, "status": str(payload.get("status", "PENDING"))}
+    if use_fusion:
+        idempotency_key += "-fusion-" + canonical_hash({
+            "policy_version": settings.fusion_policy_version,
+            "config_hash": settings.fusion_config_hash,
+            "quant_id": existing_candidates[0]["selection_run_id"] if existing_candidates else None,
+        })[:24]
+    base_key = idempotency_key
+    for attempt in range(3 if use_fusion else 1):
+        payload = request_json(
+            "POST",
+            f"{settings.candidate_base_url}/api/v1/pipeline-runs",
+            headers={
+                **_candidate_headers(settings), "Idempotency-Key": idempotency_key,
+            },
+            json_body={
+                "mode": "DAILY", "date": analysis_date, "with_candidates": True,
+                "model_purpose": model_purpose,
+            },
+            expected_statuses=(202,), timeout=PORTAL_SUBMIT_TIMEOUT,
+        )
+        run_id = payload.get("process_run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ExternalServiceError("Candidate response omitted process_run_id")
+        if not use_fusion:
+            return {"process_run_id": run_id, "status": str(payload.get("status", "PENDING"))}
+        state = candidate_run_status(run_id)
+        if not state["terminal"]:
+            return {"process_run_id": run_id, "status": state["status"]}
+        if state.get("fusion_status") == "SUCCEEDED" and state.get("fusion_run_id"):
+            return {
+                "status": "FUSION_READY", "fusion_run_id": state["fusion_run_id"],
+                "candidate_selection_run_id": state.get("candidate_selection_run_id"),
+                "llm_preselection_run_id": state.get("llm_preselection_run_id"),
+            }
+        if state["status"] == "SUCCEEDED":
+            raise ExternalServiceError("Backend did not produce the requested Fusion stage")
+        if attempt == 2:
+            raise ExternalServiceError("Fusion pipeline retry budget exhausted")
+        idempotency_key = base_key + "-retry-" + canonical_hash(run_id)[:16]
+    raise AssertionError("unreachable")
 
 
 def fetch_and_verify_llm_preselection(
@@ -923,11 +990,86 @@ def candidate_run_status(process_run_id: str) -> dict[str, Any]:
     if not isinstance(status, str):
         raise ExternalServiceError("Candidate status response is invalid")
     status = status.upper()
-    return {
+    result = {
         "process_run_id": process_run_id,
         "status": status,
         "terminal": status in CANDIDATE_TERMINAL,
         "failure_reason": payload.get("failure_reason"),
+    }
+    for key in ("fusion_run_id", "fusion_status", "candidate_selection_run_id",
+                "llm_preselection_run_id"):
+        if payload.get(key) is not None:
+            result[key] = payload[key]
+    return result
+
+
+def fetch_fusion_handoff(request: dict[str, Any]) -> dict[str, Any]:
+    settings = Settings.from_env()
+    if not settings.fusion_enabled:
+        raise ExternalServiceError("Fusion is disabled")
+    run_id = request["fusion_run_id"]
+    payload = request_json(
+        "GET",
+        f"{settings.candidate_base_url}/api/v1/fusion-selections/{quote(run_id, safe='')}/handoff",
+        headers=_candidate_headers(settings),
+    )
+    try:
+        verify_envelope(
+            payload, run_id=run_id, analysis_date=request["analysis_date"],
+            policy_version=settings.fusion_policy_version,
+            quant_id=request["candidate_selection_run_id"],
+            llm_id=request["llm_preselection_run_id"],
+            expected_config_hash=settings.fusion_config_hash,
+        )
+    except (ValueError, TypeError, KeyError, ZeroDivisionError, OverflowError) as error:
+        raise ExternalServiceError("Fusion handoff verification failed") from error
+    return payload
+
+
+def submit_fusion_handoff(payload: dict[str, Any]) -> dict[str, Any]:
+    settings = Settings.from_env()
+    if (
+        not settings.fusion_enabled or not settings.fusion_external_delivery_enabled
+        or settings.fusion_external_contract_version != "fusion-top20-v1"
+    ):
+        raise ExternalServiceError("Fusion external delivery is disabled or unverified")
+    try:
+        identities = verify_envelope(
+            payload, run_id=payload["selection_run_id"],
+            analysis_date=payload["price_session_date"],
+            policy_version=settings.fusion_policy_version,
+            quant_id=payload["quant_selection_run_id"], llm_id=payload["llm_preselection_run_id"],
+            expected_config_hash=settings.fusion_config_hash,
+        )
+    except (ValueError, TypeError, KeyError, ZeroDivisionError, OverflowError) as error:
+        raise ExternalServiceError("Invalid Fusion handoff payload") from error
+    key = "fusion-top20-v1-" + canonical_hash({
+        "run_id": payload["selection_run_id"], "recipient": settings.portal_base_url,
+        "path": settings.fusion_handoff_path, "payload_hash": payload["payload_hash"],
+    })
+    try:
+        ack = request_json(
+            "POST", f"{settings.portal_base_url}{settings.fusion_handoff_path}",
+            headers={**_portal_headers(settings), "Idempotency-Key": key},
+            json_body=payload, expected_statuses=(200, 202), timeout=PORTAL_SUBMIT_TIMEOUT,
+        )
+    except ExternalServiceError as error:
+        if not error.retryable:
+            raise
+        logging.getLogger(__name__).warning("fusion_handoff_retryable_transport_failure")
+        return {
+            "delivery_status": "RETRYABLE_FAILURE",
+            "selection_run_id": payload["selection_run_id"],
+        }
+    try:
+        verify_ack(ack, payload, identities)
+    except (ValueError, TypeError, KeyError) as error:
+        raise ExternalServiceError(
+            "Fusion receiver did not acknowledge the exact Top 20"
+        ) from error
+    return {
+        "delivery_status": "ACKNOWLEDGED", "selection_run_id": payload["selection_run_id"],
+        "payload_hash": payload["payload_hash"], "candidate_count": 20,
     }
 
 

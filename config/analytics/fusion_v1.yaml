@@ -1,0 +1,8 @@
+name: daily-medium-20d-rrf
+version: "1"
+model_purpose: MEDIUM_20D
+selection_type: FUSION
+requested_count: 20
+k: 10
+sector_cap: 2
+relaxed_sector_cap: 4

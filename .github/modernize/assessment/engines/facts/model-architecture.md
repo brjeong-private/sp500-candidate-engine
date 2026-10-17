@@ -4,7 +4,7 @@
 
 이 문서는 point-in-time 원천 데이터가 Qlib 특징, label, 모델 평가, 일일 score와
 MEDIUM 정량 후보 20개로 변환되는 계약을 정의한다. SHORT_5D 레거시 5~10개는 유지한다.
-외부 전달 목표는 기존 5~10개에서 20개로 변경하되 최종 통합·전달은 후속 구현이다.
+외부 전달은 기존 5~10개에서 20개로 변경하며 최종 통합·전달 어댑터는 구현·기본 비활성이다.
 후보는 후속 상세 분석 대상이며 매수 신호나 수익 보장이 아니다.
 
 ## 적용 범위와 상태 표기
@@ -538,10 +538,13 @@ child는 `SKIPPED_EXISTING`으로 끝난다. 이는 모델 결과 재계산이�
 Candidate POST와 Portal/TradingAgents 신규 분석을 모두 생략한다. 단일 모델 수동
 endpoint는 one-off 진단·호환 경로로 유지된다.
 
-현재 MEDIUM은 정량 Top 20 완료 후 `parallel_preselection`에서 종료하며 자동
-Portal 제출은 하지 않는다. LLM Top 20은 별도 구현·저장소·API로 제공하고 기본
-비활성이다. 공통 manifest 이후 활성화된 두 분기는 병렬 실행하며 정량 완료는
-LLM에 의존하지 않는다. 향후 RRF 최종 20개를 축소 없이 전달한다.
+기본 MEDIUM은 `parallel_preselection`에서 종료하며 Portal 제출을 하지 않는다.
+기존 v1 LLM과 신규 비가격 이벤트 v2는 별도 policy로 유지한다. 신규 정책은 90/10
+이벤트·운영 대조 표본 및 최소 3개 근거 항목의 재정규화 점수로 독립 Top 20을 만든다.
+기본 비활성 Fusion은 MEDIUM 전용 k=10·목록 position·동일 instrument 합산·issuer 중복
+제거·섹터 2/4를 적용하고 두 목록 밖으로 후보를 확장하지 않는다. 부족하면 SHORTFALL이다.
+성공한 최종 20개만 별도 전달 플래그·수신처 검증 후 축소 없이 전달한다.
+공통 manifest 이후 두 분기는 병렬 실행하며 정량 완료는 LLM·Fusion에 의존하지 않는다.
 이 외부 Portal 전달은 orchestration control-plane 계약이다. 모델 학습,
 점수, 후보 저장까지가 Candidate Engine의 범위이고 외부 분석·리포트·비용·재평가는
 모델 아키텍처와 Candidate PostgreSQL의 범위 밖이다.

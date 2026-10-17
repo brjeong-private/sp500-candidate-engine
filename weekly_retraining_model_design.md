@@ -349,7 +349,8 @@ weekly Job, private artifact infrastructure와 orchestration 구현도 존재하
 문서 작성 시점에 해당 application/IaC 변경의 운영 배포 및 end-to-end promotion
 실행 증거는 없다.
 
-따라서 현재 운영 판정은 다음과 같다.
+다음은 이 절 작성 당시의 검증 범위다. 최신 독립 후보 실행·Fusion 배포 여부와
+혼동하지 않으며 현재 운영 증거는 [운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따른다.
 
 ```text
 DB schema: DEPLOYED and VALIDATED
@@ -362,6 +363,8 @@ promoted model: NONE CLAIMED
 ## 일일 후보 수와 재학습 평가 구분 (2026-10-16)
 
 일일 기본 MEDIUM_20D 정량 후보는 정확히 20개다. 별도 LLM Top 20과의 최종
-통합·TradingAgents 전달 목표도 기존 5~10개에서 20개로 변경하되 후속 구현으로 둔다.
+통합·TradingAgents 전달 목표도 기존 5~10개에서20개로 변경했다.
+이후2026-10-17 이벤트 v2·Fusion·독립 stage 실행과 전달 어댑터의 배포·계약 검증을
+완료했으며, 이는 이 주간 설계에서 새로운 모델 승격이 발생했다는 뜻이 아니다.
 후보 수 변경은 모델 horizon·label·weight 또는 Top-5/10 promotion 지표 변경이 아니다.
 SHORT_5D 레거시 정책과 두 모델의 주간 training-only 계약은 유지한다.

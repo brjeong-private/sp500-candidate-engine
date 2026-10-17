@@ -88,6 +88,38 @@ def _email_delivery_failed(response: Any) -> bool:
     )
 
 
+def _run_fusion_handoff(
+    context: Any, request: dict[str, Any], source: dict[str, Any],
+) -> Generator[Any, Any, dict[str, Any]]:
+    identifiers = ("fusion_run_id", "candidate_selection_run_id", "llm_preselection_run_id")
+    if any(not isinstance(source.get(key), str) or not source[key] for key in identifiers):
+        raise RuntimeError("Fusion stage did not provide pinned source run identities")
+    envelope = yield context.call_activity(
+        "fetch_fusion_handoff",
+        {"analysis_date": request["analysis_date"], **{key: source[key] for key in identifiers}},
+    )
+    if request.get("fusion_external_delivery_enabled") is not True:
+        return result(
+            "SUCCEEDED", request["analysis_date"], request["model_purpose"],
+            stage="fusion", selection_run_id=source["fusion_run_id"],
+            candidate_count=20, submitted_candidates=0, delivery_status="DISABLED",
+        )
+    for attempt in range(3):
+        ack = yield context.call_activity("submit_fusion_handoff", envelope)
+        if ack.get("delivery_status") == "ACKNOWLEDGED":
+            return result(
+                "SUCCEEDED", request["analysis_date"], request["model_purpose"],
+                stage="fusion_handoff", selection_run_id=source["fusion_run_id"],
+                candidate_count=20, submitted_candidates=20, delivery_status="ACKNOWLEDGED",
+            )
+        if ack.get("delivery_status") != "RETRYABLE_FAILURE" or attempt == 2:
+            raise RuntimeError("Fusion Top 20 delivery was not acknowledged")
+        yield context.create_timer(
+            context.current_utc_datetime + timedelta(seconds=60 * 2 ** attempt)
+        )
+    raise AssertionError("unreachable")
+
+
 def _model_summary(instance_id: str, child_result: dict[str, Any]) -> dict[str, Any]:
     return {
         "instance_id": instance_id,
@@ -266,6 +298,12 @@ def dual_model_parent(context: Any) -> Generator[Any, Any, dict[str, Any]]:
         return final
 
     medium_input = {**common_input, "model_purpose": MODEL_SEQUENCE[1]}
+    for key in (
+        "fusion_enabled", "fusion_external_delivery_enabled",
+        "fusion_policy_version", "fusion_config_hash",
+    ):
+        if key in request:
+            medium_input[key] = request[key]
     medium_result = yield context.call_sub_orchestrator(
         "daily_orchestrator",
         medium_input,
@@ -330,9 +368,25 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             "analysis_date": analysis_date,
             "model_purpose": model_purpose,
         }
+        if request.get("fusion_enabled") is True and model_purpose == "MEDIUM_20D":
+            candidate_request["fusion_enabled"] = True
+            for key in ("fusion_policy_version", "fusion_config_hash"):
+                if key in request:
+                    candidate_request[key] = request[key]
         failure_code = "CANDIDATE_SUBMIT_FAILED"
         failure_stage = "candidate_submit"
         accepted = yield context.call_activity("submit_candidate_daily", candidate_request)
+        if accepted["status"] == "FUSION_READY":
+            failure_code = "FUSION_HANDOFF_FAILED"
+            failure_stage = "fusion_handoff"
+            final = yield from _run_fusion_handoff(context, request, accepted)
+            terminal_email_attempted = True
+            email_result = yield from _send_email(
+                context, request, _terminal_email(model_purpose, analysis_date, final),
+                stage="terminal",
+            )
+            _require_email_delivery(email_result)
+            return (yield from _finish_model(context, request, final))
         if accepted["status"] == "SKIPPED_EXISTING":
             final = result(
                 "SKIPPED_EXISTING",
@@ -426,6 +480,18 @@ def daily_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
             )
             if _email_delivery_failed(email_result):
                 final["reason"] = "EMAIL_TERMINAL_FAILED"
+            return (yield from _finish_model(context, request, final))
+
+        if request.get("fusion_enabled") is True and model_purpose == "MEDIUM_20D":
+            failure_code = "FUSION_HANDOFF_FAILED"
+            failure_stage = "fusion_handoff"
+            final = yield from _run_fusion_handoff(context, request, candidate_run)
+            terminal_email_attempted = True
+            email_result = yield from _send_email(
+                context, request, _terminal_email(model_purpose, analysis_date, final),
+                stage="terminal",
+            )
+            _require_email_delivery(email_result)
             return (yield from _finish_model(context, request, final))
 
         failure_code = "CANDIDATE_FETCH_FAILED"

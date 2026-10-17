@@ -27,6 +27,11 @@ def test_preselection_manifest_preparation_retains_non_price_evidence():
         }
         for code in ("massive_grouped_daily", "massive_news", "sp500_universe")
     ]
+    dependency = {
+        **snapshots[0],
+        "source_snapshot_id": uuid.uuid4(),
+        "dataset_code": "massive_ticker_details",
+    }
     connection = MagicMock()
 
     def execute(sql, params):
@@ -37,6 +42,12 @@ def test_preselection_manifest_preparation_retains_non_price_evidence():
             result.fetchall.return_value = snapshots
         elif "SELECT uv.universe_version_id" in sql:
             result.fetchone.return_value = {"universe_version_id": universe_id}
+        elif "WITH evidence_dependencies" in sql:
+            assert "ref.instrument_state" in sql
+            assert "fundamental.fact_observation" in sql
+            assert "snapshot.source_available_at <= %s" in sql
+            assert params[-1] == cutoff
+            result.fetchall.return_value = [dependency]
         return result
 
     connection.execute.side_effect = execute
@@ -51,8 +62,9 @@ def test_preselection_manifest_preparation_retains_non_price_evidence():
     assert result.cutoff_at == cutoff
     cursor = connection.cursor.return_value.__enter__.return_value
     rows = list(cursor.executemany.call_args.args[1])
-    assert {row[2] for row in rows} == {row["dataset_code"] for row in snapshots}
-    assert {row[1] for row in rows} == {row["source_snapshot_id"] for row in snapshots}
+    expected = [*snapshots, dependency]
+    assert {row[2] for row in rows} == {row["dataset_code"] for row in expected}
+    assert {row[1] for row in rows} == {row["source_snapshot_id"] for row in expected}
 
 
 def test_qlib_export_rejects_prepared_context_with_different_cutoff(monkeypatch, tmp_path):

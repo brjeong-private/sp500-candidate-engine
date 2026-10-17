@@ -34,6 +34,13 @@ class LLMPreselectionCandidate(ReadModel):
     company_name: str
     sector: str | None
     evidence: list[LLMPreselectionEvidence] = Field(default_factory=list)
+    screening_group: Literal["EVENT", "CONTROL"] | None = None
+    screening_event_score: int | None = None
+    supported_count: int | None = None
+    weight_denominator: int | None = None
+    sub_scores: dict[str, float | None] = Field(default_factory=dict)
+    missing_reasons: dict[str, str] = Field(default_factory=dict)
+    criterion_evidence: list[dict[str, str]] = Field(default_factory=list)
 
 
 class LLMPreselection(ReadModel):
@@ -55,3 +62,5 @@ class LLMPreselection(ReadModel):
     failure_code: str | None
     created_at: datetime
     candidates: list[LLMPreselectionCandidate]
+    policy_hash: str | None = None
+    screening_summary: list[dict[str, object]] = Field(default_factory=list)

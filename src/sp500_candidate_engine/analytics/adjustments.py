@@ -68,14 +68,16 @@ def _validate_bars(
     return by_date
 
 
-def _split_ratios(actions: tuple[CorporateAction, ...]) -> dict[date, float]:
+def validated_split_ratios(actions: tuple[CorporateAction, ...]) -> dict[date, float]:
     ratios: dict[date, float] = {}
     for action in actions:
         if action.action_type != "SPLIT":
             continue
         if action.split_from is None or action.split_to is None:
             raise AdjustmentError(f"Split ratio is missing: {action.provider_action_id}")
-        if action.split_from <= 0 or action.split_to <= 0:
+        if not all(
+            math.isfinite(value) and value > 0 for value in (action.split_from, action.split_to)
+        ):
             raise AdjustmentError(f"Split ratio must be positive: {action.provider_action_id}")
         ratio = action.split_from / action.split_to
         current = ratios.get(action.effective_date)
@@ -99,7 +101,7 @@ def adjust_daily_values(
     price_factors = [1.0] * len(calendar)
     split_factors = [1.0] * len(calendar)
 
-    for effective_date, ratio in sorted(_split_ratios(actions).items()):
+    for effective_date, ratio in sorted(validated_split_ratios(actions).items()):
         index = calendar_index.get(effective_date)
         if index is None:
             continue

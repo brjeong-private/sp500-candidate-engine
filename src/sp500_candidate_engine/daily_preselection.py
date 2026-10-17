@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sp500_candidate_engine.fusion.service import FusionSummary
     from sp500_candidate_engine.llm_preselection.service import LlmPreselectionSummary
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,9 @@ class ParallelPreselectionResult:
     llm: LlmPreselectionSummary | None
     failures: dict[str, str]
     status: str
+    fusion: FusionSummary | None = None
+    fusion_requested: bool = False
+    fusion_failure_code: str | None = None
 
 
 async def run_parallel_preselections(

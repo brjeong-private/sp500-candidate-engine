@@ -18,6 +18,12 @@ class LLMPreselectionRepository(ReadRepository):
             r.policy_version, ranking.prompt_version, ranking.deployment,
             ranking.evidence_schema_version, r.requested_count, r.selected_count,
             r.status, ranking.status AS ranking_status, r.failure_code, r.created_at,
+            ranking.policy_hash,
+            COALESCE((
+                SELECT jsonb_agg(screen.decision ORDER BY screen.issuer_id)
+                FROM analytics.llm_screening_decision screen
+                WHERE screen.llm_ranking_run_id = r.llm_ranking_run_id
+            ), '[]'::jsonb) AS screening_summary,
             COALESCE((
                 SELECT jsonb_agg(jsonb_build_object(
                     'run_id', c.run_id,
@@ -31,6 +37,13 @@ class LLMPreselectionRepository(ReadRepository):
                     'symbol', c.symbol,
                     'company_name', c.company_name,
                     'sector', c.sector,
+                    'screening_group', screen.decision->>'screening_group',
+                    'screening_event_score', screen.decision->'screening_event_score',
+                    'supported_count', assessment.supported_count,
+                    'weight_denominator', assessment.weight_denominator,
+                    'sub_scores', assessment.sub_scores,
+                    'missing_reasons', assessment.missing_reasons,
+                    'criterion_evidence', assessment.criterion_evidence,
                     'evidence', COALESCE((
                         SELECT jsonb_agg(jsonb_build_object(
                             'evidence_link_id', link.evidence_link_id,
@@ -50,6 +63,12 @@ class LLMPreselectionRepository(ReadRepository):
                     ), '[]'::jsonb)
                 ) ORDER BY c.position, c.instrument_id)
                 FROM selection.llm_preselection_candidate c
+                JOIN analytics.llm_instrument_assessment assessment
+                  ON assessment.llm_ranking_run_id = r.llm_ranking_run_id
+                 AND assessment.instrument_id = c.instrument_id
+                LEFT JOIN analytics.llm_screening_decision screen
+                  ON screen.llm_ranking_run_id = r.llm_ranking_run_id
+                 AND screen.instrument_id = c.instrument_id
                 WHERE c.run_id = r.run_id
             ), '[]'::jsonb) AS candidates
     """

@@ -18,6 +18,12 @@ param azureOpenAIEndpoint string = ''
 param azureOpenAIDeployment string = ''
 param azureOpenAIApiVersion string = ''
 param llmPreselectionEnabled bool = false
+param fusionEnabled bool = false
+@allowed([
+  'config/llm_preselection/policy_v1.yaml'
+  'config/llm_preselection/policy_event_v2.yaml'
+])
+param llmPreselectionPolicyPath string = 'config/llm_preselection/policy_v1.yaml'
 @minValue(1)
 param appServicePlanCapacity int = 1
 
@@ -95,6 +101,11 @@ resource app 'Microsoft.Web/sites@2026-08-01' = {
         { name: 'BACKEND_CANDIDATE_ARTIFACT_MANIFEST_SHA256_MEDIUM_20D', value: candidateMediumManifestSha256 }
         { name: 'HTTP_USER_AGENT', value: httpUserAgent }
         { name: 'LLM_PRESELECTION_ENABLED', value: string(llmPreselectionEnabled) }
+        { name: 'LLM_PRESELECTION_POLICY_PATH', value: llmPreselectionPolicyPath }
+        { name: 'FUSION_ENABLED', value: string(fusionEnabled) }
+        { name: 'RRF_K', value: '10' }
+        { name: 'FUSION_SECTOR_CAP', value: '2' }
+        { name: 'FUSION_RELAXED_SECTOR_CAP', value: '4' }
         { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAIEndpoint }
         { name: 'AZURE_OPENAI_DEPLOYMENT', value: azureOpenAIDeployment }
         { name: 'AZURE_OPENAI_API_VERSION', value: azureOpenAIApiVersion }

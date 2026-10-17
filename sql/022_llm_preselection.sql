@@ -1,12 +1,26 @@
 ALTER TABLE selection.selection_run
     DROP CONSTRAINT IF EXISTS selection_run_requested_count_check,
-    DROP CONSTRAINT IF EXISTS selection_run_check;
+    DROP CONSTRAINT IF EXISTS selection_run_check,
+    DROP CONSTRAINT IF EXISTS selection_run_check1,
+    DROP CONSTRAINT IF EXISTS selection_run_success_count_check,
+    DROP CONSTRAINT IF EXISTS selection_run_selected_count_bounds;
 ALTER TABLE selection.selection_run
     ADD CONSTRAINT selection_run_requested_count_check
         CHECK (requested_count BETWEEN 5 AND 20),
+    ADD CONSTRAINT selection_run_selected_count_bounds
+        CHECK (selected_count BETWEEN 0 AND requested_count),
     ADD CONSTRAINT selection_run_success_count_check
         CHECK (
-            (status = 'SUCCEEDED' AND selected_count = requested_count)
+            (
+                status = 'SUCCEEDED'
+                AND (
+                    (requested_count = 20 AND selected_count = 20)
+                    OR (
+                        requested_count BETWEEN 5 AND 10
+                        AND selected_count BETWEEN 5 AND requested_count
+                    )
+                )
+            )
             OR status <> 'SUCCEEDED'
         );
 ALTER TABLE selection.candidate

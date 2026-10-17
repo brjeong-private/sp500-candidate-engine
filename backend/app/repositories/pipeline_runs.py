@@ -24,7 +24,13 @@ _RUN_SELECT = """
         ELSE p.finished_at END AS finished_at,
     CASE WHEN COALESCE(r.status, p.status) IN ('FAILED', 'PARTIAL_SUCCESS')
         THEN 'One or more pipeline stages failed; consult operational logs.'
-        ELSE NULL END AS failure_reason
+        ELSE NULL END AS failure_reason,
+    (p.metadata #>> '{execution_result,fusion_run,fusion_run_id}')::uuid AS fusion_run_id,
+    p.metadata #>> '{execution_result,fusion_run,status}' AS fusion_status,
+    (p.metadata #>> '{execution_result,candidate_run,selection_run_id}')::uuid
+        AS candidate_selection_run_id,
+    (p.metadata #>> '{execution_result,llm_preselection_run,selection_run_id}')::uuid
+        AS llm_preselection_run_id
 """
 _RUN_TABLES = """
     ops.process_run p

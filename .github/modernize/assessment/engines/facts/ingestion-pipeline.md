@@ -207,9 +207,10 @@ Qlib export·모델 검증 실패가 LLM 실행을 차단하지 않으며 형제
 
 Candidate API 기본 조회와 정기 Durable 실행은 `MEDIUM_20D`다. SHORT_5D의
 5~10개 레거시 정책·명시적 API 선택·dual 호환은 유지하며 목적 간 fallback은 없다.
-최종 외부 전달 목표는 기존 5~10개에서 **20개**로 변경한다. 두 Top 20의 통합은
-후속 구현이며 현재 MEDIUM은 `parallel_preselection`에서 종료하고 Portal에 제출하지 않는다.
-향후 검증된 최종 20개의 `selection_run_id`·`model_purpose`를 축소 없이 전달한다.
+최종 외부 전달은 기존 5~10개에서 **20개**로 변경한다. 두 Top 20의 RRF·전달 어댑터는
+기본 비활성으로 구현됐다. 기본 MEDIUM은 `parallel_preselection`에서 제출 없이 종료한다.
+Fusion 활성 시 같은 context의 성공 원천 run을 고정해 병합하며 부족하면 SHORTFALL이다.
+실제 수신처 검증과 별도 전달 플래그가 충족될 때만 최종 20개 전량 envelope·ACK를 사용한다.
 Portal의 MySQL 분석 상태·결과와
 TradingAgents Container App 실행은 이 수집 파이프라인 및 Candidate PostgreSQL 범위
 밖이며, 오케스트레이터는 이를 조정하는 control plane일 뿐 Candidate Engine의
@@ -252,7 +253,7 @@ Massive의 네 endpoint를 동시에 호출하는 것처럼 보이더라도 실�
 | 특징·점수 | Alpha158·momentum·Ridge·LightGBM | 명시적 date의 Qlib export 후 | 구현, 현재 모델 SHADOW |
 | 정량 후보 20개 | MEDIUM scoring run 기반 | 전체 적격 universe 순회 | 구현, SHORT 레거시 5~10개 보존 |
 | 독립 LLM 후보 20개 | manifest-fenced evidence | 정량과 병렬, 별도 저장·API | 구현, 기본 비활성 |
-| 최종 후보·외부 전달 20개 | 두 Top 20의 RRF 통합 목표 | 5~10개로 재축소하지 않음 | 후속 구현 |
+| 최종 후보·외부 전달 20개 | 두 Top 20의 RRF·별도 전달 플래그 | 5~10개로 재축소하지 않음 | 구현·기본 비활성, 운영 수신 검증 별도 |
 
 ## 실패·재시도·멱등성
 

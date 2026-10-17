@@ -21,6 +21,8 @@
 - 일일 모델 점수, 전체·그룹 순위, 레거시 5~10개 정량 후보와 일일 MEDIUM_20D
   정량 분석 후보 20개 및 선정 사유 저장
 - manifest로 제한된 기업·이벤트 evidence의 LLM 점수와 독립적인 20개 분석 후보군 저장
+- MEDIUM_20D 정량 Top 20과 별도 versioned 이벤트 LLM Top 20의 RRF Fusion,
+  최종 20개·SHORTFALL 저장과 versioned 외부 후보 전달 계약
 - 후보 결과를 외부 소비자가 읽을 수 있는 안정적인 조회·파일 계약
 
 ### 제외
@@ -34,19 +36,41 @@
 
 `LLM_PRESELECTION`은 이 저장소가 수집하고 point-in-time manifest로 고정한 evidence만
 평가하는 후보 선정 단계다. 외부 지식·웹 검색·투자 의견을 사용하지 않으며, 정량 후보와
-독립적인 20개 후속 분석 후보군으로만 제공한다.
+독립적인 20개 후속 분석 후보군을 제공한다. 독립 결과는 Fusion과 구분해 보존한다.
 
 LLM 구현·실행 진입점은 `src/sp500_candidate_engine/llm_preselection/`, 설정은
 `config/llm_preselection/`, 테스트는 `tests/llm_preselection/`으로 분리한다.
 정량 추론 함수가 LLM을 실행하지 않는다. 공통 일일 control plane은 수집 후 고정한
-context를 두 독립 파이프라인에 전달하고 각각의 결과·실패를 보존한다. 두 목록의
-최종 20개 병합은 후속 범위다.
+context를 두 독립 파이프라인에 전달하고 각각의 결과·실패를 보존한다.
+Fusion은 두 성공 run 이후의 별도 후보 선정 단계이며 앞으로도 `MEDIUM_20D` 전용이다.
+기존 SHORT_5D 정량·외부 전달 경로는 유지하며 SHORT Fusion은 지원하지 않는다.
+
+독립 후보 실행은 기존 execution context에서 QUANTITATIVE·LLM_PRESELECTION·FUSION
+중 한 단계만 실행한다. 수집·학습·다른 후보 분기·외부 분석을 암묵 실행하지 않는다.
+독립 stage run과 immutable 사업 결과 run ID를 구분하고, 수락 당시 context·artifact·
+정책·deployment 계약과 retry 원본 ID를 보존한다. 같은 key의 다른 입력은 충돌로
+실패하며 성공 결과나 terminal stage를 덮어쓰지 않는다. 기존 일일 자동 DAG는 유지한다.
+
+기존 LLM policy와 별도로 신규 이벤트 policy는 비가격 evidence, 최근 7일 이벤트,
+운영 최대 90개 이벤트 issuer와 최대 10개 무이벤트 대조 issuer를 평가한다.
+실적 일정은 cutoff 전후 7일 중 cutoff까지 알려진 정보만 인정한다.
+유형별 이벤트 점수는 각 1점이며 대조 표본은 context·policy·issuer 기반으로 결정적이다.
+평가 5개 항목 중 근거가 있는 최소 3개 항목의 가중치를 재정규화하며 근거 없는 항목은
+null·결측 사유를 보존한다. OHLCV·Quant 점수·외부 지식으로 결측을 채우지 않는다.
+정확한 rubric·선별·동점·evidence 계약은 versioned 설정으로 고정한다.
+
+성공한 최종 Fusion 20개 전체는 기존 오케스트레이터를 통해 외부 소비자에게 전달할 수 있다.
+계약 version·run·payload hash·20개 identity와 수신 멱등성을 검증하기 전에는
+자동 전달을 활성화하지 않는다. 5~10개로 재축소하거나 중간 목록·실패·SHORTFALL을 전달하지 않는다.
+이는 후보 목록 전달이며 외부 분석 실행·리포트·비용·재평가 기능의 구현 승인이 아니다.
+문서의 구현 목표 승인과 실제 기능 구현·migration·운영 활성화 승인을 구분한다.
 
 외부 Portal·TradingAgents에 전달할 최종 후보 계약은 **20개**다(2026-10-16:
 기존 5~10개에서 변경). 최종 Top 20을 다시 5~10개로 축소하거나 두 중간 목록을
 40개로 전달하지 않는다. 이 계약은 SHORT_5D 레거시 정책을 변경하지 않는다.
-현재 MEDIUM 자동 전달은 `parallel_preselection`에서 차단하며, 최종 병합·전달
-활성화는 별도 구현과 소비자 수용 검증 후 진행한다.
+Fusion·전달 어댑터는 기본 비활성으로 구현한다. `FUSION_ENABLED=false`인 MEDIUM은
+`parallel_preselection`에서 제출 없이 종료한다. 운영 migration·배포·소비자 전량 수용과
+멱등성 검증 및 명시적 승인 전에는 자동 전달을 활성화하지 않는다.
 
 오케스트레이터는 Candidate 실행과 외부 소비자 연계를 조정하는 control plane이며,
 Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않는다.
@@ -166,7 +190,8 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
 ### 7.2 선택 알고리즘
 
 - 상위 10개를 먼저 자른 뒤 제약을 적용하지 않는다.
-- 전체 적격 universe를 결정적 순서로 순회하면서 issuer 중복, sector 제한 등 정책을 적용하고 목표 개수를 채운다.
+- 원천 정량 선정은 전체 적격 universe를 결정적 순서로 순회하면서 issuer 중복,
+  sector 제한 등 정책을 적용하고 목표 개수를 채운다. Fusion의 승인된 후보 풀 예외는 아래와 같다.
 - sector cap처럼 완화 가능한 soft constraint와 데이터·시점 gate 같은 hard constraint를 설정에서 구분한다.
 - 레거시 `QUANTITATIVE` 기본 후보 수는 5~10개다. 일일 MEDIUM_20D 경로는 별도
   versioned policy로 정량 분석 후보 20개를 생성한다. 각 정책의 최소 수를 충족하지
@@ -176,6 +201,23 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
   만들 수 없거나 LLM 호출·검증이 실패하면 `SHORTFALL` 또는 `FAILED`로 종료하며 정량
   후보나 과거 결과를 fallback으로 사용하지 않는다.
 - 후보 선정 결과는 분석 예산 또는 매수 수량을 의미하지 않는다.
+
+#### Fusion 후보 풀 예외와 정책
+
+- 적용 대상은 `selection_type=FUSION`, `model_purpose=MEDIUM_20D`뿐이다.
+- 입력은 같은 execution context·manifest·universe·session·cutoff·재현 모드의
+  성공 Quant Top 20과 신규 이벤트 policy의 성공 LLM Top 20으로 고정한다.
+- 예외 이유는 두 독립 Top 20의 합의·보완 효과를 유지·평가하기 위해서다.
+  후보 풀은 두 목록의 instrument union으로 제한하고 후순위로 확장하지 않는다.
+  중복·품질·섹터 제약에 따라 매일 20개 생성이 보장되지 않는 영향을 명시한다.
+- 원천 목록의 연속 position 1~20과 기본 `k=10`을 사용한다.
+  동일 instrument에만 두 기여도를 합산한다. 다른 share class는 합산하지 않고
+  issuer별 적격 RRF 최고 종목 하나를 남기며 동점은 `instrument_id ASC`다.
+- 원천별 instrument·예측값·순위를 보존하고 같은 issuer의 다른 종목 값을 복사하지 않는다.
+- 모든 hard gate를 유지하고 섹터당 2개·부족 시 4개까지 한 번 완화한다.
+  부족하면 `SHORTFALL`로 저장하며 원천 후순위·과거 결과로 채우지 않는다.
+- 검증은 목록 순위·share class·정확한 RRF·동점·섹터 완화·union 밖 후보 미사용·
+  SHORTFALL 전달 차단·context 불일치·rollback·멱등성 테스트를 포함한다.
 
 ### 7.3 결과 계약
 
@@ -196,6 +238,14 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
 `LLM_PRESELECTION` 결과는 별도 run ID, `execution_context_id`, prompt/deployment/evidence
 schema version, source evidence lineage, 구조화 score와 reason code를 저장한다.
 LLM score는 예상 수익률·확률·confidence로 표현하지 않는다.
+
+`FUSION`은 원천 Quant selection·scoring run ID, LLM preselection·ranking run ID,
+공통 execution context·manifest identity, 양쪽 policy와 Fusion 설정 hash를 고정한다.
+최종 instrument·issuer·원천 목록 순위·RRF·position·품질·선정/제외 사유를 보존한다.
+run·candidate·필수 audit는 단일 transaction으로 저장하고 입력 불일치와 중복은 fail closed한다.
+원천 두 결과·Fusion 결과·외부 전달 상태를 구분하며 전달 실패로 성공 후보를 덮어쓰지 않는다.
+전달 재시도와 수신 확인은 오케스트레이터 control plane에 두고 Candidate schema에
+외부 분석 job·report 상태를 추가하지 않는다.
 
 ## 8. 평가 하네스
 
@@ -245,6 +295,10 @@ Qlib `TopkDropoutStrategy` 결과를 본 프로젝트의 일일 후보 정책과
 - scoring rank·percentile 결정성
 - 레거시 정량 후보 5~10개, 일일 MEDIUM_20D 정량 분석 후보 20개와 LLM 분석 후보
   20개, hard/soft constraint, `SHORTFALL`, transaction rollback
+- 신규 LLM의 이벤트·대조 표본 결정성, 최소 3개 항목 근거·가중치 재정규화·비가격 packet
+- Fusion의 승인된 union 예외·동일 instrument 합산·issuer 중복·k=10·섹터 2/4 정책
+- 원천 identity 일치, 양쪽 장애 격리, Fusion SHORTFALL·FAILED의 외부 전달 차단
+- 성공 Fusion 20개 전량 전달의 versioned 계약·수신 identity 검증·재전달 멱등성
 - 재실행 idempotency와 artifact hash
 
 문서만 바꾸는 경우에도 범위·용어·상태 표현이 다른 기준 문서와 충돌하지 않는지 검색한다.

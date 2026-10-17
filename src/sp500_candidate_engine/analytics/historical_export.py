@@ -317,6 +317,52 @@ class HistoricalQlibExportService:
         ).fetchall()
         if not rows:
             raise RuntimeError("No historical reconstruction snapshots were found")
+        if include_evidence:
+            dependencies = connection.execute(
+                """
+                WITH evidence_dependencies AS (
+                    SELECT state.source_snapshot_id
+                    FROM ref.instrument_state state
+                    WHERE state.valid_from <= %s
+                      AND (state.valid_to IS NULL OR state.valid_to >= %s)
+                      AND state.source_available_at <= %s
+                    UNION
+                    SELECT observation.source_snapshot_id
+                    FROM fundamental.sec_filing_observation observation
+                    JOIN fundamental.sec_filing filing USING (filing_id)
+                    WHERE filing.accepted_at <= %s AND filing.filed_date <= %s
+                    UNION
+                    SELECT observation.source_snapshot_id
+                    FROM fundamental.fact_observation observation
+                    JOIN fundamental.fact fact USING (fact_id)
+                    WHERE fact.source_available_at <= %s AND fact.period_end <= %s
+                    UNION
+                    SELECT observation.source_snapshot_id
+                    FROM event.event_revision_observation observation
+                    JOIN event.event_revision revision USING (event_revision_id)
+                    WHERE revision.source_available_at <= %s
+                    UNION
+                    SELECT observation.source_snapshot_id
+                    FROM market.corporate_action_observation observation
+                    JOIN market.corporate_action action USING (action_id)
+                    WHERE action.source_available_at <= %s
+                )
+                SELECT DISTINCT snapshot.source_snapshot_id, snapshot.dataset_code,
+                    snapshot.snapshot_kind, snapshot.parent_snapshot_id,
+                    snapshot.coverage_start, snapshot.coverage_end,
+                    snapshot.source_available_at AS cutoff_at
+                FROM evidence_dependencies dependency
+                JOIN ops.source_snapshot snapshot USING (source_snapshot_id)
+                WHERE snapshot.coverage_end <= %s
+                  AND snapshot.source_available_at <= %s
+                """,
+                (
+                    end_date, end_date, decision_cutoff, decision_cutoff, end_date,
+                    decision_cutoff, end_date, decision_cutoff, decision_cutoff,
+                    end_date, decision_cutoff,
+                ),
+            ).fetchall()
+            rows.extend(dependencies)
         by_id = {row["source_snapshot_id"]: row for row in rows}
         missing_parent_ids = {
             row["parent_snapshot_id"]
@@ -430,13 +476,17 @@ class HistoricalQlibExportService:
             if decision_cutoff is not None
             else max(row["cutoff_at"] for row in rows)  # type: ignore[type-var]
         )
+        context_config_version = (
+            "historical-preselection-context-v2" if include_evidence
+            else "historical-qlib-export-v1"
+        )
         context_hash = _canonical_hash(
             {
                 "input_manifest_id": manifest_id,
                 "cutoff_at": cutoff_at,
                 "knowledge_mode": "HISTORICAL_RECONSTRUCTION",
                 "code_version": __version__,
-                "config_version": "historical-qlib-export-v1",
+                "config_version": context_config_version,
             }
         )
         context_id = _stable_uuid("historical-qlib-context", context_hash)
@@ -454,7 +504,7 @@ class HistoricalQlibExportService:
                 manifest_id,
                 cutoff_at,
                 __version__,
-                "historical-qlib-export-v1",
+                context_config_version,
                 context_hash,
             ),
         )

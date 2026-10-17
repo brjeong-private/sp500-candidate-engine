@@ -6,7 +6,7 @@
 
 > 2026-10-16 계약 변경: 외부 TradingAgents 전달 목표는 기존 5~10개에서 20개다.
 > SHORT_5D 5~10개 레거시는 유지한다. 독립 정량·LLM Top 20은 각각 저장하며
-> RRF 최종 Top 20·자동 전달은 후속 구현이다. 문서의 논리 모델과 날짜별 적재
+> RRF 최종 Top 20·전달 어댑터는 구현됐으나 기본 비활성이다. 문서의 논리 모델과 날짜별 적재
 > 증거를 구분하며 신규 schema의 운영 적용 완료를 가정하지 않는다.
 
 후보 선정 엔진의 쓰기 책임은 `selection` 스키마까지다. 후보 이후 분석·agent 실행·report·비용·재평가는 별도 프로젝트의 책임이며 이 데이터 모델에 포함하지 않는다. 공통 불변식은 루트 `PROJECT-HARNESS.md`를 따른다.
@@ -35,7 +35,13 @@
 requested count·position 상한을 20개로 확장하고 별도 LLM 저장 엔터티를 추가한다.
 LLM은 run·evidence packet·source evidence·call attempt·assessment와 별도 candidate를
 보존하며 정량 candidate row로 위장하지 않는다. context·manifest·cutoff·policy·prompt·
-deployment·입출력 hash로 lineage를 연결한다. RRF fusion 엔터티는 아직 없다.
+deployment·입출력 hash로 lineage를 연결한다.
+[023_hybrid_fusion.sql](../../../../../sql/023_hybrid_fusion.sql)은 기존 LLM에
+policy hash·응답·배치 재사용 참조·항목별 근거·결측·coverage·screening 감사를 추가한다.
+별도 `selection.fusion_run`, `fusion_candidate`, `fusion_audit`는 원천 선정 run·manifest·
+정책 hash를 고정하며 원자 저장·멱등 payload 충돌 검사·append-only 제약을 사용한다.
+외부 전달 상태는 오케스트레이터에 두고 Candidate DB에 외부 분석 상태를 추가하지 않는다.
+운영 migration은 적용하지 않았으며 격리 PostgreSQL-WASM SQL 실행 검증과 구분한다.
 
 ### 실제 데이터 보유 현황
 
@@ -155,7 +161,7 @@ SEC, S&P DJI, MSCI GICS, NYSE/Nasdaq 공식 달력, Massive, Alpha Vantage는 �
 | 7 | final manifest와 execution context | 실행당 각 1개 | core snapshot 집합과 optional 상태 고정 |
 | 8 | Qlib feature·MEDIUM score·candidate | 정량 20개 | 검증된 scoring run 기반 batch commit |
 | 9 | 선택 활성화 LLM·별도 candidate | LLM 20개 | 공통 context로 병렬 평가, 별도 commit·실패 보존 |
-| 후속 | RRF·최종 후보 | 최종 20개 | 통합·API·외부 전달은 미구현 |
+| 10 | 선택 활성화 RRF·최종 후보 | 성공 시 최종 20개 | 구현·기본 비활성, union 부족은 SHORTFALL |
 
 각 수집기는 `(source_id, dataset_code, partition_key)`별 `ingestion_checkpoint`를 성공한 트랜잭션 이후에만 전진시킨다. 실패한 실행은 checkpoint를 움직이지 않고 같은 구간을 멱등 재시도한다.
 

@@ -60,8 +60,35 @@ def _bounded_metadata_value(value: object) -> object:
     return _json_value(value)
 
 
-def _event_at(row: dict[str, object]) -> object:
-    return row.get("published_at") or row.get("scheduled_at") or row["source_available_at"]
+def _timestamp(value: object) -> datetime:
+    if not isinstance(value, datetime):
+        raise TypeError("Evidence timestamp must be a datetime")
+    return value
+
+
+def _event_at(row: dict[str, object]) -> datetime:
+    return _timestamp(
+        row.get("published_at") or row.get("scheduled_at") or row["source_available_at"]
+    )
+
+
+def _period_end(row: dict[str, object]) -> date:
+    value = row["period_end"]
+    if not isinstance(value, date) or isinstance(value, datetime):
+        raise TypeError("Fact period end must be a date")
+    return value
+
+
+def _price_number(value: object) -> float:
+    if not isinstance(value, (int, float, Decimal)) or isinstance(value, bool):
+        raise TypeError("Price context requires numeric values")
+    return float(value)
+
+
+def _volume(value: object) -> int:
+    if type(value) is not int:
+        raise TypeError("Volume must be an integer")
+    return value
 
 
 @dataclass(frozen=True)
@@ -73,6 +100,7 @@ class EvidenceLink:
     source_available_at: datetime
     observed_at: datetime | None
     event_at: datetime | None
+    citation_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +117,7 @@ class EvidencePacket:
     missing_sections: tuple[str, ...]
     truncated_sections: tuple[str, ...]
     links: tuple[EvidenceLink, ...]
+    screening_links: tuple[EvidenceLink, ...] = ()
 
 
 class EvidencePacketBuilder:
@@ -99,6 +128,7 @@ class EvidencePacketBuilder:
     ) -> None:
         self.repository = repository
         self.config = config
+        self.screening_audit: tuple[dict[str, object], ...] = ()
 
     def build_all(
         self,
@@ -119,7 +149,17 @@ class EvidencePacketBuilder:
             execution_context_id=execution_context_id,
             target_session=target_session,
         )
-        bar_rows = self.repository.read_bars(
+        if self.config.event_policy:
+            from sp500_candidate_engine.selection.eligibility import read_selection_eligibility
+
+            members, gates = read_selection_eligibility(
+                self.repository, execution_context_id=execution_context_id,
+                target_session=target_session,
+            )
+            members = [member for member in members if not gates[uuid.UUID(
+                str(member["instrument_id"])
+            )]]
+        bar_rows = [] if self.config.event_policy else self.repository.read_bars(
             execution_context_id=execution_context_id,
             start_date=target_session - timedelta(days=150),
             end_date=target_session,
@@ -137,6 +177,16 @@ class EvidencePacketBuilder:
             )
             for member in members
         )
+        if self.config.screening is not None:
+            from sp500_candidate_engine.llm_preselection.screening import screen_packets
+
+            screened = screen_packets(
+                packets, execution_context_id=execution_context_id, cutoff_at=cutoff_at,
+                policy_version=self.config.policy_version, config=self.config.screening,
+                knowledge_mode=str(context["knowledge_mode"]),
+            )
+            packets = screened.packets
+            self.screening_audit = screened.audit
         total_tokens = sum(packet.estimated_tokens for packet in packets)
         if total_tokens > self.config.limits.total_input_tokens:
             raise ValueError(
@@ -161,13 +211,40 @@ class EvidencePacketBuilder:
             instrument_id=instrument_id,
             event_type=_NEWS_EVENT_TYPE,
             start_at=cutoff_at - timedelta(days=self.config.windows.news_days),
+            clock="AVAILABLE" if self.config.event_policy else "EVENT",
         )
         earnings = self.repository.read_events(
             execution_context_id=execution_context_id,
             instrument_id=instrument_id,
             event_type=_EARNINGS_EVENT_TYPE,
             start_at=cutoff_at - timedelta(days=730),
-        )[: self.config.windows.earnings_events]
+        )
+        if not self.config.event_policy:
+            earnings = earnings[:self.config.windows.earnings_events]
+        other_events: list[dict[str, object]] = []
+        if self.config.screening is not None:
+            recent = self.repository.read_events(
+                execution_context_id=execution_context_id, instrument_id=instrument_id,
+                event_type=_EARNINGS_EVENT_TYPE,
+                start_at=cutoff_at - timedelta(days=self.config.screening.lookback_days),
+                clock="AVAILABLE",
+            )
+            upcoming = self.repository.read_events(
+                execution_context_id=execution_context_id, instrument_id=instrument_id,
+                event_type=_EARNINGS_EVENT_TYPE,
+                start_at=cutoff_at - timedelta(days=self.config.screening.earnings_window_days),
+                end_at=cutoff_at + timedelta(days=self.config.screening.earnings_window_days),
+                clock="SCHEDULE",
+            )
+            earnings = list({
+                str(row["event_revision_id"]): row for row in [*recent, *upcoming, *earnings]
+            }.values())
+            other_events = self.repository.read_events(
+                execution_context_id=execution_context_id, instrument_id=instrument_id,
+                event_type="CORPORATE_EVENT",
+                start_at=cutoff_at - timedelta(days=self.config.windows.corporate_actions_days),
+                clock="AVAILABLE",
+            )
         filings = self.repository.read_sec_filings(
             execution_context_id=execution_context_id,
             issuer_id=issuer_id,
@@ -180,10 +257,11 @@ class EvidencePacketBuilder:
             period_end_on_or_before=target_session,
         )
         period_ends = sorted(
-            {row["period_end"] for row in facts},
+            {_period_end(row) for row in facts},
             reverse=True,
         )[: self.config.windows.fact_quarters]
-        facts = [row for row in facts if row["period_end"] in period_ends]
+        screening_facts = facts
+        facts = [row for row in facts if _period_end(row) in period_ends]
         actions = self.repository.read_corporate_actions(
             execution_context_id=execution_context_id,
             instrument_id=instrument_id,
@@ -191,10 +269,24 @@ class EvidencePacketBuilder:
             - timedelta(days=self.config.windows.corporate_actions_days),
             end_date=target_session,
         )
-        bars = bars[-self.config.windows.price_sessions :]
+        screening_links = (
+            self._links(
+                member, news,
+                [{**row, "published_at": None} if row.get("scheduled_at") else row
+                 for row in earnings],
+                [{**row, "source_available_at": row["accepted_at"]} for row in filings],
+                screening_facts, actions, [],
+            )
+            + self._other_event_links(member, other_events)
+            if self.config.event_policy else ()
+        )
+        bars = [] if self.config.event_policy else bars[-self.config.windows.price_sessions :]
 
         truncated: list[str] = []
         news = self._limit(news, self.config.limits.news_items, "news", truncated)
+        earnings = self._limit(
+            earnings, self.config.windows.earnings_events, "earnings", truncated
+        )
         filings = self._limit(
             filings, self.config.limits.filings, "filings", truncated
         )
@@ -213,6 +305,12 @@ class EvidencePacketBuilder:
             "corporate_actions": [self._action_item(row) for row in actions],
             "price_context": self._price_context(bars),
         }
+        if self.config.event_policy:
+            sections.pop("price_context")
+            other_events = self._limit(
+                other_events, self.config.limits.corporate_actions, "events", truncated
+            )
+            sections["events"] = [self._event_item(row) for row in other_events]
         section_counts = {
             key: len(value) if isinstance(value, list) else int(bool(value))
             for key, value in sections.items()
@@ -236,16 +334,45 @@ class EvidencePacketBuilder:
             "missing_sections": list(missing),
             "truncated_sections": sorted(truncated),
         }
+        if self.config.event_policy:
+            packet["execution_context_id"] = str(execution_context_id)
         packet = _json_value(packet)  # type: ignore[assignment]
         assert isinstance(packet, dict)
         encoded = json.dumps(
             packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         )
+        if self.config.event_policy:
+            raw_sections = {
+                "news": news, "earnings": earnings, "filings": filings,
+                "facts": facts, "corporate_actions": actions, "events": other_events,
+            }
+            while len(encoded) > self.config.limits.packet_characters:
+                nonempty = [key for key, values in raw_sections.items() if values]
+                if not nonempty:
+                    break
+                section = max(nonempty, key=lambda key: (
+                    len(json.dumps(packet[key], ensure_ascii=True)), key,
+                ))
+                raw_sections[section].pop()
+                items = packet[section]
+                if not isinstance(items, list):
+                    raise TypeError("Evidence sections must be lists")
+                items.pop()
+                if section not in truncated:
+                    truncated.append(section)
+                section_counts[section] = len(items)
+                missing = tuple(key for key, count in section_counts.items() if count == 0)
+                packet["missing_sections"] = list(missing)
+                packet["truncated_sections"] = sorted(truncated)
+                encoded = json.dumps(
+                    packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+                )
         if len(encoded) > self.config.limits.packet_characters:
             raise ValueError(
                 f"Evidence packet exceeds character budget for {instrument_id}"
             )
         links = self._links(member, news, earnings, filings, facts, actions, bars)
+        links += self._other_event_links(member, other_events)
         return EvidencePacket(
             instrument_id=instrument_id,
             issuer_id=issuer_id,
@@ -259,6 +386,25 @@ class EvidencePacketBuilder:
             missing_sections=missing,
             truncated_sections=tuple(sorted(truncated)),
             links=links,
+            screening_links=screening_links,
+        )
+
+    @staticmethod
+    def _other_event_links(
+        member: dict[str, object], events: list[dict[str, object]]
+    ) -> tuple[EvidenceLink, ...]:
+        return tuple(
+            EvidenceLink(
+                _stable_uuid("llm-evidence-link", (
+                    f"{member['instrument_id']}:EVENT:{row['event_revision_id']}:"
+                    f"{row['source_snapshot_id']}"
+                )),
+                uuid.UUID(str(row["source_snapshot_id"])), "EVENT",
+                str(row["event_revision_id"]), _timestamp(row["source_available_at"]),
+                _timestamp(row["observed_at"]) if row.get("observed_at") is not None else None,
+                _event_at(row),
+            )
+            for row in events
         )
 
     @staticmethod
@@ -348,10 +494,10 @@ class EvidencePacketBuilder:
         if not rows:
             return {}
         closes = [
-            float(row["adjusted_close"] or row["close"])
+            _price_number(row["adjusted_close"] or row["close"])
             for row in rows
         ]
-        volumes = [int(row["volume"]) for row in rows]
+        volumes = [_volume(row["volume"]) for row in rows]
         returns = [
             closes[index] / closes[index - 1] - 1
             for index in range(1, len(closes))

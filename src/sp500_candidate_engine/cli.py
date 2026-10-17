@@ -54,6 +54,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", default=".env")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    stage = commands.add_parser(
+        "run-stage", help="Run exactly one pinned candidate stage without collection or training",
+    )
+    stage.add_argument(
+        "--stage", required=True, choices=("QUANTITATIVE", "LLM_PRESELECTION", "FUSION"),
+    )
+    stage.add_argument("--date", type=_date, required=True)
+    stage.add_argument("--execution-context-id", type=uuid.UUID, required=True)
+    stage.add_argument("--model-purpose", choices=("SHORT_5D", "MEDIUM_20D"))
+    stage.add_argument("--quant-selection-run-id", type=uuid.UUID)
+    stage.add_argument("--llm-preselection-run-id", type=uuid.UUID)
+    stage.add_argument("--idempotency-key", required=True)
+    for name in ("show-stage", "retry-stage"):
+        command = commands.add_parser(name, help="Inspect or explicitly retry one candidate stage")
+        command.add_argument("--stage-run-id", type=uuid.UUID, required=True)
+        if name == "retry-stage":
+            command.add_argument("--idempotency-key", required=True)
+
     commands.add_parser("migrate", help="Apply the MVP PostgreSQL schema")
     commands.add_parser(
         "check-config",
@@ -188,6 +206,30 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     settings = Settings.from_env(args.env_file)
+    if args.command in {"run-stage", "show-stage", "retry-stage"}:
+        from backend.app.schemas.candidate_stages import CandidateStageRequest
+        from backend.app.services.candidate_stages import CandidateStageService
+
+        service = CandidateStageService(Database(settings), settings, owner="CLI")
+        if args.command == "show-stage":
+            print(service.get(args.stage_run_id).model_dump_json(indent=2))
+            return
+        if args.command == "run-stage":
+            accepted = service.accept(CandidateStageRequest(
+                stage=args.stage, target_session=args.date,
+                execution_context_id=args.execution_context_id, model_purpose=args.model_purpose,
+                quant_selection_run_id=args.quant_selection_run_id,
+                llm_preselection_run_id=args.llm_preselection_run_id,
+            ), args.idempotency_key)
+        else:
+            accepted = service.retry(args.stage_run_id, args.idempotency_key)
+        if not accepted._is_replay:
+            asyncio.run(service.execute(accepted.stage_run_id))
+        result = service.get(accepted.stage_run_id)
+        print(result.model_dump_json(indent=2))
+        if result.status in {"FAILED", "SHORTFALL"}:
+            raise SystemExit(1)
+        return
     database = Database(settings)
 
     if args.command == "migrate":

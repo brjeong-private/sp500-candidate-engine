@@ -42,6 +42,12 @@ OpenAPI and Swagger UI are available at `/openapi.json` and `/docs`.
 | GET | `/api/v1/candidates` | Latest successful selection per date or explicit selection run |
 | GET | `/api/v1/llm-preselections` | Latest successful manifest-fenced LLM Top 20 per date |
 | GET | `/api/v1/llm-preselections/{run_id}` | Inspect one LLM run, including failed/shortfall |
+| GET | `/api/v1/fusion-selections` | Latest successful Fusion per date, optionally pinned to Quant run and policy/hash |
+| GET | `/api/v1/fusion-selections/{run_id}` | Inspect one Fusion run, including failed/shortfall |
+| GET | `/api/v1/fusion-selections/{run_id}/handoff` | Strict versioned envelope for a successful final Top 20 |
+| POST | `/api/v1/candidate-stage-runs` | Run exactly one Quant, LLM or Fusion stage from a frozen context; API key + Idempotency-Key |
+| GET | `/api/v1/candidate-stage-runs/{stage_run_id}` | Authenticated stage status, contract/input hashes, result IDs and failure code |
+| POST | `/api/v1/candidate-stage-runs/{stage_run_id}/retry` | Explicitly retry a failed/shortfall stage with preserved input and contract; new Idempotency-Key |
 | GET | `/api/v1/collection-data/{dataset}` | Normalized dataset records |
 
 The collection dataset allowlist is `daily-bars`, `corporate-actions`, `news`,
@@ -80,11 +86,11 @@ prompt/deployment/evidence-schema versions, bounded reason codes, and selected
 source-evidence lineage. Its score semantics are `LLM_EVIDENCE_SCORE`, not
 predicted return, probability, confidence, or investment advice.
 
-The final Portal/TradingAgents handoff target changes from 5–10 to **20**
-candidates, without trimming the final Top 20 again. Fusion remains future work.
-The MEDIUM orchestrator currently stops at `parallel_preselection` with zero
-external submissions; this documentation does not enable dispatch or deploy
-the new policy/schema. Explicit SHORT legacy execution remains unchanged.
+Fusion and its external handoff adapter are implemented but default off. With Fusion
+disabled, MEDIUM still stops at `parallel_preselection` with zero submissions.
+The separate `fusion-top20-v1` handoff sends all **20** final candidates and ends at
+receipt acknowledgement, not external analysis completion. SHORT legacy execution
+remains unchanged. Implementation does not imply production migration or deployment.
 
 `LLM_PRESELECTION_ENABLED=false` is the safe deployment default. When enabled
 for a MEDIUM daily run, the backend starts the LLM branch after the shared
@@ -116,6 +122,119 @@ python -m sp500_candidate_engine.llm_preselection --date 2026-10-14 --execution-
 This entry point does not load Qlib exports, Alpha158 features, or LightGBM
 artifacts. The existing `candidate-engine rank-llm-candidates` command remains
 compatible and delegates to the same independent pipeline.
+
+### Independent candidate stages
+
+Apply [migration 024](../sql/024_candidate_stage_runs.sql) and grant the backend
+SELECT/INSERT/UPDATE on `ops.candidate_stage_run` before deploying the independent-stage
+code. Terminal stage identity/history is protected by a DB trigger; do not grant DELETE.
+Result schemas, model parameters, ranking policies and existing daily scheduling are unchanged.
+
+Each request needs `stage`, `target_session`, `execution_context_id`.
+Stages are `QUANTITATIVE`, `LLM_PRESELECTION`, `FUSION`.
+Quant defaults to MEDIUM and accepts explicit SHORT. LLM does not take a Quant purpose.
+Fusion requires both source selection IDs and only supports MEDIUM.
+Unknown context, non-session, wrong cutoff, empty universe and broken manifest fail closed.
+
+Example authenticated POST body for independent Fusion:
+
+```json
+{
+  "stage": "FUSION",
+  "target_session": "2026-10-15",
+  "execution_context_id": "525d8b80-2415-5e82-b47e-9298e2424bf5",
+  "quant_selection_run_id": "832664a9-6e9a-5b7c-914f-ce94131174f3",
+  "llm_preselection_run_id": "11524530-0f59-49cd-9264-c88d7e63ec29"
+}
+```
+
+The response is HTTP202 with `stage_run_id`, the actual stored status, and `status_url`.
+The stage ID is **not** the Quant/LLM/Fusion selection ID. GET returns the result's
+actual selection/scoring/ranking/Fusion IDs, candidate count and reuse flag separately.
+The immutable contract itself (including artifact location) is not exposed in this
+status response; only contract/input hashes are public to authenticated operators.
+
+Same key+same request returns the original stage, including its terminal status.
+A different payload/retry source with the same key is HTTP409. Simultaneous active
+identical inputs are rejected. Collection/daily requests and independent stages use
+a common acceptance lock to prevent incompatible overlapping collection; separate
+Quant and LLM stage inputs can execute concurrently. Same-context Quant exports are
+serialized so SHORT/MEDIUM do not write the same Qlib files concurrently.
+
+Quant pins its active assignment or explicitly provisioned manifest at acceptance;
+execution never changes to a newer model assignment. It performs inference only,
+not training or processor fitting. A matching successful MEDIUM result may be reused.
+LLM pins its selected policy/hash and deployment/API and never initializes Quant/Qlib.
+Standalone legacy LLM can run even when Fusion is enabled; the daily Fusion flow still
+requires the explicitly selected event policy. Fusion validates and combines only
+the explicit existing sources; it never invokes Quant, LLM or external handoff.
+
+State is `PENDING → RUNNING → SUCCEEDED|SHORTFALL|FAILED`. API startup marks lost API
+requests `FAILED/INTERRUPTED`; it does not mark separately owned CLI requests.
+BackgroundTasks is not a durable queue. CLI cancellation is recorded when catchable;
+an uncatchable OS/process kill requires operator recovery, not an assumed success.
+Retry creates a new stage with `retry_of_run_id`; the previous terminal run is preserved.
+Only failed/shortfall runs can retry. Policy/deployment/context changes require a new
+request; a retry cannot silently switch the pinned contract.
+
+```powershell
+candidate-engine run-stage --stage QUANTITATIVE --date 2026-10-15 --execution-context-id <context-uuid> --model-purpose MEDIUM_20D --idempotency-key <unique-key>
+candidate-engine run-stage --stage LLM_PRESELECTION --date 2026-10-15 --execution-context-id <context-uuid> --idempotency-key <unique-key>
+candidate-engine run-stage --stage FUSION --date 2026-10-15 --execution-context-id <context-uuid> --quant-selection-run-id <quant-uuid> --llm-preselection-run-id <llm-uuid> --idempotency-key <unique-key>
+candidate-engine show-stage --stage-run-id <stage-uuid>
+candidate-engine retry-stage --stage-run-id <failed-stage-uuid> --idempotency-key <new-key>
+```
+
+These CLI commands require the existing backend/analytics extras, selected Azure identity,
+database and stage-specific configuration. They share the API service rather than
+duplicating selection algorithms. Existing `rank-llm-candidates` and legacy training
+commands remain compatible. Independent completion does **not** submit external analysis.
+
+### Event/Fusion operational activation
+
+1. With explicit approval, apply migrations through
+   [023_hybrid_fusion.sql](../sql/023_hybrid_fusion.sql) before deploying the new
+   code. Migration 022 also replaces the old 5–10 success constraint while retaining
+   selected-count bounds; replay is supported.
+2. Keep `LLM_PRESELECTION_ENABLED=false` and `FUSION_ENABLED=false` by default.
+   The default `LLM_PRESELECTION_POLICY_PATH` remains
+   `config/llm_preselection/policy_v1.yaml`.
+3. To test Fusion after approval, explicitly select
+   `config/llm_preselection/policy_event_v2.yaml`, enable LLM and then Fusion.
+   Do not select the legacy policy for Fusion. Invalid configuration is an explicit failure.
+4. [fusion_v1.yaml](../config/analytics/fusion_v1.yaml) fixes MEDIUM-only Top 20,
+   k=10 and sector caps 2/4. Environment overrides must agree with the policy.
+   `RRF_K`, `FUSION_SECTOR_CAP`, `FUSION_RELAXED_SECTOR_CAP` and any Top-N
+   settings are validated rather than silently changing the policy.
+5. Configure the orchestrator's matching Fusion policy/version/hash and leave external
+   delivery off until the receiver passes the contract checks in
+   [the orchestrator guide](../orchestrator/README.md).
+
+The event policy screens at most 90 EVENT and 10 CONTROL issuers, with no quota
+transfer or forced padding. It excludes price context, uses at least three
+evidence-backed rubric criteria, renormalizes their weights and records null/missing
+criteria. The LLM API exposes group, criterion citations, supported count and weight
+denominator; its run retains the complete screening audit. RPM/TPM limits, finite retry
+budget, stored response hashes, source-call references and context-restricted successful
+batch reuse bound retries without assuming model determinism. An advisory evaluation
+lock prevents concurrent duplicate event runs.
+
+Fusion pins both source selection IDs and validates context, manifest/universe,
+session/cutoff, policy hashes, model purpose, scoring/artifact lineage and source
+counts. Exact RRF only sums identical instruments; issuer deduplication never moves
+another share class's return to the selected instrument. The candidate pool never
+extends beyond the two Top 20 lists. A shortage is stored as `SHORTFALL` and cannot
+produce a handoff. Run/candidates/audit are append-only and atomically stored with
+payload-conflict detection. The API exposes exact RRF numerator/denominator and nullable
+source values; it rejects SHORT Fusion requests and never reinterprets legacy scores.
+
+Daily results preserve sibling `candidate_run`, `llm_preselection_run` and, when
+requested, `fusion_run`. Pipeline status exposes pinned Fusion and source selection
+IDs. A failed Fusion stage preserves both upstream results; a failed external handoff
+does not alter an already successful Fusion run. A retry reuses a successful Quant
+selection in the same context and successful LLM inputs/batches, then runs only the
+remaining stages. No production DB or real Azure OpenAI/receiver call is required by
+the mock unit/integration tests.
 
 Collection date filters have dataset-specific meanings:
 

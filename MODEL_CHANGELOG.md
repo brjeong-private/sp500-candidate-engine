@@ -2,6 +2,17 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## 독립 실행·통합 후보 운영 연결 — 2026-10-17
+
+정량·이벤트 LLM·RRF Fusion과 단독 실행 API/CLI·상태·재시도를 구현·배포했다.
+MEDIUM_20D·SHORT_5D의 모델 weight·label·horizon·평가 지표는 변경하지 않았다.
+이벤트 LLM v2·RRF k=10·섹터2/4와 최종20개 계약을 유지하고, 실행 제어 stage ID와
+원천 scoring/selection/ranking/Fusion ID를 분리한다.
+운영에서 세 단독 경로가 고정 context의 기존20개 결과를 재사용함을 검증했으며
+새 모델 학습·추가 LLM 호출·새 champion 승격으로 표현하지 않는다.
+현재 배포·오류 확인은 [운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따른다.
+아래 날짜별 모델 성능·검증 상태는 당시 기록으로 보존한다.
+
 ## 후보 수·외부 전달 계약 — 2026-10-16
 
 일일 MEDIUM_20D 정량 선정은 `medium-20d-top20-v1` 정책으로 정확히 20개이며,

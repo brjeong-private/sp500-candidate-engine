@@ -73,6 +73,10 @@ param emailRecipients string
 
 @description('Whether orchestrator email notifications are sent.')
 param emailEnabled bool = false
+param fusionEnabled bool = false
+param fusionExternalDeliveryEnabled bool = false
+param fusionExternalContractVersion string = ''
+param fusionExternalHandoffPath string = '/api/automation/candidate-handoffs'
 
 param exchangeMic string = 'XNYS'
 
@@ -515,6 +519,38 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       http20Enabled: true
       vnetRouteAllEnabled: true
       appSettings: [
+        {
+          name: 'FUSION_ENABLED'
+          value: string(fusionEnabled)
+        }
+        {
+          name: 'FUSION_EXTERNAL_DELIVERY_ENABLED'
+          value: string(fusionExternalDeliveryEnabled)
+        }
+        {
+          name: 'FUSION_EXTERNAL_CONTRACT_VERSION'
+          value: fusionExternalContractVersion
+        }
+        {
+          name: 'FUSION_EXTERNAL_HANDOFF_PATH'
+          value: fusionExternalHandoffPath
+        }
+        {
+          name: 'FUSION_POLICY_VERSION'
+          value: 'daily-medium-20d-rrf:1'
+        }
+        {
+          name: 'RRF_K'
+          value: '10'
+        }
+        {
+          name: 'FUSION_SECTOR_CAP'
+          value: '2'
+        }
+        {
+          name: 'FUSION_RELAXED_SECTOR_CAP'
+          value: '4'
+        }
         {
           name: 'FUNCTIONS_EXTENSION_VERSION'
           value: '~4'

@@ -4,7 +4,8 @@ import asyncio
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import httpx
@@ -14,6 +15,7 @@ from sp500_candidate_engine.analytics.azure_openai import AzureOpenAIClient
 from sp500_candidate_engine.database import _canonical_hash, _stable_uuid
 from sp500_candidate_engine.llm_preselection.config import LlmPreselectionConfig
 from sp500_candidate_engine.llm_preselection.evidence import EvidencePacket
+from sp500_candidate_engine.llm_preselection.rate_limits import LlmRateLimiter
 
 _REASON_CODES = (
     "BUSINESS_MOMENTUM",
@@ -78,6 +80,15 @@ class CallAttempt:
     total_tokens: int | None
     started_at: datetime
     finished_at: datetime
+    response_output: dict[str, object] | None = None
+    cache_source_attempt_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class CachedCompletion:
+    output: dict[str, object]
+    output_hash: str
+    call_attempt_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -85,14 +96,18 @@ class InstrumentAssessment:
     instrument_id: uuid.UUID
     batch_no: int
     first_stage_rank: int
-    score: float
-    sub_scores: dict[str, float]
+    score: float | None
+    sub_scores: dict[str, float | None]
     evidence_quality: str
     uncertainty: str
     reason_codes: tuple[str, ...]
     rationale: str
     evidence_ids: tuple[uuid.UUID, ...]
     output_hash: str
+    criterion_evidence: tuple[dict[str, str], ...] = ()
+    missing_reasons: dict[str, str] = field(default_factory=dict)
+    weight_denominator: int | None = None
+    supported_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -129,7 +144,10 @@ class AzureOpenAIPreselectionRanker:
         self.config = config
         if client is None:
             credential = (
-                AzureCliCredential(tenant_id=settings.tenant_id)
+                (
+                    AzureCliCredential(tenant_id=settings.tenant_id)
+                    if settings.tenant_id is not None else AzureCliCredential()
+                )
                 if settings.credential_mode == "azure_cli"
                 else DefaultAzureCredential()
             )
@@ -141,6 +159,8 @@ class AzureOpenAIPreselectionRanker:
                 credential=credential,
             )
         self.client = client
+        self.response_cache: Callable[[str, uuid.UUID, bool], CachedCompletion | None] | None = None
+        self.rate_limiter = LlmRateLimiter(config.rate_limits) if config.rate_limits else None
 
     async def aclose(self) -> None:
         await self.client.aclose()
@@ -185,7 +205,9 @@ class AzureOpenAIPreselectionRanker:
                 assessments.extend(parsed_assessments)
             assessments = sorted(
                 assessments,
-                key=lambda item: (-item.score, item.instrument_id.hex),
+                key=lambda item: (
+                    -_required_score(item), item.instrument_id.hex
+                ),
             )
             assessments = [
                 InstrumentAssessment(
@@ -234,23 +256,50 @@ class AzureOpenAIPreselectionRanker:
         messages: list[dict[str, str]],
         schema_name: str,
         schema: dict[str, object],
+        execution_context_id: uuid.UUID | None = None,
+        attempt_offset: int = 0,
     ) -> tuple[dict[str, object], str, tuple[CallAttempt, ...]]:
         input_hash = _canonical_hash(
             {"messages": messages, "schema_name": schema_name, "schema": schema}
         )
+        if self.response_cache is not None:
+            if execution_context_id is None:
+                raise LlmRankingError("Cached evaluation requires an execution context", ())
+            cached = await asyncio.to_thread(
+                self.response_cache, input_hash, execution_context_id, attempt_offset == 0
+            )
+            if cached is not None:
+                if _canonical_hash(cached.output) != cached.output_hash:
+                    raise LlmRankingError("Cached response hash mismatch", ())
+                now = datetime.now(UTC)
+                attempt = CallAttempt(
+                    _stable_uuid(
+                        "llm-cache-attempt",
+                        f"{run_id}:{stage}:{batch_no}:{attempt_offset + 1}:{input_hash}",
+                    ),
+                    stage, batch_no, attempt_offset + 1, input_hash,
+                    cached.output_hash, "SUCCEEDED",
+                    None, None, 0, 0, 0, now, now, cached.output, cached.call_attempt_id,
+                )
+                return cached.output, cached.output_hash, (attempt,)
         attempts: list[CallAttempt] = []
-        for attempt_no in range(1, self.config.max_attempts + 1):
+        for attempt_no in range(attempt_offset + 1, self.config.max_attempts + 1):
             started_at = datetime.now(UTC)
             attempt_id = _stable_uuid(
                 "llm-call-attempt",
                 f"{run_id}:{stage}:{batch_no}:{attempt_no}:{input_hash}",
             )
             try:
+                if self.rate_limiter is not None:
+                    estimated = (len(json.dumps(messages)) + len(json.dumps(schema)) + 3) // 4
+                    await self.rate_limiter.acquire(estimated)
                 response = await self.client.complete(
                     messages=messages,
                     schema_name=schema_name,
                     schema=schema,
                 )
+                if self.rate_limiter is not None:
+                    self.rate_limiter.record_usage(response.total_tokens)
                 output_hash = _canonical_hash(response.output)
                 attempts.append(
                     CallAttempt(
@@ -268,6 +317,7 @@ class AzureOpenAIPreselectionRanker:
                         total_tokens=response.total_tokens,
                         started_at=started_at,
                         finished_at=datetime.now(UTC),
+                        response_output=response.output,
                     )
                 )
                 return response.output, output_hash, tuple(attempts)
@@ -304,9 +354,16 @@ class AzureOpenAIPreselectionRanker:
                         f"{stage} Azure OpenAI call failed: {error_code}",
                         tuple(attempts),
                     ) from error
-                await asyncio.sleep(
-                    self.config.base_delay_seconds * (2 ** (attempt_no - 1))
-                )
+                delay = self.config.base_delay_seconds * (2 ** (attempt_no - 1))
+                if isinstance(error, httpx.HTTPStatusError):
+                    retry_after = error.response.headers.get("Retry-After", "")
+                    if retry_after.isdigit():
+                        delay = max(delay, float(retry_after))
+                if delay > self.config.max_delay_seconds:
+                    raise LlmRankingError(
+                        "Provider retry delay exceeds the configured budget", tuple(attempts)
+                    ) from error
+                await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 
     def _assessment_messages(
@@ -439,7 +496,7 @@ class AzureOpenAIPreselectionRanker:
                 or any(item not in allowed_evidence for item in evidence_ids)
             ):
                 raise LlmRankingError("Assessment evidence reference is invalid", ())
-            sub_scores = {
+            sub_scores: dict[str, float | None] = {
                 str(key): float(score)
                 for key, score in dict(value["sub_scores"]).items()
             }
@@ -451,7 +508,7 @@ class AzureOpenAIPreselectionRanker:
             if (
                 set(sub_scores) != set(self.config.rubric)
                 or not 0 <= score <= 100
-                or any(not 0 <= item <= 100 for item in sub_scores.values())
+                or any(item is None or not 0 <= item <= 100 for item in sub_scores.values())
                 or evidence_quality not in _QUALITY_LEVELS
                 or uncertainty not in _UNCERTAINTY_LEVELS
                 or not reason_codes
@@ -652,3 +709,9 @@ class AzureOpenAIPreselectionRanker:
         if seen_positions != expected_positions:
             raise LlmRankingError("Final positions are not contiguous", ())
         return tuple(sorted(candidates, key=lambda item: item.position))
+
+
+def _required_score(item: InstrumentAssessment) -> float:
+    if item.score is None:
+        raise LlmRankingError("Legacy assessment score is missing", ())
+    return item.score

@@ -4,7 +4,7 @@
 대상: 기존 저장소를 분석하고 후보 선정 엔진을 구현할 개발 에이전트  
 상태: 합의된 방향을 구현 가능한 작업으로 정리한 초안. 수치·주기는 아래 기본값으로 시작하고 설정으로 변경할 수 있게 한다.
 
-## 현재 일일 실행 구조 (2026-10-16)
+## 현재 일일 실행 구조 (2026-10-17)
 
 [공통 하네스](PROJECT-HARNESS.md)와 versioned 운영 설정을 우선한다.
 2026-10-16 외부 전달 목표를 기존 5~10개에서 **20개**로 변경했다.
@@ -12,16 +12,20 @@
 다음 두 **독립 파이프라인**을 병렬 실행한다(LLM 기본값 비활성).
 
 1. 정량: Qlib export → Alpha158 → MEDIUM_20D LightGBM → 정량 분석 후보 20개.
-2. LLM: 수집 evidence → 배치 평가 → 최종 재정렬 → LLM 분석 후보 20개.
+2. LLM: event v2 비가격 evidence → 90/10 선별 → 배치 평가·지원 항목 가중치 재정규화 → LLM 후보20개.
 
 LLM 구현과 독립 실행 진입점은 [llm_preselection/](src/sp500_candidate_engine/llm_preselection/),
 설정은 [config/llm_preselection/](config/llm_preselection/), 테스트는
 [tests/llm_preselection/](tests/llm_preselection/)에 둔다.
 정량 추론 내부에서 LLM을 호출하지 않으며 Qlib export·모델 검증 실패가 LLM 실행을
-막지 않는다. 결과와 실패 상태는 각각 저장하고, 두 목록의 최종 20개 병합은 나중에 구현한다.
+막지 않는다. 결과와 실패 상태는 각각 저장하고 두 성공 목록을 RRF k=10으로 통합한다.
 SHORT_5D·API의 명시적 모델 선택과 주간 재학습은 기존 동작을 유지한다.
-최종 20개를 다시 일부로 축소하지 않는다. 현재 MEDIUM은 `parallel_preselection`에서
-종료하고 외부 자동 제출은 하지 않는다. 최종 병합·전달은 후속 구현이다.
+최종20개를 다시 일부로 축소하지 않는다. Fusion이 OFF인 MEDIUM은 기존처럼
+`parallel_preselection`에서 종료하고, 승인된 운영의 Fusion·전달 ON 경로는 성공20개 전량
+ACK까지 처리한다. 독립 stage API/CLI는 수집·학습·다른 단계·외부 전송을 시작하지 않는다.
+상세 설계는 [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md),
+운영 설정·오류 확인은 [운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따른다.
+아래 초기 감시100개·종목군·MVP 제안은 역사적 설계이며 현재 운영 정책을 대체하지 않는다.
 
 ## 1. 목표와 작업 원칙
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from datetime import date, datetime
 
 from psycopg.types.json import Jsonb
@@ -15,15 +16,17 @@ def selection_run_identity(
     price_session_date: date,
     scoring_run_id: uuid.UUID,
     policy_version: str,
+    policy_hash: str | None = None,
 ) -> tuple[uuid.UUID, str]:
-    key = _canonical_hash(
-        {
+    identity = {
             "price_session_date": price_session_date,
             "scoring_run_id": scoring_run_id,
             "policy_version": policy_version,
             "selection_type": "QUANTITATIVE",
-        }
-    )
+    }
+    if policy_hash is not None:
+        identity["policy_hash"] = policy_hash
+    key = _canonical_hash(identity)
     return _stable_uuid("selection-run", key), key
 
 
@@ -42,21 +45,40 @@ class SelectionRepository:
         policy_version: str,
         requested_count: int,
         result: SelectionResult,
+        policy_hash: str | None = None,
     ) -> uuid.UUID:
         run_id, key = selection_run_identity(
             price_session_date=price_session_date,
             scoring_run_id=scoring_run_id,
             policy_version=policy_version,
+            policy_hash=policy_hash,
         )
+        payload_hash = None
+        if policy_hash is not None:
+            payload_hash = _canonical_hash({
+                "cutoff_at": cutoff_at, "requested_count": requested_count,
+                "policy_hash": policy_hash, "result": asdict(result),
+            })
+            self.connection.execute(  # type: ignore[attr-defined]
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,)
+            )
+            existing = self.connection.execute(  # type: ignore[attr-defined]
+                "SELECT payload_hash FROM selection.selection_run WHERE idempotency_key = %s",
+                (key,),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_hash"] != payload_hash:
+                    raise ValueError("Quant selection idempotency payload conflict")
+                return run_id
         self.connection.execute(  # type: ignore[attr-defined]
             """
             INSERT INTO selection.selection_run(
                 selection_run_id, selection_type, price_session_date,
                 cutoff_at, generated_at, valid_until, scoring_run_id,
                 policy_version, requested_count, selected_count,
-                status, idempotency_key
+                status, idempotency_key, policy_hash, payload_hash
             )
-            VALUES (%s, 'QUANTITATIVE', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, 'QUANTITATIVE', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (idempotency_key) DO NOTHING
             """,
             (
@@ -71,6 +93,8 @@ class SelectionRepository:
                 len(result.candidates),
                 result.status,
                 key,
+                policy_hash,
+                payload_hash,
             ),
         )
         execute_many(

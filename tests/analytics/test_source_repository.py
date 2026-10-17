@@ -257,4 +257,4 @@ def test_read_universe_requires_manifested_active_point_in_time_state() -> None:
     assert "state.source_snapshot_id = imm.source_snapshot_id" in sql
     assert "uv.announced_at <= ec.cutoff_at" in sql
     assert "state.observed_at <= ec.cutoff_at" in sql
-    assert "state.status = 'ACTIVE'" in sql
+    assert "state.status IN ('ACTIVE', 'LISTED')" in sql

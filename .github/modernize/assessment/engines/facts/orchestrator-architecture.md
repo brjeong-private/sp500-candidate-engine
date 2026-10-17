@@ -198,9 +198,12 @@ Candidate의 `PARTIAL_SUCCESS`는 terminal 상태지만 성공으로 간주하�
 `reason=not_exchange_session`으로 구분한다.
 
 각 model child 내부 상태는 session check, preflight, Candidate polling, 후보 검증
-순서다. MEDIUM은 `parallel_preselection`에서 종료하며 Portal 제출·poll은 레거시
-SHORT 명시 실행에만 적용한다. 향후 최종 전달 계약은 기존 5~10개에서 **20개**로
-변경하고 추가 축소하지 않는다. RRF·최종 전달은 후속 구현이다.
+순서다. Fusion 비활성 MEDIUM은 `parallel_preselection`에서 종료하며 Portal 분석 poll은
+레거시 SHORT 명시 실행에만 적용한다. 기본 비활성인 신규 Fusion 경로는 성공 원천 run과
+동일 정책/hash를 검증한 최종 20개 전량을 별도 `fusion-top20-v1` envelope·ACK로 전달한다.
+외부 분석 완료를 기다리지 않으며 수신 실패로 성공 Fusion 결과를 덮어쓰지 않는다.
+기능 플래그·재시도·ACK 필드는 [오케스트레이터 가이드](../../../../../orchestrator/README.md)를 따른다.
+운영 수신처 검증·migration·배포·활성화는 별도 승인 작업이다.
 terminal 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`,
 `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다.
 
@@ -250,12 +253,12 @@ unique key가 소유하며 Durable state 자체를 업무 acceptance 원장으�
 
 모든 외부 URL은 credential·query·fragment가 없는 HTTPS base URL이어야 한다. HTTP
 redirect를 따르지 않고 JSON object만 허용하며 응답은 최대 2 MiB로 제한한다. Candidate
-후보는 다음을 모두 만족해야 한다. MEDIUM은 검증 후 저장 경계에서 멈추며,
-향후 최종 20개 전달을 활성화할 때 소비자의 동일 검증·멱등성을 확인한다.
+후보는 다음을 모두 만족해야 한다. 기본 MEDIUM은 저장 경계에서 멈추며,
+Fusion 전달은 별도 플래그·수신처 전량 identity/hash ACK·멱등성 확인을 요구한다.
 
 - `price_session_date`가 대상일과 일치
 - 설정된 `model_purpose`와 일치
-- 일일 MEDIUM·향후 최종 결과는 정확히 20개이며 requested·selected·실제 개수가 일치
+- 일일 MEDIUM·성공 Fusion은 정확히 20개이며 requested·selected·실제 개수가 일치
 - SHORT 명시 실행만 기존 5~10개 레거시 검증 유지
 - position이 1부터 연속이고 ticker·instrument가 중복되지 않음
 - 모든 row가 하나의 `selection_run_id`에 속함

@@ -33,6 +33,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         from starlette.concurrency import run_in_threadpool
 
+        from backend.app.services.candidate_stages import CandidateStageService
         from backend.app.services.pipeline_execution import PipelineExecutionService
 
         settings = engine_settings or Settings.from_env()
@@ -42,6 +43,11 @@ def create_app(
         service = PipelineExecutionService(app.state.database, settings)
         app.state.execution_service = service
         await run_in_threadpool(service.reconcile_interrupted)
+        stage_service = CandidateStageService(
+            app.state.database, settings, execution=service,
+        )
+        app.state.candidate_stage_service = stage_service
+        await run_in_threadpool(stage_service.reconcile_interrupted)
         yield
 
     app = FastAPI(
@@ -141,18 +147,22 @@ def create_app(
         return {"status": "ready"}
 
     from backend.app.routers import (
+        candidate_stages,
         candidates,
         collection_data,
         execution,
+        fusions,
         llm_preselections,
         pipeline_runs,
         weekly_training,
     )
 
     for router in (
+        candidate_stages.router,
         candidates.router,
         collection_data.router,
         execution.router,
+        fusions.router,
         llm_preselections.router,
         pipeline_runs.router,
         weekly_training.router,

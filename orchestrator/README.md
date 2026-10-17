@@ -46,6 +46,11 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
 
 ## 실행 흐름
 
+코드의 안전한 기본값과 현재 운영 설정을 구분한다. 승인된2026-10-17 운영은
+event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candidate Backend에
+배포됐다. 오늘 gate·실제 고정 input·ACK·오류 재시도는
+[운영 점검서](../DAILY-PIPELINE-RUNBOOK.md)를 따른다.
+
 1. 타이머는 매시 30분(UTC)에 실행되고 `America/New_York` 현지 시각 05:30에만
    직전 달력 날짜의 `MEDIUM_20D` 단일 `daily_orchestrator`를 시작한다.
    instance ID는 `candidate-daily-YYYY-MM-DD-medium_20d`이며 활성 instance는
@@ -77,10 +82,11 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
    인정하지 않으며 MEDIUM 제출 key의 `top20-v1` suffix로 기존 10개 요청과 구분한다.
    정량 Top 20 완료는 LLM 결과 유무에 의존하지 않는다. LLM 파이프라인은 별도이며
    `LLM_PRESELECTION_ENABLED`를 활성화할 때만 병렬 실행한다.
-5. MEDIUM_20D의 두 목록은 중간 후보군이므로 `parallel_preselection`에서 성공 종료하며
-   Portal/TradingAgents에 제출하지 않는다. 두 목록을 최종 20개로 병합하는 단계는
-   후속 구현이다. 레거시 SHORT_5D 명시 실행만 기존 Portal batch 계약을 유지한다.
-   향후 최종 전달 계약은 기존 5~10개에서 **20개**로 변경하며, 최종 Top 20을
+5. 기본 `FUSION_ENABLED=false`이면 MEDIUM은 `parallel_preselection`에서 제출 0개로 종료한다.
+   Fusion 활성 시에는 신규 이벤트 LLM 정책과 정량 Top 20을 병합하고 별도 API에서
+   고정 run을 검증한다. 외부 전달은 추가 플래그·수신처 계약이 모두 충족될 때만 실행한다.
+   레거시 SHORT_5D 명시 실행은 기존 Portal batch·분석 poll 계약을 유지한다.
+   신규 최종 전달 계약은 기존 5~10개에서 **20개**로 변경하며, 최종 Top 20을
    다시 축소하지 않는다. 이는 문서 목표이며 현재 MEDIUM 제출 차단을 해제하지 않는다.
 6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. 정기 일일 실행은
    `MEDIUM_20D` 정량 Top 20을 생성하며 SHORT 실행이나 LLM 결과에 의존하지 않는다. 외부 I/O와 이메일은
@@ -166,13 +172,49 @@ Invoke-RestMethod `
 
 ## 외부 포털 계약
 
-최종 전달 활성화 전에 포털이 다음 서버 간 계약을 제공해야 한다.
-MEDIUM 자동 전달은 현재 차단돼 있으며 아래 20개 수용 계약은 후속 연동 목표다.
-기존 SHORT 명시 경로만 5~10개 레거시 batch를 유지한다.
+### Fusion Top 20 전달
+
+어댑터는 구현됐지만 `FUSION_ENABLED=false`,
+`FUSION_EXTERNAL_DELIVERY_ENABLED=false`가 기본값이다. 운영 활성화 전에
+Backend migration 023·event policy v2·Fusion 및 수신처의 전량 수용·멱등성을 검증한다.
+`FUSION_EXTERNAL_CONTRACT_VERSION=fusion-top20-v1`은 검증 후 명시적으로 설정한다.
+수신처 자체의 구현·배포는 이 저장소 밖의 의존 작업이다.
+
+- Backend와 동일한 `FUSION_POLICY_VERSION=daily-medium-20d-rrf:1`,
+  `RRF_K=10`, `FUSION_SECTOR_CAP=2`, `FUSION_RELAXED_SECTOR_CAP=4`를 사용한다.
+  유효 설정 hash를 Durable input에 고정하고 activity에서 정책 변경을 차단한다.
+- 성공 Fusion을 Quant selection run ID·날짜·정책/version/hash에 고정해 조회한다.
+  원천 두 목록만 완료됐다고 Fusion·전달을 건너뛰지 않는다. 이미 성공한 Fusion은
+  `FUSION_READY`로 전달 단계에 재진입하며 전체 후보를 다시 계산하지 않는다.
+- `GET /api/v1/fusion-selections/{run_id}/handoff`의 `fusion-top20-v1` envelope를
+  검증한다. 원천 run·context·cutoff·목록 순위·정확한 RRF·issuer/instrument 중복과
+  20개 연속 position 및 canonical payload hash를 확인한다.
+- 기본 수신 경로는 `POST /api/automation/candidate-handoffs`이며
+  `FUSION_EXTERNAL_HANDOFF_PATH`로 versioned 수신 endpoint를 지정한다.
+  기존 Portal 인증 헤더와 계약·Fusion run·수신처·payload를 구분한
+  `Idempotency-Key`를 사용하고 원문 evidence나 secret은 보내지 않는다.
+- ACK는 `contract_version`, `selection_run_id`, `payload_hash`,
+  `status=ACCEPTED|REUSED`, `accepted_count=20`, `accepted_candidates`를 반환한다.
+  `accepted_candidates`는 position 순서의
+  `{instrument_id, issuer_id, position}` 20개와 정확히 일치해야 한다.
+  HTTP 성공만으로는 완료가 아니며 일부 수락·다른 identity·hash는 실패다.
+- 전달 timeout·408/429/5xx는 같은 payload·key로 최대 3회 재시도한다.
+  대기는 Durable timer를 사용하며 I/O는 activity에서만 실행한다.
+  전달 실패 후 재시작해도 같은 key를 사용하므로 수신처는 재사용을 보장해야 한다.
+- 후보 생성 요청이 terminal 실패했다면 이전 key를 무한 재조회하지 않고
+  이전 process run에 묶인 제한된 retry key로 재개한다. Source branch의 성공 결과는
+  Backend가 동일 context에서 재사용한다.
+- `SHORTFALL`, `FAILED`, 중간 Quant/LLM 목록은 전달하지 않는다.
+  성공한 최종 20개를 5~10개로 줄이지 않는다. 전달 성공은 ACK까지이며 외부
+  분석 job·보고서·비용·재평가를 새 Fusion 경로의 완료 조건으로 사용하지 않는다.
+
+### 레거시 SHORT 전달
+
+기존 SHORT 명시 경로는 다음 5~10개 계약을 그대로 유지한다.
 
 - `Authorization: Bearer <token>`을 두 API에 전달
 - `POST /api/automation/candidate-analyses`: `analysis_date`, `selection_run_id`,
-  `model_purpose` JSON을 한 번 접수하고 `daily_analysis_id` 및 최종 20개 `jobs` 집계 반환
+  `model_purpose` JSON을 한 번 접수하고 `daily_analysis_id` 및 5~10개 `jobs` 집계 반환
 - `GET /api/automation/candidate-analyses/{daily_analysis_id}`: 같은 집계를 반환
 - 작업 상태는 `pending`, `running`, `completed`, `failed`이며 오케스트레이터 결과는
   포털이 반환한 모든 작업의 `decision`, `has_result`, 안전한 `error` 요약을 보존

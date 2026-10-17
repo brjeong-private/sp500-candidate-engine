@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
@@ -12,9 +14,11 @@ from sp500_candidate_engine.llm_preselection.config import (
     LlmPreselectionConfig,
     load_llm_preselection_config,
 )
+from sp500_candidate_engine.llm_preselection.event_ranker import EventPreselectionRanker
 from sp500_candidate_engine.llm_preselection.evidence import EvidencePacketBuilder
 from sp500_candidate_engine.llm_preselection.ranker import (
     AzureOpenAIPreselectionRanker,
+    CachedCompletion,
     LlmRankerSettings,
     LlmRankingError,
 )
@@ -34,6 +38,16 @@ class LlmPreselectionSummary:
     failure_code: str | None = None
 
 
+def _reused_summary(row: dict[str, object], target_session: date) -> LlmPreselectionSummary:
+    count = row["selected_count"]
+    if type(count) is not int or count != 20:
+        raise ValueError("Stored successful LLM run must contain exactly 20 candidates")
+    return LlmPreselectionSummary(
+        uuid.UUID(str(row["llm_ranking_run_id"])), uuid.UUID(str(row["run_id"])),
+        target_session, "SUCCEEDED", count, True,
+    )
+
+
 class LlmPreselectionService:
     def __init__(
         self,
@@ -46,8 +60,33 @@ class LlmPreselectionService:
         self.database = database
         self.config = config
         self.ranker_settings = ranker_settings
-        self.ranker = ranker or AzureOpenAIPreselectionRanker(
+        ranker_class = (
+            EventPreselectionRanker if config.event_policy else AzureOpenAIPreselectionRanker
+        )
+        self.ranker = ranker or ranker_class(
             ranker_settings, config
+        )
+        if config.event_policy:
+            self.ranker.response_cache = self._read_cached_completion
+
+    def _read_cached_completion(
+        self, input_hash: str, execution_context_id: uuid.UUID, include_failed: bool
+    ) -> CachedCompletion | None:
+        with self.database.connect() as connection:
+            cached = LlmPreselectionRepository(connection).find_cached_call(
+                input_hash=input_hash, policy_hash=self.config.versioned.config_hash,
+                deployment=self.ranker_settings.deployment,
+                api_version=self.ranker_settings.api_version,
+                execution_context_id=execution_context_id,
+                include_failed=include_failed,
+            )
+        if cached is None:
+            return None
+        output = cached["response_output"]
+        if not isinstance(output, dict):
+            raise ValueError("Stored LLM response is not an object")
+        return CachedCompletion(
+            output, str(cached["output_hash"]), uuid.UUID(str(cached["llm_call_attempt_id"]))
         )
 
     async def run(
@@ -56,32 +95,91 @@ class LlmPreselectionService:
         target_session: date,
         execution_context_id: uuid.UUID,
     ) -> LlmPreselectionSummary:
+        if not self.config.event_policy:
+            return await self._run(target_session=target_session,
+                                   execution_context_id=execution_context_id)
+        key = "llm-evaluate-" + _canonical_hash({
+            "context": execution_context_id, "session": target_session,
+            "policy": self.config.versioned.config_hash,
+            "deployment": self.ranker_settings.deployment,
+            "api_version": self.ranker_settings.api_version,
+        })
+        with self.database.connect(autocommit=True) as lock_connection:
+            await asyncio.to_thread(
+                lock_connection.execute,
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))", (key,),
+            )
+            try:
+                return await self._run(
+                    target_session=target_session, execution_context_id=execution_context_id
+                )
+            finally:
+                await asyncio.to_thread(
+                    lock_connection.execute,
+                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (key,),
+                )
+
+    async def _run(
+        self, *, target_session: date, execution_context_id: uuid.UUID
+    ) -> LlmPreselectionSummary:
         started_at = datetime.now(UTC)
         with self.database.connect() as connection:
             source = SourceRepository(connection)
             context = source.read_context(
                 execution_context_id=execution_context_id
             )
-            packets = EvidencePacketBuilder(source, self.config).build_all(
-                execution_context_id=execution_context_id,
-                target_session=target_session,
-            )
+            builder = EvidencePacketBuilder(source, self.config)
+            cached = None
+            if self.config.event_policy:
+                source.validate_context_manifest(execution_context_id=execution_context_id)
+                cutoff = context["cutoff_at"]
+                if not isinstance(cutoff, datetime):
+                    raise TypeError("Context cutoff must be a datetime")
+                cached = LlmPreselectionRepository(connection).read_cached_inputs(
+                    execution_context_id=execution_context_id, target_session=target_session,
+                    policy_hash=self.config.versioned.config_hash,
+                    schema_version=self.config.evidence_schema_version,
+                    cutoff_at=cutoff, knowledge_mode=str(context["knowledge_mode"]),
+                )
+            if cached is not None:
+                _, packets, builder.screening_audit = cached
+            else:
+                packets = builder.build_all(
+                    execution_context_id=execution_context_id,
+                    target_session=target_session,
+                )
+            if self.config.event_policy:
+                packets = tuple(replace(
+                    packet, links=tuple(sorted(
+                        packet.links,
+                        key=lambda link: (link.source_kind, link.entity_key,
+                                          str(link.source_snapshot_id)),
+                    )),
+                ) for packet in sorted(packets, key=lambda item: item.instrument_id.hex))
         cutoff_at = context["cutoff_at"]
         if not isinstance(cutoff_at, datetime):
             raise TypeError("execution context cutoff_at must be datetime")
-        input_hash = _canonical_hash(
-            {
+        input_payload: dict[str, object] = {
+                "input_identity_version": 3 if self.config.event_policy else 2,
                 "execution_context_id": execution_context_id,
                 "policy_hash": self.config.versioned.config_hash,
                 "packet_hashes": [
                     {
                         "instrument_id": packet.instrument_id,
                         "packet_hash": packet.packet_hash,
+                        "lineage_hash": _canonical_hash([
+                            (link.source_kind, link.entity_key, link.source_snapshot_id,
+                             link.source_available_at, link.observed_at)
+                            for link in packet.links
+                        ]),
                     }
                     for packet in packets
                 ],
-            }
-        )
+        }
+        if self.config.event_policy:
+            input_payload["screening"] = builder.screening_audit
+            input_payload["api_version"] = self.ranker_settings.api_version
+        input_hash = _canonical_hash(input_payload)
         with self.database.connect() as connection:
             reusable = LlmPreselectionRepository(connection).find_successful_run(
                 execution_context_id=execution_context_id,
@@ -92,16 +190,7 @@ class LlmPreselectionService:
                 input_hash=input_hash,
             )
         if reusable is not None:
-            return LlmPreselectionSummary(
-                llm_ranking_run_id=uuid.UUID(
-                    str(reusable["llm_ranking_run_id"])
-                ),
-                selection_run_id=uuid.UUID(str(reusable["run_id"])),
-                price_session_date=target_session,
-                status="SUCCEEDED",
-                selected_count=int(reusable["selected_count"]),
-                reused=True,
-            )
+            return _reused_summary(reusable, target_session)
 
         llm_ranking_run_id = uuid.uuid4()
         selection_run_id = uuid.uuid4()
@@ -119,6 +208,7 @@ class LlmPreselectionService:
                                 f"{link.source_snapshot_id}"
                             ),
                         ),
+                        citation_id=link.evidence_link_id if self.config.event_policy else None,
                     )
                     for link in packet.links
                 ),
@@ -139,12 +229,28 @@ class LlmPreselectionService:
                     packets=packets,
                 )
                 attempts = result.attempts
+                if len(result.candidates) < self.config.requested_count:
+                    status = "SHORTFALL"
+                    failure_code = "INSUFFICIENT_EVIDENCE_BACKED_ISSUERS"
             except LlmRankingError as error:
                 attempts = error.attempts
                 status = "FAILED"
                 failure_code = "LLM_RANKING_FAILED"
         finished_at = datetime.now(UTC)
         with self.database.connect() as connection, connection.transaction():
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (input_hash,),
+            )
+            reusable = LlmPreselectionRepository(connection).find_successful_run(
+                execution_context_id=execution_context_id,
+                policy_version=self.config.policy_version,
+                prompt_version=self.config.prompt_version,
+                deployment=self.ranker_settings.deployment,
+                evidence_schema_version=self.config.evidence_schema_version, input_hash=input_hash,
+            )
+            if reusable is not None:
+                return _reused_summary(reusable, target_session)
             LlmPreselectionRepository(connection).persist(
                 llm_ranking_run_id=llm_ranking_run_id,
                 selection_run_id=selection_run_id,
@@ -157,7 +263,11 @@ class LlmPreselectionService:
                 deployment=self.ranker_settings.deployment,
                 api_version=self.ranker_settings.api_version,
                 evidence_schema_version=self.config.evidence_schema_version,
-                window_config=asdict(self.config.windows),
+                window_config={
+                    **asdict(self.config.windows),
+                    "input_identity_version": 3 if self.config.event_policy else 2,
+                    "packet_cache_source_run_id": str(cached[0]) if cached is not None else None,
+                },
                 input_hash=input_hash,
                 packets=packets,
                 status=status,
@@ -166,6 +276,8 @@ class LlmPreselectionService:
                 result=result,
                 started_at=started_at,
                 finished_at=finished_at,
+                screening_audit=builder.screening_audit,
+                policy_hash=self.config.versioned.config_hash,
             )
         return LlmPreselectionSummary(
             llm_ranking_run_id=llm_ranking_run_id,
@@ -183,11 +295,31 @@ def create_llm_preselection_service(
     *,
     repository_root: Path,
 ) -> LlmPreselectionService:
-    config = load_llm_preselection_config(
-        repository_root / "config" / "llm_preselection" / "policy_v1.yaml"
-    )
+    config = load_runtime_llm_config(repository_root)
+    from sp500_candidate_engine.fusion.config import fusion_enabled
+
+    if fusion_enabled() and not config.event_policy:
+        raise ValueError("Fusion requires an explicitly selected event LLM policy")
     return LlmPreselectionService(
-        Database(settings),
-        config,
-        LlmRankerSettings.from_env(),
+        Database(settings), config, LlmRankerSettings.from_env(),
     )
+
+
+def load_runtime_llm_config(repository_root: Path) -> LlmPreselectionConfig:
+    policy_path = Path(os.getenv(
+        "LLM_PRESELECTION_POLICY_PATH", "config/llm_preselection/policy_v1.yaml"
+    ))
+    path = (repository_root / policy_path).resolve()
+    if not path.is_relative_to((repository_root / "config" / "llm_preselection").resolve()):
+        raise ValueError("LLM policy must reside in config/llm_preselection")
+    config = load_llm_preselection_config(path)
+    if config.screening is not None:
+        for key, expected in {
+            "LLM_SCREENING_MAX_ISSUERS": config.screening.maximum_issuers,
+            "LLM_SCREENING_CONTROL_ISSUERS": config.screening.control_issuers,
+            "LLM_SCREENING_LOOKBACK_DAYS": config.screening.lookback_days,
+            "LLM_SCREENING_EARNINGS_WINDOW_DAYS": config.screening.earnings_window_days,
+        }.items():
+            if key in os.environ and os.environ[key] != str(expected):
+                raise ValueError(f"{key} conflicts with the versioned LLM policy")
+    return config

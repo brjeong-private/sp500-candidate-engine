@@ -21,6 +21,7 @@ from clients import (
 from clients import (
     fetch_and_verify_candidates as fetch_and_verify_candidates_client,
 )
+from clients import fetch_fusion_handoff as fetch_fusion_handoff_client
 from clients import (
     portal_candidate_analysis_status as portal_candidate_analysis_status_client,
 )
@@ -36,6 +37,7 @@ from clients import (
 from clients import (
     submit_candidate_daily as submit_candidate_daily_client,
 )
+from clients import submit_fusion_handoff as submit_fusion_handoff_client
 from clients import (
     submit_portal_candidate_analysis as submit_portal_candidate_analysis_client,
 )
@@ -54,6 +56,7 @@ from scheduler import (
     weekly_model_instance_id,
     weekly_parent_instance_id,
 )
+from settings import boolean_flag, fusion_policy_identity
 from telemetry import emit_pipeline_telemetry as emit_pipeline_telemetry_client
 from workflow import daily_orchestrator as daily_orchestrator_generator
 from workflow import dual_model_parent as dual_model_parent_generator
@@ -71,17 +74,35 @@ def _positive_int(name: str, default: int) -> int:
 
 
 def _orchestration_input(analysis_date, model_purpose: str) -> dict[str, object]:
-    return {
+    payload = {
         "analysis_date": analysis_date.isoformat(),
         "model_purpose": model_purpose,
         "candidate_timeout_minutes": _positive_int("ORCHESTRATOR_CANDIDATE_TIMEOUT_MINUTES", 120),
         "portal_timeout_minutes": _positive_int("ORCHESTRATOR_PORTAL_TIMEOUT_MINUTES", 360),
         "poll_seconds": _positive_int("ORCHESTRATOR_POLL_SECONDS", 60),
     }
+    if model_purpose == "MEDIUM_20D":
+        payload.update(_fusion_input())
+    return payload
+
+
+def _fusion_input() -> dict[str, object]:
+    enabled = boolean_flag("FUSION_ENABLED", False)
+    delivery = boolean_flag("FUSION_EXTERNAL_DELIVERY_ENABLED", False)
+    if delivery and not enabled:
+        raise ValueError("Fusion delivery requires Fusion")
+    if not enabled:
+        return {}
+    version, config_hash = fusion_policy_identity()
+    return {
+        "fusion_enabled": True, "fusion_external_delivery_enabled": delivery,
+        "fusion_policy_version": version, "fusion_config_hash": config_hash,
+    }
 
 
 def _parent_orchestration_input(analysis_date) -> dict[str, object]:
     return {
+        **_fusion_input(),
         "analysis_date": analysis_date.isoformat(),
         "candidate_timeout_minutes": _positive_int("ORCHESTRATOR_CANDIDATE_TIMEOUT_MINUTES", 120),
         "portal_timeout_minutes": _positive_int("ORCHESTRATOR_PORTAL_TIMEOUT_MINUTES", 360),
@@ -306,6 +327,18 @@ def candidate_run_status(process_run_id: str):
 @app.activity_trigger(input_name="request")
 def fetch_and_verify_candidates(request: dict):
     return fetch_and_verify_candidates_client(request)
+
+
+@app.function_name(name="fetch_fusion_handoff")
+@app.activity_trigger(input_name="request")
+def fetch_fusion_handoff(request: dict):
+    return fetch_fusion_handoff_client(request)
+
+
+@app.function_name(name="submit_fusion_handoff")
+@app.activity_trigger(input_name="payload")
+def submit_fusion_handoff(payload: dict):
+    return submit_fusion_handoff_client(payload)
 
 
 @app.function_name(name="submit_portal_candidate_analysis")

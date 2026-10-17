@@ -1,6 +1,59 @@
 # Change Log
 
+- 2026-10-17 | Local-only Plans | 모든 깊이의 plan.md·*.plan.md·*-plan.md·*_plan.md·plan 접두 문서와 plans 폴더를 Git 제외하고 기존 추적 계획은 로컬 보존 상태로 해제했다.
+- 2026-10-17 | Main Documentation Refresh | 메인 README를 event v2·정확한 Fusion·독립 stage·운영 ON/코드 기본 OFF·24개 migration과 검증된 API/CLI 계약에 맞추고 문서 색인을 갱신했다.
+- 2026-10-17 | Result Schema Documentation | 결과 샘플의 cutoff·선정 policy version을 현재 계약과 맞추고 독립 stage 제어 ID·실제 Fusion ID 구분 및 미구현 설명 설계 경계를 명시했다.
+- 2026-10-17 | Daily Pipeline Error Runbook | 오늘18:30 KST·10월16일 세션의 정기 실행과 단계별 오류·고정 run/context·안전한 조회·재시도·운영 배포 증거를 별도 공유 문서로 작성했다.
+- 2026-10-17 | Documentation Consistency | 정량·LLM·통합 상세 설계의 로컬 plan 링크를 공유 운영 문서로 바꾸고 노트북·모델 변경 이력·초기 지침의 현재 운영과 역사적 기록을 구분했다.
+- 2026-10-17 | Selection Explanation Design | 파이프라인 분리와 독립적으로 기존 LLM rationale·항목별 근거와 Fusion JSONB를 재사용하는 분석일별 선정 근거 저장·조회 및 포털 연동 설계를 스키마 샘플에 추가했다.
+- 2026-10-17 | Independent Pipeline Design | 기존 일일 흐름·선정 정책 보존을 전제로 정량·LLM·Fusion별 독립 API/CLI·상태·고정 계약·재시도와 파라미터 설계 문서를 구현 전에 작성했다.
+- 2026-10-17 | Unified Pipeline Architecture | 전체 아키텍처에 수집·공통 manifest·독립 후보 경로·주간 모델·Fusion·기존 외부 전달의 통합과 경계를 정리했다.
+- 2026-10-17 | Independent Stage Ledger | migration 024에 단계별 수락·claim·성공·SHORTFALL·실패·retry lineage와 고정 계약 hash·활성 입력 고유 제약·terminal 보호를 추가했다.
+- 2026-10-17 | Independent Stage API | 서버 인증과 멱등 키를 요구하는 단독 Quant·LLM·Fusion 실행·상태·재시도 API를 추가하고 API 재시작 중단과 CLI 소유 실행을 구분했다.
+- 2026-10-17 | Independent Stage CLI | run-stage·show-stage·retry-stage를 공통 실행 service에 연결하고 레거시 학습 CLI와 단독 고정 추론을 분리했다.
+- 2026-10-17 | Pinned Standalone Quant | 독립 정량 수락 시 artifact·설정 계약을 고정하고 동일 MEDIUM 결과 재사용과 context별 export 잠금·SHORT 호환·추론 전용 동작을 구현했다.
+- 2026-10-17 | Isolated Standalone Candidates | LLM-only는 Quant·Qlib·Fusion gate와 분리하고 Fusion-only는 명시 원천 두 run만 처리하며 외부 전달을 시작하지 않도록 검증했다.
+- 2026-10-17 | Standalone Execution Guides | 공통 하네스·README·Backend 가이드에 독립 실행 입력·응답 ID·인증·재시도·설정 변경·중단 복구와 migration 순서를 추가했다.
+- 2026-10-17 | Independent Stage Validation | 전체 테스트 533건·신규 4개 stage 모듈 타입 검사·Ruff와 격리 PostgreSQL의 24개 migration·독립 Fusion·멱등 재시도·terminal 보호 검증을 통과했다.
+- 2026-10-17 | Independent Stage Production | 운영 migration 024·최소 앱 권한과 Backend 배포를 완료하고 독립 Quant·LLM·Fusion API의 성공20개 재사용·멱등성·인증·성공 retry차단 및 새 LLM 호출0건을 검증했다.
+- 2026-10-17 | Independent CLI Execution Tests | 실제 run-stage·show-stage·retry-stage 진입점이 공통 실행 service와 CLI 소유 상태를 사용하고 레거시 학습이나 다른 단계를 실행하지 않도록 회귀 검증했다.
+- 2026-10-17 | Candidate Result Schema Sample | 현재 Quant·이벤트 LLM·Fusion 후보 API의 가상 스키마 샘플과 점수·항목별 근거·RRF 산식·DB 및 API 노출 경계를 별도 문서로 정리했다.
+- 2026-10-17 | Split Pipeline Design | 정량·LLM을 별도 Job·권한·복구 단위로 분리하고 공통 입력 고정 후 병렬 실행·독립 Fusion·단계별 재시도·안전한 전환을 수행하는 별도 변경 계획을 작성했다.
+- 2026-10-17 | Production Fusion Handoff | 고정 Fusion 성공 20개를 재사용해 활성화 입력 누락으로 건너뛴 전달을 재실행하고 포털 분석 46의 20개 전량 접수·실제 워커 실행을 확인했다.
+- 2026-10-17 | Production Deployment Evidence | 운영 migration·원천 run/context·보호 lock·복구 백업·전달 재개와 로컬 시간 기록 경계를 배포 기록에 반영했다.
+- 2026-10-17 | Production Hybrid Rollout | 사용자 승인으로 Candidate·Durable·별도 Portal 수신부와 PostgreSQL 022/023·MySQL 004를 운영 적용하고 최소 권한·보호 lock을 유지했다.
+- 2026-10-17 | Production Recovery Backup | 10월 15일 기존 분석 1건·작업 10개·보고서 10개를 비공개 저장소에서 hash 검증해 백업했으며 성공 Fusion20 검증 전 삭제는 차단했다.
+- 2026-10-17 | Portal Single Response | UI 자산을 변경하지 않고 별도 Portal PR의 MEDIUM 조회를 20개 단일 응답·고정 run·전량 검증으로 수정하고 백엔드 전용 layer로 배포했다.
+- 2026-10-17 | Production Evidence Manifest | 운영 LISTED 상태를 정식 적격 상태로 인식하고 상태·공시·재무·이벤트 observation 원천 의존성을 cutoff 제한의 versioned preselection manifest에 고정했다.
+- 2026-10-17 | Bounded Event Packets | 대형 운영 evidence를 문자 한도 안에서 결정적으로 오래된 항목부터 축소하고 잘림·결측·개수와 실제 제공된 근거 링크를 일치시켰다.
+- 2026-10-17 | LLM Citation Validation | 종목별 구조화 schema로 다른 종목 근거 인용을 차단하고 기존 호출 예산 안에서 의미 검증 재시도를 감사·실패와 구분해 기록했다.
+- 2026-10-17 | Frozen Input Retry Cache | 동일 context·정책의 immutable packet·screening을 hash·manifest·cutoff 검증 후 재사용하고 canonical lineage identity v3와 원천 run 참조를 보존했다.
+- 2026-10-17 | Replay Cache Timing | 재구성 cache는 manifest에 고정된 원천 row의 공개 시각을 검증하고 늦은 재관찰 container와 구분하며 운영 재현은 snapshot·관찰 시각까지 엄격히 차단한다.
+- 2026-10-17 | Unscored Evidence Notes | 유효한 동일 종목 근거로 미평가 항목의 한계를 설명한 인용은 보존하되 점수·지원 항목 수·가중치에는 포함하지 않으며 기존 raw 응답도 재검증 후에만 재사용한다.
+- 2026-10-17 | Validated Repair Cache | 의미 검증 재시도에서는 검증 성공 cache를 우선·전용으로 조회해 동일한 실패 응답의 반복 재생을 막고 필요할 때만 제한된 새 모델 호출을 수행한다.
+- 2026-10-16 | Event LLM Runtime | 기존 v1을 보존하며 7일 이벤트·90/10 운영 대조 표본·비가격 packet·최소 3개 근거 항목 가중치 재정규화 정책 v2를 구현했다.
+- 2026-10-16 | LLM Retry and Audit | RPM/TPM·재시도 예산·원문 응답 저장·context 제한 배치 재사용과 동시 평가 잠금 및 결측·coverage 감사를 추가했다.
+- 2026-10-16 | Exact Fusion Selection | MEDIUM 전용 k=10 유리수 RRF·동일 instrument 합산·issuer 중복 제거·섹터 2/4·union 한정 SHORTFALL을 구현했다.
+- 2026-10-16 | Fusion Persistence | migration 023에 append-only Fusion run·candidate·audit와 LLM 확장 및 원천 run·manifest·정책 hash 검증·원자 저장·동시 멱등성을 추가했다.
+- 2026-10-16 | Top20 Migration Compatibility | migration 022 재실행·구 제약 잔존을 수정하고 MEDIUM 성공 20개·SHORT 레거시 성공 5~10개 및 선정 수량 상하한을 구분해 보존했다.
+- 2026-10-16 | Manifest Evidence Lineage | 공시 조회의 중복 snapshot 컬럼을 해소하고 가격 근거를 manifest observation snapshot에 연결하며 LLM 입력 identity에 lineage hash를 포함했다.
+- 2026-10-16 | Fusion API | 기존 Quant·LLM 조회를 유지하며 Fusion 목록·run·전달 envelope API와 LLM 항목별 근거·결측·screening 조회를 추가했다.
+- 2026-10-16 | Hybrid Daily Control Plane | 독립 병렬 branch 뒤 Fusion을 연결하고 성공 Quant 재사용·원천 run 고정·단계별 결과와 실패 보존을 구현했다.
+- 2026-10-16 | Fusion Top20 Handoff | 기존 오케스트레이터에 기본 비활성 versioned 20개 전량 전달·엄격한 ACK·멱등 재시도·미완료 전달 재개를 추가하고 SHORT 분석 경로를 보존했다.
+- 2026-10-16 | Hybrid Safe Configuration | Backend·Durable IaC와 설정 예제에 legacy LLM 기본 정책 및 기본 비활성 Fusion·외부 전달 플래그와 계약 선택을 추가했다.
+- 2026-10-16 | Hybrid Runtime Documentation | README·Backend·오케스트레이터·구현 지침에 구현된 기본 비활성 경로와 운영 활성화·외부 수신 검증 경계를 구분하고 신규 API·policy·ACK 계약을 갱신했다.
+- 2026-10-16 | Hybrid Architecture Alignment | 모델·수집·데이터·전체·오케스트레이터 설계를 구현된 이벤트 v2·MEDIUM Fusion·기본 비활성 전달과 맞추고 과거 운영 검증 기록은 보존했다.
+- 2026-10-16 | Hybrid Verification | 전체 테스트 492건·Ruff·신규 22개 모듈 타입 검사·23개 migration 구문 및 격리 PostgreSQL-WASM의 rollback·배치 재사용·멱등 충돌·전량 ACK·레거시 수량 검증을 통과했고 운영 DB·외부 API는 호출하지 않았다.
+- 2026-10-16 | Hybrid Infrastructure Validation | Backend·Durable Bicep의 로컬 컴파일을 통과했고 기존 App Service API 버전 타입 경고 2건을 유지했으며 운영 배포·기능 활성화는 수행하지 않았다.
+
 - 2026-10-16 | README Horizontal Architecture | 메인 README의 후보 파이프라인·모델 아키텍처 다이어그램을 좌에서 우로 흐르는 가로 방향으로 변경했다.
+- 2026-10-16 | Fusion Ranking Contract | 사용자 정의로 MEDIUM_20D 전용·k=10·목록 순위·동일 instrument 합산·issuer별 최고 후보·섹터 2/4와 union 한정 SHORTFALL 계약을 명시했다.
+- 2026-10-16 | Event LLM Screening Contract | 기존 LLM과 분리된 신규 정책에 최근 7일 유형별 1점·실적 전후 7일·이벤트 90개와 결정적 운영 대조 10개 기준을 정의했다.
+- 2026-10-16 | LLM Evidence Scoring Contract | 신규 비가격 LLM 평가에 최소 3개 근거 항목·가중치 재정규화·null 결측·품질 및 불확실성과 주관적 위험 임계값 미도입을 명시했다.
+- 2026-10-16 | Fusion Provenance Contract | 원천 selection run과 공통 manifest identity·정확한 RRF 순위·원자 저장·재실행 및 동시 멱등성 요구를 구현 지침에 추가했다.
+- 2026-10-16 | Fusion External Handoff Contract | 성공한 Fusion 20개 전량의 versioned 외부 전송·수신 identity 검증·재시도와 SHORT 레거시 보존 및 외부 분석 제외 경계를 정의했다.
+- 2026-10-16 | Fusion Harness Scope | 공통 하네스에 신규 이벤트 LLM·MEDIUM Fusion 범위와 Top 20 union 예외의 이유·영향·필수 검증을 정식 반영했다.
+
 - 2026-10-16 | README Model Architecture | 메인 README에 시점 고정·조정가격·Alpha158·주간 학습과 승격·일일 고정 추론·Top 20 선정·독립 LLM 및 후속 RRF의 모델 아키텍처를 명시했다.
 
 - 2026-10-16 | README Full Architecture | 메인 README에 후보 엔진·Portal·TradingAgents agent 계층·외부 데이터·MySQL·보고서 Blob·UI를 포함한 전체 시스템 아키텍처를 복원하고 기존 후보 파이프라인 상세도를 유지했다.

@@ -27,6 +27,7 @@ from sp500_candidate_engine.source_harness import (
 )
 
 if TYPE_CHECKING:
+    from backend.app.services.model_artifacts import MaterializedModelArtifact
     from sp500_candidate_engine.analytics.historical_export import HistoricalInputContext
     from sp500_candidate_engine.daily_preselection import ParallelPreselectionResult
 
@@ -196,6 +197,9 @@ class PipelineExecutionService:
                 SELECT process_run_id FROM ops.backend_pipeline_request
                 WHERE status IN ('PENDING', 'RUNNING')
                 UNION ALL
+                SELECT stage_run_id AS process_run_id FROM ops.candidate_stage_run
+                WHERE status IN ('PENDING', 'RUNNING')
+                UNION ALL
                 SELECT p.process_run_id FROM ops.process_run p
                 WHERE p.status IN ('PENDING', 'RUNNING')
                   AND NOT EXISTS (
@@ -313,8 +317,11 @@ class PipelineExecutionService:
                             )
                         )
                         if request.model_purpose == "MEDIUM_20D"
-                        and os.getenv("LLM_PRESELECTION_ENABLED", "false").strip().lower()
-                        in {"true", "1", "yes"}
+                        and (
+                            os.getenv("LLM_PRESELECTION_ENABLED", "false").strip().lower()
+                            in {"true", "1", "yes"}
+                            or os.getenv("FUSION_ENABLED", "false").strip().lower() != "false"
+                        )
                         else None
                     ),
                 )
@@ -522,11 +529,18 @@ class PipelineExecutionService:
         target_date: date,
         process_run_id: uuid.UUID,
     ) -> ParallelPreselectionResult:
+        from dataclasses import replace
+
+        from sp500_candidate_engine.analytics.config import load_versioned_config
         from sp500_candidate_engine.analytics.historical_export import (
             HistoricalQlibExportService,
         )
         from sp500_candidate_engine.daily_preselection import run_parallel_preselections
+        from sp500_candidate_engine.fusion.config import fusion_enabled, load_fusion_policy
+        from sp500_candidate_engine.fusion.repository import FusionRepository
+        from sp500_candidate_engine.fusion.service import FusionService
         from sp500_candidate_engine.llm_preselection.pipeline import run_llm_preselection
+        from sp500_candidate_engine.llm_preselection.service import load_runtime_llm_config
 
         input_context = await asyncio.to_thread(
             HistoricalQlibExportService(self.database).prepare_preselection_context,
@@ -534,15 +548,31 @@ class PipelineExecutionService:
             end_date=target_date,
             decision_cutoff=backfill_cutoff(target_date),
         )
-        return await run_parallel_preselections(
-            quantitative_runner=lambda: self.run_candidate_inference(
+        enabled = fusion_enabled()
+        quant_policy = load_versioned_config(
+            self.repository_root / "config" / "analytics" / "selection_medium_20d_v1.yaml"
+        )
+
+        def quantitative():
+            if enabled:
+                with self.database.connect() as connection:
+                    existing = FusionRepository(connection).find_quantitative(
+                        context_id=input_context.execution_context_id, target_session=target_date,
+                        policy_version=quant_policy.version, policy_hash=quant_policy.config_hash,
+                    )
+                if existing is not None:
+                    return SimpleNamespace(**existing, promotion_gate_passed=False)
+            return self.run_candidate_inference(
                 self.settings,
                 target_date=target_date,
                 repository_root=self.repository_root,
                 model_purpose="MEDIUM_20D",
                 process_run_id=process_run_id,
                 input_context=input_context,
-            ),
+            )
+
+        parallel = await run_parallel_preselections(
+            quantitative_runner=quantitative,
             llm_runner=lambda: run_llm_preselection(
                 self.settings,
                 target_session=target_date,
@@ -550,6 +580,35 @@ class PipelineExecutionService:
                 repository_root=self.repository_root,
             ),
         )
+        if not enabled:
+            return parallel
+        try:
+            service = FusionService(
+                self.database, load_fusion_policy(self.repository_root),
+                load_runtime_llm_config(self.repository_root),
+                quant_policy.version, quant_policy.config_hash,
+            )
+            fusion = await asyncio.to_thread(
+                service.run, context_id=input_context.execution_context_id,
+                target_session=target_date,
+                quant_id=(
+                    parallel.quantitative.selection_run_id
+                    if parallel.quantitative is not None else None
+                ),
+                llm_id=parallel.llm.selection_run_id if parallel.llm is not None else None,
+            )
+            return replace(
+                parallel, fusion=fusion, fusion_requested=True,
+                status="SUCCEEDED" if fusion.status == "SUCCEEDED" else (
+                    "PARTIAL_SUCCESS" if parallel.status != "FAILED" else "FAILED"
+                ),
+            )
+        except Exception as error:
+            logger.exception("daily_fusion_stage_failed")
+            return replace(
+                parallel, fusion_requested=True, fusion_failure_code=type(error).__name__,
+                status="PARTIAL_SUCCESS" if parallel.status != "FAILED" else "FAILED",
+            )
 
     def run_candidate_inference(
         self,
@@ -560,13 +619,14 @@ class PipelineExecutionService:
         model_purpose: str = "SHORT_5D",
         process_run_id: uuid.UUID | None = None,
         input_context: HistoricalInputContext | None = None,
+        artifact_override: MaterializedModelArtifact | None = None,
     ) -> SimpleNamespace:
         """Use a provisioned model without training, fitting processors, or fallback."""
         try:
             contract = MODEL_PURPOSE_CONTRACTS[model_purpose]
         except KeyError as error:
             raise RuntimeError(f"Unsupported model purpose: {model_purpose}") from error
-        pinned_artifact = (
+        pinned_artifact = artifact_override or (
             self._resolve_daily_artifact_binding(
                 process_run_id=process_run_id,
                 model_purpose=model_purpose,
@@ -842,6 +902,7 @@ class PipelineExecutionService:
                 policy_version=str(policy_payload["version"]),
                 requested_count=policy.maximum_candidates,
                 result=selected,
+                policy_hash=selection_config.config_hash if model_purpose == "MEDIUM_20D" else None,
             )
         payload = candidate_result_payload(
             selection_run_id=selection_run_id,

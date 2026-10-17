@@ -29,6 +29,10 @@ class PipelineRun(ReadModel):
     heartbeat_at: datetime
     finished_at: datetime | None
     failure_reason: str | None = None
+    fusion_run_id: UUID | None = None
+    fusion_status: Literal["SUCCEEDED", "SHORTFALL", "FAILED"] | None = None
+    candidate_selection_run_id: UUID | None = None
+    llm_preselection_run_id: UUID | None = None
 
 
 class CollectedCounts(ReadModel):

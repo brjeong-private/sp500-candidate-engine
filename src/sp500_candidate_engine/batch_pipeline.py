@@ -253,6 +253,17 @@ async def run_daily_process(
                     }
                 )
                 response["preselection_failures"] = parallel.failures
+                fusion = getattr(parallel, "fusion", None)
+                if getattr(parallel, "fusion_requested", False):
+                    response["fusion_run"] = {
+                        "fusion_run_id": fusion.fusion_run_id if fusion is not None else None,
+                        "status": fusion.status if fusion is not None else "FAILED",
+                        "candidate_count": fusion.selected_count if fusion is not None else 0,
+                        "failure_code": (
+                            fusion.failure_code if fusion is not None
+                            else parallel.fusion_failure_code
+                        ),
+                    }
                 return response
             from sp500_candidate_engine.candidate_pipeline import run_candidate_date
 

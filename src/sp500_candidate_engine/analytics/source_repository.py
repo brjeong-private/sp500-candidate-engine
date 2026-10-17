@@ -4,7 +4,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Protocol
+from typing import LiteralString, Protocol
 
 
 class ManifestLineageError(ValueError):
@@ -16,7 +16,7 @@ class _Cursor(Protocol):
 
 
 class QueryConnection(Protocol):
-    def execute(self, sql: str, params: tuple[object, ...]) -> _Cursor: ...
+    def execute(self, sql: LiteralString, params: tuple[object, ...], /) -> _Cursor: ...
 
 
 @dataclass(frozen=True)
@@ -158,6 +158,7 @@ class SourceRepository:
             WITH manifest_bars AS (
                 SELECT
                     bar.*,
+                    obs.source_snapshot_id AS manifest_snapshot_id,
                     obs.observed_at AS manifest_observed_at,
                     imm.precedence,
                     row_number() OVER (
@@ -186,7 +187,7 @@ class SourceRepository:
                 instrument_id, session_date, source_id, revision_no,
                 open, high, low, close, adjusted_close, volume, vwap,
                 price_adjustment_status, volume_adjustment_status,
-                source_snapshot_id, source_available_at,
+                manifest_snapshot_id AS source_snapshot_id, source_available_at,
                 manifest_observed_at AS observed_at
             FROM manifest_bars
             WHERE selected_revision = 1
@@ -286,7 +287,7 @@ class SourceRepository:
               ON state.instrument_id = um.instrument_id
              AND state.selected_state = 1
             WHERE version.selected_version = 1
-              AND state.status = 'ACTIVE'
+              AND state.status IN ('ACTIVE', 'LISTED')
             ORDER BY um.instrument_id
             """,
             (
@@ -305,9 +306,23 @@ class SourceRepository:
         instrument_id: uuid.UUID,
         event_type: str,
         start_at: datetime,
+        end_at: datetime | None = None,
+        clock: str = "EVENT",
     ) -> list[dict[str, object]]:
+        clocks: dict[str, LiteralString] = {
+            "EVENT": """COALESCE(
+                      revision.published_at,
+                      revision.scheduled_at,
+                      revision.source_available_at
+                  )""",
+            "AVAILABLE": "revision.source_available_at",
+            "SCHEDULE": "revision.scheduled_at",
+        }
+        if clock not in clocks:
+            raise ValueError("Unknown event clock")
+        upper_bound = "ec.cutoff_at" if end_at is None else "%s"
         return self.connection.execute(
-            """
+            f"""
             WITH manifest_events AS (
                 SELECT
                     event.event_id, event.event_type, event.source_event_id,
@@ -337,11 +352,7 @@ class SourceRepository:
                   AND mapping.instrument_id = %s
                   AND event.event_type = %s
                   AND revision.source_available_at <= ec.cutoff_at
-                  AND COALESCE(
-                      revision.published_at,
-                      revision.scheduled_at,
-                      revision.source_available_at
-                  ) BETWEEN %s AND ec.cutoff_at
+                  AND {clocks[clock]} BETWEEN %s AND {upper_bound}
                   AND (
                       ec.knowledge_mode <> 'OPERATIONAL_REPLAY'
                       OR obs.observed_at <= ec.cutoff_at
@@ -357,7 +368,28 @@ class SourceRepository:
             ORDER BY COALESCE(published_at, scheduled_at, source_available_at) DESC,
                 event_revision_id
             """,
-            (execution_context_id, instrument_id, event_type, start_at),
+            (execution_context_id, instrument_id, event_type, start_at)
+            + (() if end_at is None else (end_at,)),
+        ).fetchall()
+
+    def read_blocking_issues(
+        self, *, execution_context_id: uuid.UUID
+    ) -> list[dict[str, object]]:
+        return self.connection.execute(
+            """
+            SELECT DISTINCT issue.entity_key, issue.rule_code
+            FROM ops.execution_context ec
+            JOIN ops.input_manifest_member imm ON imm.input_manifest_id = ec.input_manifest_id
+            JOIN ops.source_snapshot snapshot
+              ON snapshot.source_snapshot_id = imm.source_snapshot_id
+            JOIN ops.data_quality_issue issue
+              ON issue.ingestion_run_id = snapshot.ingestion_run_id
+            WHERE ec.execution_context_id = %s
+              AND issue.severity = 'BLOCKING'
+              AND issue.detected_at <= ec.cutoff_at
+              AND (issue.resolved_at IS NULL OR issue.resolved_at > ec.cutoff_at)
+            """,
+            (execution_context_id,),
         ).fetchall()
 
     def read_sec_filings(
@@ -371,7 +403,7 @@ class SourceRepository:
             """
             WITH manifest_filings AS (
                 SELECT
-                    filing.*, obs.source_snapshot_id, ss.source_available_at,
+                    filing.*, obs.source_snapshot_id AS obs_snapshot_id, ss.source_available_at,
                     obs.observed_at AS manifest_observed_at,
                     imm.precedence,
                     row_number() OVER (
@@ -399,7 +431,7 @@ class SourceRepository:
             )
             SELECT
                 filing_id, accession_no, form_type, period_end, filed_date,
-                accepted_at, is_amendment, source_snapshot_id,
+                accepted_at, is_amendment, obs_snapshot_id AS source_snapshot_id,
                 source_available_at, manifest_observed_at AS observed_at
             FROM manifest_filings
             WHERE selected_revision = 1

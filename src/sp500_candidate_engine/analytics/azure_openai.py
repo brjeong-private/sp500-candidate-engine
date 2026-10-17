@@ -11,7 +11,8 @@ AZURE_OPENAI_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 
 class AccessToken(Protocol):
-    token: str
+    @property
+    def token(self) -> str: ...
 
 
 class TokenCredential(Protocol):

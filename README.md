@@ -2,11 +2,28 @@
 
 미국 거래일마다 수집한 point-in-time 데이터로 후속 분석 후보를 선정하는 엔진입니다.
 일일 기본 경로는 **MEDIUM_20D 정량 후보 20개**이며, 별도 LLM 후보 20개와
-최종 통합 후보 20개로 확장하는 구조입니다. **TradingAgents에 전달할 후보 수는
-기존 5~10개에서 20개로 변경합니다.** 후보는 매수 추천이나 주문이 아닙니다.
+RRF 최종 통합 후보 20개를 생성합니다. **성공한 최종 Fusion 20개 전체를 외부에 전달**하며
+기존 SHORT_5D 5~10개 경로는 별도로 유지합니다. 후보는 매수 추천이나 주문이 아닙니다.
 
 공통 범위·무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를
 우선합니다. 이 문서의 설계 계약은 운영 배포 완료를 의미하지 않습니다.
+
+## 구현·운영 기준 — 2026-10-17
+
+- 정량·LLM·Fusion의 독립 실행 API/CLI, 단계별 상태·고정 계약·재시도와 기존 일일 DAG가
+  구현·배포됐습니다. PostgreSQL migration은 [024](sql/024_candidate_stage_runs.sql)까지 적용했습니다.
+- 코드·설정 예제의 안전한 기본값은 LLM·Fusion·외부 전달 비활성입니다. **현재 승인된 운영은
+  이벤트 LLM v2·Fusion k=10·`fusion-top20-v1` 전달이 활성화**돼 있습니다.
+- 운영에서 세 독립 경로가 고정 context의 성공 20개 결과를 각각 재사용했고,
+  인증·멱등 요청·성공 실행 retry 차단과 새 LLM 호출 0건을 확인했습니다.
+- 전체 테스트 **533건**, Ruff, 신규 stage 모듈 타입 검사와 격리 PostgreSQL의
+  24개 migration·재시도·rollback·중단 복구 검증이 통과했습니다.
+  이는 투자 성능·새 champion 승격·매일 20개 생성 보장을 뜻하지 않습니다.
+- 일일 gate는 **05:30 America/New_York**입니다. 2026-10-17은 **18:30 KST**에
+  직전 10월16일 거래 세션을 처리합니다. DST에 따라 한국 시각이 달라집니다.
+  예정된 실행의 성공 여부는 실제 run으로 확인해야 합니다.
+- 오늘 실행의 오류 확인·단계별 재시도·배포 증거는
+  [일일 파이프라인 운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따릅니다.
 
 ## 범위와 결과 계약
 
@@ -19,15 +36,15 @@
   매수·매도 판정, MySQL 분석 상태와 보고서 Blob은 이 저장소의 책임이 아닙니다.
 - Durable Functions는 일정·멱등 API 호출·상태 확인을 담당하는 control plane입니다.
 - 기존 `SHORT_5D`의 명시적 API·수동 실행과 5~10개 레거시 정책은 유지합니다.
-  이를 일일 MEDIUM 또는 향후 최종 전달 수량 20개와 혼동하지 않습니다.
+  이를 일일 MEDIUM 또는 최종 전달 수량 20개와 혼동하지 않습니다.
 
 | 결과 | 개수 | 점수 의미 | 실행·조회 계약 |
 |---|---:|---|---|
 | 정량 `MEDIUM_20D` | 정확히 20 | `PREDICTED_20D_RETURN` | 기본 일일 추론, `/api/v1/candidates` |
 | 레거시 `SHORT_5D` | 5~10 | `PREDICTED_5D_RETURN` | 명시적 목적 선택, 동일 API |
-| 독립 `LLM_PRESELECTION` | 정확히 20 | `LLM_EVIDENCE_SCORE` | feature flag 기본 비활성, `/api/v1/llm-preselections` |
-| 향후 RRF 통합 결과 | 목표 20 | 별도 fusion 순위 | 설계 단계, 아직 미구현 |
-| 외부 TradingAgents 전달 | 20 | 선정 run 참조 | 변경된 목표 계약, 자동 전달 전 별도 연동 검증 필요 |
+| 독립 `LLM_PRESELECTION` | 성공 시 정확히 20 | `LLM_EVIDENCE_SCORE` | 기본 OFF·운영 event v2 ON, `/api/v1/llm-preselections` |
+| RRF `FUSION` | 성공 시 정확히 20 | k=10 목록 순위 RRF | 기본 OFF·승인 운영 ON, `/api/v1/fusion-selections` |
+| 외부 후보 전달 | 성공 Fusion 20개 | 실제 Fusion run 참조 | 기본 OFF·승인 운영 `fusion-top20-v1` ON, 전량 ACK 검증 |
 
 `20D`는 **예측 기간 20거래일**이며 후보 개수와 별개입니다. MEDIUM 선정 정책은
 [selection_medium_20d_v1.yaml](config/analytics/selection_medium_20d_v1.yaml)의
@@ -62,15 +79,15 @@ flowchart LR
             Model["Pinned LightGBM Artifact<br/>daily MEDIUM_20D · legacy SHORT_5D"]
             QuantTop["Quant Top 20<br/>issuer · sector policy"]
         end
-        subgraph LlmPipeline["Independent LLM Pipeline · optional · default OFF"]
-            Evidence["Manifest-fenced Evidence<br/>news · SEC · earnings · actions · prices"]
-            AzureOpenAI["Azure OpenAI<br/>batch evaluation · final ranking"]
+        subgraph LlmPipeline["Independent LLM Pipeline · flagged"]
+            Evidence["Event v2 · non-price evidence<br/>news · SEC · earnings · actions"]
+            AzureOpenAI["Azure OpenAI · per-instrument citations<br/>supported-criteria weighted scoring"]
             LlmTop["LLM Top 20<br/>schema · source validation"]
         end
         QuantApi["Quant Store and Candidate API"]
         LlmApi["Separate LLM Store and API"]
-        Fusion["FUTURE · issuer union · RRF<br/>risk · sector validation"]
-        FinalApi["FUTURE · Final Top 20 API<br/>no secondary trim · not an order"]
+        Fusion["Flagged · instrument union · RRF k=10<br/>issuer · hard gates · sector 2/4"]
+        FinalApi["Final Top 20 API<br/>SHORTFALL explicit · not an order"]
 
         Reference --> Collect
         Massive --> Collect
@@ -122,11 +139,12 @@ flowchart LR
         Blob --> PortalUi
     end
 
-    FinalApi -.->|"future selection run batch · 20 candidates"| Portal
+    FinalApi -.->|"flagged versioned handoff · 20 candidates"| Portal
 ```
 
-독립 LLM 경로는 구현됐지만 기본 비활성이며, RRF 통합과 최종 20개 자동 전달은
-후속 구현입니다. 현재 MEDIUM은 후보 저장 후 `parallel_preselection`에서 종료합니다.
+독립 LLM, 이벤트 정책, RRF·최종 20개 전달 어댑터는 구현·운영 배포됐습니다.
+기본값과 현재 승인된 운영 설정은 위 표처럼 구분합니다. Fusion을 비활성화한 환경의
+MEDIUM은 기존처럼 `parallel_preselection`에서 종료하고 외부로 전달하지 않습니다.
 외부 분석 데이터는 Candidate manifest와 별도이며 이 저장소가 그 시점을 통제하지 않습니다.
 전체 시스템 구조를 제거하지 않고 아래 후보 파이프라인 상세도와 함께 관리합니다.
 상세 기준은 [전체 아키텍처 문서](.github/modernize/assessment/engines/facts/architecture-diagram.md)를
@@ -134,26 +152,41 @@ flowchart LR
 
 ## 후보 파이프라인 아키텍처
 
+정량·LLM·Fusion은 기존 일일 자동 흐름을 유지하면서 각각 단독 실행할 수 있습니다.
+독립 실행은 **기존 고정 context에서 한 단계만** 수행하며 수집·학습·다른 분기·외부 전송을
+자동 시작하지 않습니다. 실행 상태와 실패 후 재시도는 사업 결과 run과 별도로 보존합니다.
+
+- [정량 아키텍처·상세 설계](.github/modernize/assessment/engines/facts/quantitative-pipeline-architecture.md)
+- [LLM 아키텍처·상세 설계](.github/modernize/assessment/engines/facts/llm-pipeline-architecture.md)
+- [Fusion 아키텍처·상세 설계](.github/modernize/assessment/engines/facts/fusion-pipeline-architecture.md)
+- [수집·학습·세 후보 경로·외부 전달 전체 연결](.github/modernize/assessment/engines/facts/architecture-diagram.md)
+
+`POST /api/v1/candidate-stage-runs`, `GET /api/v1/candidate-stage-runs/{id}`,
+`POST /api/v1/candidate-stage-runs/{id}/retry`는 모두 서버 API key를 요구합니다.
+CLI는 `run-stage`, `show-stage`, `retry-stage`이며 기존 학습 CLI와 의미를 분리합니다.
+운영 도입에는 [migration 024](sql/024_candidate_stage_runs.sql)가 필요합니다.
+요청·결과·재시도 예시는 [Backend 가이드](backend/README.md)를 따릅니다.
+
 ```mermaid
 flowchart LR
     Timer["05:30 America/New_York<br/>MEDIUM_20D daily"] --> Collect["공통 수집·정규화·품질 검사"]
     Collect --> Spine[("Candidate PostgreSQL<br/>snapshot·manifest·cutoff")]
     Spine --> Quant["Qlib export·Alpha158<br/>고정 LightGBM 추론"]
     Quant --> Quant20["정량 Top 20<br/>issuer·sector 정책"]
-    Spine -.-> Llm["독립 Azure OpenAI pipeline<br/>기본 비활성"]
+    Spine -.-> Llm["독립 Azure OpenAI event v2<br/>flag 제어·운영 활성"]
     Llm -.-> Llm20["LLM Top 20<br/>근거·schema 검증"]
     Quant20 --> QuantApi["정량 저장·Candidate API"]
     Llm20 -.-> LlmApi["별도 LLM 저장·조회 API"]
-    QuantApi -.-> Fusion["후속 구현: issuer union·RRF<br/>정책 검증·최종 Top 20"]
+    QuantApi -.-> Fusion["Flagged instrument union·RRF k=10<br/>issuer·sector·최종 Top 20"]
     LlmApi -.-> Fusion
-    Fusion -.-> Portal["외부 Portal<br/>20개 selection run 전달 목표"]
+    Fusion -.-> Portal["외부 Portal<br/>성공 Fusion20 전량 ACK"]
     Portal -.-> Trading["외부 TradingAgents<br/>분석·판정·보고서"]
     Weekly["주 1회 training-only<br/>SHORT와 MEDIUM 독립 평가"] --> Registry["artifact·promotion gate<br/>active assignment"]
     Registry --> Quant
 ```
 
-실선은 기본 정량 경로입니다. 점선 LLM 경로는 구현된 선택 기능이며 RRF·최종
-20개 전달은 후속 설계입니다. LLM 활성화 시 공통 context 준비 후 Qlib export·모델
+실선은 기본 정량 경로이며 점선은 설정으로 제어하는 LLM·Fusion·최종
+20개 전달 경로입니다. 현재 운영에서는 활성화돼 있으며 공통 context 준비 후 Qlib export·모델
 검증과 독립적으로 병렬 실행합니다. 두 중간 목록 40개를 그대로 외부에 전달하지 않습니다.
 
 ### 구현 경계
@@ -166,6 +199,8 @@ flowchart LR
 | 독립 LLM | [llm_preselection/](src/sp500_candidate_engine/llm_preselection/) | evidence·평가·재정렬·저장·단독 실행 |
 | LLM 정책 | [config/llm_preselection/](config/llm_preselection/) | windows·rubric·token·retry 설정 |
 | 병렬 조정 | [daily_preselection.py](src/sp500_candidate_engine/daily_preselection.py) | 형제 pipeline 실행·실패 격리 |
+| 정확한 RRF·저장 | [fusion/](src/sp500_candidate_engine/fusion/) | MEDIUM 전용·원천 run 고정·union 제한·SHORTFALL·멱등 저장 |
+| 독립 실행 제어 | [candidate_stages.py](backend/app/services/candidate_stages.py) | 한 단계 수락·고정 계약·상태·재시도·타 단계 비호출 |
 | 외부 control plane | [orchestrator/](orchestrator/) | timer·접수·poll·후보 검증·전달 경계 |
 
 LLM 기본 설정은 `LLM_PRESELECTION_ENABLED=false`입니다. 정량 Top 20 완료는
@@ -173,10 +208,13 @@ LLM 결과 유무에 의존하지 않습니다. LLM을 활성화한 병렬 실�
 `PARTIAL_SUCCESS`, 양쪽 모두 성공하지 못하면 `FAILED`로 집계하고 성공한 결과는
 보존합니다. 실패한 LLM을 과거 결과나 정량 목록으로 대체하지 않습니다.
 
-**자동 전달 경계:** 현재 MEDIUM workflow는 `parallel_preselection`에서 종료하고
-`submitted_candidates=0`으로 Portal 제출을 건너뜁니다. 이번 문서의 20개 전달 계약이
-그 차단을 해제하거나 외부 시스템을 배포한 것은 아닙니다. 최종 통합·전달 활성화 시
-Portal의 20개 수용, 날짜·목적·run·position·중복 검증과 멱등 처리를 함께 검증해야 합니다.
+**자동 전달 경계:** `FUSION_ENABLED=false`이면 MEDIUM은 기존처럼 제출 0개로 종료합니다.
+Fusion만 활성화하면 성공 최종 20개를 저장·조회하지만 전송은 하지 않습니다.
+별도 `FUSION_EXTERNAL_DELIVERY_ENABLED`와 수신처 계약 확인이 모두 필요하며,
+실패·SHORTFALL·중간 Quant/LLM 목록은 전달하지 않습니다. 상세 활성화 조건과 ACK는
+[Backend 가이드](backend/README.md) 및 [오케스트레이터 가이드](orchestrator/README.md)를 따릅니다.
+ACK는 외부 접수 확인이지 분석 보고서 완료가 아닙니다. 포털의 진행·결과 연결은
+같은 날짜의 정량 ID가 아니라 **실제로 전달한 Fusion ID**를 기준으로 해야 합니다.
 
 ## 일일 실행과 주간 재학습
 
@@ -186,13 +224,15 @@ Portal의 20개 수용, 날짜·목적·run·position·중복 검증과 멱등 �
    `candidate-daily-YYYY-MM-DD-medium_20d`를 시작합니다. DST는 timezone으로 처리합니다.
 2. Candidate XNYS session 조회에서 비거래일이면 외부 실행 없이 skip합니다.
 3. readiness를 확인하고 날짜·모델별 유효한 정량 20개가 이미 있으면
-   `SKIPPED_EXISTING`으로 신규 제출을 생략합니다. 과거 10개 결과는 새 20개 완료 조건이 아닙니다.
+   기본 경로는 `SKIPPED_EXISTING`으로 신규 제출을 생략합니다. Fusion 활성 시에는
+   같은 원천 Quant run·Fusion 정책/hash의 성공 Fusion이 있어야 다음 전달 단계로 재개합니다.
 4. MEDIUM은 `top20-v1` suffix가 있는 `Idempotency-Key`로 DAILY를 접수합니다.
    같은 key·payload는 같은 run, 다른 payload는 충돌로 처리합니다.
 5. 공통 수집 후 고정 artifact로 추론하고 정량 20개를 저장·검증합니다.
    DAILY API는 모델 학습이나 processor fit을 실행하지 않습니다.
-6. MEDIUM은 후보 저장 경계에서 종료합니다. 기존 SHORT 명시 실행의 Portal 경로는
-   레거시로 유지하며 새 20개 전달 계약의 구현 완료 증거로 간주하지 않습니다.
+6. Fusion 활성 시 신규 이벤트 LLM run과 공통 identity를 대조해 RRF를 저장합니다.
+   전달은 별도 플래그와 수신 계약으로 제어하고 전량 ACK에서 종료합니다.
+   기존 SHORT 명시 실행의 Portal 분석·poll 경로는 변경하지 않습니다.
 
 15분 resource guardian은 readiness와 승인된 제한 복구만 수행하며 일일 실행을
 시작하지 않습니다. 메일은 `ORCHESTRATOR_EMAIL_ENABLED`로 제어하며 비활성 시
@@ -280,15 +320,16 @@ flowchart LR
     Features --> Predict
     Context --> Pin
 
-    Context -.-> Evidence["Independent LLM Evidence<br/>news · SEC · earnings · actions · prices"]
-    Evidence -.-> LlmRank["Azure OpenAI · strict JSON<br/>batch assessment · final reranking"]
+    Context -.-> Evidence["Event v2 non-price evidence<br/>news · SEC · earnings · actions"]
+    Evidence -.-> LlmRank["Azure OpenAI · strict JSON<br/>citations · supported-criteria weighted score"]
     LlmRank -.-> LlmResult["Separate LLM Top 20<br/>LLM_EVIDENCE_SCORE · source lineage"]
-    QuantStore -.-> FutureFusion["FUTURE · RRF and Policy Validation<br/>Final Top 20 · no secondary trim"]
+    QuantStore -.-> FutureFusion["Flagged RRF k=10 and Policy Validation<br/>Final Top 20 or SHORTFALL"]
     LlmResult -.-> FutureFusion
 ```
 
 LLM 경로는 정량 특징·예측값을 입력받는 후처리 모델이 아니라 동일 context를 사용하는
-독립 후보 선정 경로이며 기본 비활성입니다. RRF는 후속 설계입니다. 예측 기간과
+독립 후보 선정 경로입니다. 코드 기본값은 비활성이고 승인된 운영은 event v2를 사용합니다.
+RRF는 구현·배포된 선택 기능입니다. 예측 기간과
 후보 개수, Top-5/10 평가 지표는 서로 다른 계약으로 유지합니다.
 전처리·label·score·선정 계약의 상세는
 [모델 아키텍처 문서](.github/modernize/assessment/engines/facts/model-architecture.md)를 따릅니다.
@@ -306,7 +347,7 @@ LLM 경로는 정량 특징·예측값을 입력받는 후처리 모델이 아�
 
 ### LLM evidence
 
-별도 LLM pipeline은 manifest로 제한한 뉴스 30일, 실적 2회, SEC filing 1년,
+기존 v1 LLM pipeline은 manifest로 제한한 뉴스 30일, 실적 2회, SEC filing 1년,
 facts 8분기, 기업행위 1년, 가격 60 sessions와 당시 종목 metadata를 사용합니다.
 전체 적격 universe를 배치별 strict JSON으로 평가하고 상위 pool을 정확히 20개로
 재정렬합니다. raw payload·기사 전문·외부 웹 검색·외부 지식·투자 의견은 입력·평가에서 제외합니다.
@@ -315,9 +356,17 @@ Entra 인증 Azure OpenAI를 사용합니다. 응답 schema·source evidence ID�
 timeout·408/429/5xx 등 제한된 오류만 retry합니다. deployment·API·prompt·policy·
 evidence version과 입력·출력 hash·token 사용량을 보존하며 성공한 동일 입력은 재사용합니다.
 
-[RRF 설계서](<Agent Implementation Instructions — Hybrid Candidate Selection with RRF.md>)는
-후속 통합 목표입니다. 이벤트 screening·평가 rubric 등 제안은 현재 LLM 구현과 같다고
-간주하지 않으며, 최종 20개 병합·API·외부 전달은 별도 구현·검증이 필요합니다.
+신규 [policy_event_v2.yaml](config/llm_preselection/policy_event_v2.yaml)은 최근 7일
+유형별 1점 이벤트 최대 90개와 결정적 무이벤트 대조 최대 10개를 평가합니다.
+가격·Alpha158·정량 점수는 입력하지 않으며, 근거 있는 최소 3개 항목만 가중치를
+재정규화합니다. v1의 재정렬 대신 계산된 점수로 20개를 선정합니다.
+RPM/TPM·timeout·제한 재시도·context별 성공 배치 재사용과 원문 응답 감사를 지원합니다.
+
+Fusion은 두 성공 Top 20의 목록 position으로 정확한 유리수 RRF를 계산합니다.
+동일 instrument만 합산하고 같은 issuer의 다른 주식은 더 높은 적격 점수 하나만
+남깁니다. 섹터당 2개·부족 시 4개를 적용하되 union 밖에서 추가하지 않습니다.
+부족하면 `SHORTFALL`이며, SHORT Fusion이나 다른 모델로의 fallback은 없습니다.
+세부 계약은 [구현 지침](<Agent Implementation Instructions — Hybrid Candidate Selection with RRF.md>)을 따릅니다.
 
 ## Point-in-time·저장 계약
 
@@ -338,11 +387,14 @@ Azure PostgreSQL 16+를 Microsoft Entra 인증으로 사용합니다.
 | `event` | news·earnings·revision·instrument mapping |
 | `fundamental` | SEC filing·fact·observation |
 | `analytics` | export·feature·label·model·score·LLM evidence/assessment |
-| `selection` | 정량 Top 20·레거시 결과·별도 LLM Top 20·reason |
+| `selection` | 정량·레거시·LLM Top 20·Fusion run/candidate/audit·reason |
 
 [sql/](sql/)의 migration을 순서대로 적용합니다. 20개 허용 제약과 LLM schema는
-[022_llm_preselection.sql](sql/022_llm_preselection.sql)에 있습니다. 신규 코드·schema의
-운영 적용은 별도 배포 작업이며 문서 수정만으로 기존 10개 결과가 변경되지 않습니다.
+[022_llm_preselection.sql](sql/022_llm_preselection.sql), 신규 이벤트 정책과 Fusion은
+[023_hybrid_fusion.sql](sql/023_hybrid_fusion.sql)에 있습니다.
+독립 실행 제어는 [024_candidate_stage_runs.sql](sql/024_candidate_stage_runs.sql)입니다.
+현재 운영은 024까지 적용했으며 이후 schema 적용은 별도 승인 작업입니다.
+문서 수정만으로 과거 10개 결과나 immutable 원천 run이 변경되지 않습니다.
 상세 관계는 [데이터 아키텍처](.github/modernize/assessment/engines/facts/data-architecture.md)를 참고하세요.
 
 ## 설치와 환경 설정
@@ -379,9 +431,14 @@ Azure OpenAI client는 custom temperature를 강제하지 않고 strict JSON을 
 
 - `POST /api/v1/pipeline-runs`: `X-API-Key`·`Idempotency-Key`, `202 + process_run_id`.
 - `GET /api/v1/pipeline-runs/{process_run_id}`: 실행 상태 확인.
-- `GET /api/v1/candidates?date=2026-10-15&model_purpose=MEDIUM_20D&limit=100`:
+- `GET /api/v1/candidates?date=2026-10-15&model_purpose=MEDIUM_20D&limit=20`:
   대상일 최신 성공 정량 run. `selected_count`, `requested_count`, 실제 row 수를 함께 확인합니다.
 - `GET /api/v1/llm-preselections?date=2026-10-15`: 별도 LLM 결과. 정량 응답과 섞지 않습니다.
+- `GET /api/v1/fusion-selections?date=2026-10-15`: 별도 최종 통합 결과.
+- `GET /api/v1/fusion-selections/{fusion_run_id}/handoff`: 성공20개만 versioned envelope 조회.
+- `POST /api/v1/candidate-stage-runs`: 기존 context에서 한 단계만 실행.
+  `GET /{stage_run_id}`로 상태·결과 ID를 조회하고 `POST /{stage_run_id}/retry`로
+  실패·SHORTFALL을 명시적 재시도합니다. 모두 해당 stage API prefix와 서버 인증을 사용합니다.
 
 API 조회 기본 목적은 MEDIUM이며 해당 결과가 없다고 SHORT로 fallback하지 않습니다.
 조회 watermark·cursor·CORS·배포 및 단일 worker 제약은 [Backend 가이드](backend/README.md)를 따릅니다.
@@ -402,6 +459,13 @@ API 조회 기본 목적은 MEDIUM이며 해당 결과가 없다고 SHORT로 fal
 # LLM 단독 실행: 활성 설정·인증·고정 context 필요
 .\.venv\Scripts\python.exe -m sp500_candidate_engine.llm_preselection `
   --date 2026-10-15 --execution-context-id <context-uuid>
+
+# 학습·수집 없는 독립 후보 단계 실행 / 상태 / 명시적 재시도
+candidate-engine run-stage --stage QUANTITATIVE --date 2026-10-15 --execution-context-id <context-uuid> --model-purpose MEDIUM_20D --idempotency-key <unique-key>
+candidate-engine run-stage --stage LLM_PRESELECTION --date 2026-10-15 --execution-context-id <context-uuid> --idempotency-key <unique-key>
+candidate-engine run-stage --stage FUSION --date 2026-10-15 --execution-context-id <context-uuid> --quant-selection-run-id <quant-uuid> --llm-preselection-run-id <llm-uuid> --idempotency-key <unique-key>
+candidate-engine show-stage --stage-run-id <stage-uuid>
+candidate-engine retry-stage --stage-run-id <failed-stage-uuid> --idempotency-key <new-key>
 
 # Backfill 사전 계획 / 수집 / 재시도
 .\.venv\Scripts\python.exe -m sp500_candidate_engine --env-file .env plan-backfill --start 2026-07-15 --end 2026-10-15
@@ -441,7 +505,10 @@ artifact 목적·hash, 정확히 20개 선정·shortfall, SHORT 레거시 보존
   [orchestrator/README.md](orchestrator/README.md)를 따릅니다. 문서 수정은 배포 명령이 아닙니다.
 - 정량 20개 코드·정책·DB 제약과 orchestration 검증을 함께 배포해야 합니다.
 - LLM은 Azure OpenAI RBAC·고정 context canary·전체 universe shadow 검증 후 별도 활성화합니다.
-- RRF 통합과 최종 20개 전달은 별도 설계·구현·Portal 수용 검증·재실행 검증을 거칩니다.
+- RRF·전달 어댑터는 기본 비활성입니다. 운영 migration·배포와 Portal 수용·재전달 검증을
+  완료한 현재 승인 운영에서는 활성화돼 있습니다. 다른 환경은 동일한 승인·검증 없이 켜지 않습니다.
+- 선정 근거 요약·versioned 설명 조회의 후속 설계는
+  [결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 8~12절이며 **아직 구현된 API가 아닙니다**.
 - 공식 point-in-time S&P/GICS, 공식 calendar·halt, 장기 가격·복수 regime 검증,
   champion promotion·live shadow 관찰은 별도 데이터·연구 과제입니다.
 - 무료 플랜·기사 전문·공시 제3자 콘텐츠·재배포 권리를 확인해야 합니다.
@@ -454,12 +521,20 @@ artifact 목적·hash, 정확히 20개 선정·shortfall, SHORT 레거시 보존
 - [오케스트레이터 아키텍처](.github/modernize/assessment/engines/facts/orchestrator-architecture.md)
 - [Telemetry·KQL runbook](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)
 - [모델 변경 이력](MODEL_CHANGELOG.md), [변경 로그](CHANGELOG.md)
+- [정량 상세](.github/modernize/assessment/engines/facts/quantitative-pipeline-architecture.md),
+  [LLM 상세](.github/modernize/assessment/engines/facts/llm-pipeline-architecture.md),
+  [Fusion 상세](.github/modernize/assessment/engines/facts/fusion-pipeline-architecture.md)
+- [결과 스키마·선정 근거 샘플](RESULT-SCHEMA.sample.md)
+- [일일 파이프라인 오류 점검·운영 증거](DAILY-PIPELINE-RUNBOOK.md)
+- `plan.md`, `*.plan.md`, `*-plan.md`, `*_plan.md` 등 계획 파일과 `plans/`는
+  [.gitignore](.gitignore)에 따라 로컬에만 유지합니다. 아키텍처·상세 설계·운영 runbook은 공유 문서입니다.
 
 ```text
 src/sp500_candidate_engine/
   collectors/          공통 원천 수집
   analytics/           Qlib·Alpha158·모델·시점 제한 조회
   selection/           정량 선정 정책·저장
+  fusion/              고정 원천 run 통합·정확한 RRF·audit
   llm_preselection/    독립 LLM pipeline·evidence·ranker·저장
   daily_preselection.py  병렬 조정
 backend/               API·고정 모델 DAILY 실행

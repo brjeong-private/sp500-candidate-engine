@@ -10,8 +10,9 @@
 Top-5/10 평가 지표를 20으로 임의 변경하지 않는다.
 
 수집 후 정량 Top 20과 선택 활성화된 독립 LLM Top 20을 병렬 생성하며,
-향후 최종 통합·TradingAgents 전달은 기존 5~10개에서 20개로 변경한다.
-통합·최종 전달은 아직 미구현이며 notebook 실행이 자동 외부 전달을 활성화하지 않는다.
+성공한 Fusion 최종20개는 별도 flag·versioned 수신 계약으로 전달한다.
+통합·독립 stage 실행은 구현·배포됐지만 notebook 실행이 자동 외부 전달을 활성화하지 않는다.
+운영 실행·오류 확인은 [운영 점검서](../DAILY-PIPELINE-RUNBOOK.md)를 따른다.
 
 ## 환경 생성
 
@@ -28,7 +29,9 @@ C:\Users\annajeong\AppData\Local\Programs\Python\Python311\python.exe `
 
 VS Code에서 `S&P500 Alpha158 (Python 3.11)` kernel을 선택한다.
 
-DB에서 새 label·model·score·candidate를 저장하는 실행은 Azure PostgreSQL이 실행 중이어야 한다. 비용 방지를 위해 평소 서버는 중지 상태로 유지하며 실행 전에 시작한다.
+DB에서 새 label·model·score·candidate를 저장하는 실행은 Azure PostgreSQL이 실행 중이어야 한다.
+[공통 하네스](../PROJECT-HARNESS.md)에 따라 운영 DB는 항상 실행 상태로 유지한다.
+비용 절감을 이유로 임의 중지·SKU 축소하지 않으며 시작·lock 복구도 승인된 운영 절차를 사용한다.
 
 ```powershell
 az postgres flexible-server start `
