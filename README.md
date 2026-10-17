@@ -272,9 +272,19 @@ final manifest를 거쳐 후보 입력을 확정합니다.
 데이터 권리·범위는 [원천·라이선스 카탈로그](.github/modernize/assessment/engines/facts/data-source-license-catalog.md),
 수집 흐름은 [수집 파이프라인](.github/modernize/assessment/engines/facts/ingestion-pipeline.md)을 따릅니다.
 
-## 정량 모델과 독립 LLM
+## 모델·LLM·Fusion
 
-### 모델 아키텍처
+같은 고정 context에서 **모델은 가격 기반 정량 후보**, **LLM은 비가격 evidence 기반 후보**를
+독립적으로 선정하고, **Fusion은 두 성공 목록을 순위로 통합**합니다.
+세 결과는 별도 run으로 저장하며 점수의 단위와 의미를 섞지 않습니다.
+
+| 항목 | 입력·평가 | 결과 |
+|---|---|---|
+| [모델](#모델) | 조정가격·Alpha158·고정 LightGBM | 예상 수익률 기반 정량 Top 20 |
+| [LLM](#llm) | 뉴스·공시·재무·이벤트의 근거 기반 rubric | `LLM_EVIDENCE_SCORE` Top 20 |
+| [Fusion](#fusion) | 같은 context의 정량·이벤트 LLM Top 20 순위 | RRF·적격성·분산 제약을 반영한 최종 Top 20 |
+
+### 모델
 
 모델의 학습·평가·등록과 일일 고정 모델 추론을 구분합니다. 주간 재학습에서만
 label과 walk-forward 평가를 사용하며, 일일 추론은 등록된 artifact로 점수를 계산합니다.
@@ -319,22 +329,13 @@ flowchart LR
     Assignment --> Pin
     Features --> Predict
     Context --> Pin
-
-    Context -.-> Evidence["Event v2 non-price evidence<br/>news · SEC · earnings · actions"]
-    Evidence -.-> LlmRank["Azure OpenAI · strict JSON<br/>citations · supported-criteria weighted score"]
-    LlmRank -.-> LlmResult["Separate LLM Top 20<br/>LLM_EVIDENCE_SCORE · source lineage"]
-    QuantStore -.-> FutureFusion["Flagged RRF k=10 and Policy Validation<br/>Final Top 20 or SHORTFALL"]
-    LlmResult -.-> FutureFusion
 ```
 
-LLM 경로는 정량 특징·예측값을 입력받는 후처리 모델이 아니라 동일 context를 사용하는
-독립 후보 선정 경로입니다. 코드 기본값은 비활성이고 승인된 운영은 event v2를 사용합니다.
-RRF는 구현·배포된 선택 기능입니다. 예측 기간과
-후보 개수, Top-5/10 평가 지표는 서로 다른 계약으로 유지합니다.
+예측 기간과 후보 개수, Top-5/10 평가 지표는 서로 다른 계약으로 유지합니다.
 전처리·label·score·선정 계약의 상세는
 [모델 아키텍처 문서](.github/modernize/assessment/engines/facts/model-architecture.md)를 따릅니다.
 
-### Alpha158·LightGBM
+**Alpha158·LightGBM 선정 기준**
 
 - split-adjusted OHLCV·VWAP, 거래 session, point-in-time membership과 factor lineage를 사용합니다.
 - Alpha158 RAW 158차원, 최대 lookback 60 sessions이며 필요 이력이 없으면 적격으로 만들지 않습니다.
@@ -345,28 +346,99 @@ RRF는 구현·배포된 선택 기능입니다. 예측 기간과
 - IC·Rank IC, Top-5/10 raw·net return, 비용·drawdown 평가를 유지합니다.
   후보 수 20개 변경만으로 Top-20 성능이 검증됐다고 주장하지 않습니다.
 
-### LLM evidence
+정량 후보는 전체 적격 universe를 점수 내림차순·instrument ID 동점 순으로 순회하면서
+issuer 중복과 섹터 제한을 반영해 선정합니다. 전체 점수 순위와 선정 목록 `position`은
+다를 수 있습니다. 예측값·순위·percentile·선정 reason code를 저장하며,
+개별 특징의 SHAP 기여도는 현재 후보 결과에 포함하지 않습니다.
 
-기존 v1 LLM pipeline은 manifest로 제한한 뉴스 30일, 실적 2회, SEC filing 1년,
+### LLM
+
+LLM은 정량 특징·예측값을 입력받는 후처리 모델이 아니라 동일 context의 독립 후보
+선정 경로입니다. 코드 기본값은 비활성이고 승인된 운영은
+[이벤트 정책 v2](config/llm_preselection/policy_event_v2.yaml)를 사용합니다.
+
+```mermaid
+flowchart LR
+    Context["고정 context·manifest·cutoff"] --> Evidence["비가격 evidence<br/>뉴스·SEC 공시/재무·실적·기업행위"]
+    Evidence --> Screening["최근 7일 이벤트 선별<br/>최대 90 issuer + 무이벤트 대조 최대 10"]
+    Screening --> Assessment["Azure OpenAI 항목별 평가<br/>동일 종목 citation·strict JSON"]
+    Assessment --> Score["근거 있는 최소 3개 항목<br/>가중치 재정규화·결측 보존"]
+    Score --> Result["LLM Top 20<br/>점수·항목별 이유·evidence 저장"]
+```
+
+이벤트 screening은 유형별 1점이며 평가 pool을 정하는 단계입니다. 실적 일정은
+cutoff까지 알려진 전후 7일 일정을 포함하고, screening 점수를 최종 LLM 점수에 더하지 않습니다.
+평가 입력에서는 가격·Alpha158·정량 점수를 제외합니다.
+
+| 평가 항목 | 가중치 |
+|---|---:|
+| 실적 `earnings` | 25 |
+| 사업 `business` | 25 |
+| 이벤트 `event` | 20 |
+| 재무 `financial` | 15 |
+| 산업 `industry` | 15 |
+
+근거 있는 최소 3개 항목의 가중치만 재정규화하고, 근거 없는 항목은 null과 결측 사유를
+보존합니다. 총점은 서버가 계산하며 예상 수익률·확률·confidence가 아닙니다.
+v2는 계산된 점수·instrument ID 순으로 유효한 상위 20개를 선정합니다.
+
+기존 v1은 별도 호환 정책으로 유지합니다. manifest로 제한한 뉴스 30일, 실적 2회, SEC filing 1년,
 facts 8분기, 기업행위 1년, 가격 60 sessions와 당시 종목 metadata를 사용합니다.
 전체 적격 universe를 배치별 strict JSON으로 평가하고 상위 pool을 정확히 20개로
-재정렬합니다. raw payload·기사 전문·외부 웹 검색·외부 지식·투자 의견은 입력·평가에서 제외합니다.
+재정렬합니다. v1의 가격 입력·재정렬을 비가격 v2와 혼동하지 않습니다.
+raw payload·기사 전문·외부 웹 검색·외부 지식·투자 의견은 입력·평가에서 제외합니다.
 
 Entra 인증 Azure OpenAI를 사용합니다. 응답 schema·source evidence ID를 검증하고
 timeout·408/429/5xx 등 제한된 오류만 retry합니다. deployment·API·prompt·policy·
 evidence version과 입력·출력 hash·token 사용량을 보존하며 성공한 동일 입력은 재사용합니다.
-
-신규 [policy_event_v2.yaml](config/llm_preselection/policy_event_v2.yaml)은 최근 7일
-유형별 1점 이벤트 최대 90개와 결정적 무이벤트 대조 최대 10개를 평가합니다.
-가격·Alpha158·정량 점수는 입력하지 않으며, 근거 있는 최소 3개 항목만 가중치를
-재정규화합니다. v1의 재정렬 대신 계산된 점수로 20개를 선정합니다.
 RPM/TPM·timeout·제한 재시도·context별 성공 배치 재사용과 원문 응답 감사를 지원합니다.
 
-Fusion은 두 성공 Top 20의 목록 position으로 정확한 유리수 RRF를 계산합니다.
-동일 instrument만 합산하고 같은 issuer의 다른 주식은 더 높은 적격 점수 하나만
-남깁니다. 섹터당 2개·부족 시 4개를 적용하되 union 밖에서 추가하지 않습니다.
-부족하면 `SHORTFALL`이며, SHORT Fusion이나 다른 모델로의 fallback은 없습니다.
-세부 계약은 [구현 지침](<Agent Implementation Instructions — Hybrid Candidate Selection with RRF.md>)을 따릅니다.
+### Fusion
+
+Fusion은 **성공한 정량 Top 20과 이벤트 LLM Top 20을 통합하는 MEDIUM_20D 전용 후보
+선정 단계**입니다. 두 원천은 같은 execution context·manifest·universe·거래 session·
+cutoff여야 하며, 실제 사용한 source run ID와 정책/hash를 고정합니다.
+
+```mermaid
+flowchart LR
+    Quant["성공 Quant Top 20<br/>예측 수익률·목록 position"] --> Validate["고정 source run 검증<br/>context·cutoff·정책·품질"]
+    Llm["성공 이벤트 LLM Top 20<br/>근거 평가 점수·목록 position"] --> Validate
+    Validate --> Union["instrument union<br/>동일 종목의 RRF 기여만 합산"]
+    Union --> Gates["hard gate·issuer 중복 제거<br/>섹터 2개 → 부족 시 4개"]
+    Gates --> Store["최종 Top 20 / SHORTFALL<br/>원천 점수·순위·RRF·audit 저장"]
+    Store --> Handoff["성공 20개만 승인된 외부 전달<br/>versioned envelope·전량 ACK"]
+```
+
+**점수 통합 방식: Reciprocal Rank Fusion**
+
+```text
+RRF = Σ 1 / (k + 원천 Top 20 목록의 position), k = 10
+
+예: 정량 후보 3위 + LLM 후보 2위
+    = 1/(10+3) + 1/(10+2)
+    = 25/156 ≈ 0.160256
+```
+
+예상 수익률과 LLM rubric 점수를 직접 더하지 않습니다. RRF 입력은 **원천 후보 목록의
+position**이며 정량 전체 universe 순위와 구분합니다. 한 목록에만 있는 종목은
+해당 목록의 기여 하나만 사용하고, 다른 목록 미포함을 0점이나 부정 평가로 해석하지 않습니다.
+
+- 후보 pool은 두 목록의 instrument union으로 제한합니다. 동일 instrument의 기여만
+  합산하고, 같은 issuer의 다른 share class는 합산하지 않은 채 적격 RRF 최고 하나를 남깁니다.
+- 동점은 `instrument_id ASC`로 결정합니다. 모든 hard gate를 유지하고 섹터당 2개,
+  부족할 때 4개까지 한 번 완화합니다.
+- 20개를 못 채우면 `SHORTFALL`입니다. 원천 후순위·과거 결과·다른 모델로 채우지 않으며
+  SHORT Fusion은 지원하지 않습니다.
+- 최종 후보에는 양쪽 원천 포함 여부·예측값/LLM 점수·원천 순위·정확한 RRF 분자/분모·
+  reason code·evidence 참조를 저장합니다. 원천 결과와 최종 결과·선정/제외 audit를 보존합니다.
+- 조회는 `/api/v1/fusion-selections`를 사용합니다. 외부 전달은 성공 최종 20개 전체와
+  실제 Fusion run ID를 기준으로 하며, 계약/hash·후보 identity의 전량 ACK를 검증합니다.
+
+정책은 [fusion_v1.yaml](config/analytics/fusion_v1.yaml), 상세는
+[Fusion 아키텍처](.github/modernize/assessment/engines/facts/fusion-pipeline-architecture.md)와
+[구현 지침](<Agent Implementation Instructions — Hybrid Candidate Selection with RRF.md>)을 따릅니다.
+정량·LLM 상세 근거를 하나의 종목 설명으로 함께 저장·조회하는 확장은
+[결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 별도 설계이며 아직 구현된 API가 아닙니다.
 
 ## Point-in-time·저장 계약
 

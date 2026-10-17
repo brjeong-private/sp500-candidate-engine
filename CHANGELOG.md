@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-17 | Model LLM Fusion README | 메인 README의 후보 선정 설명을 모델·LLM·Fusion 세 항목으로 재구성하고 이벤트 평가 가중치·RRF 산식·통합 제약·결과 저장 및 외부 전달 경계를 명시했다.
 - 2026-10-17 | Local-only Plans | 모든 깊이의 plan.md·*.plan.md·*-plan.md·*_plan.md·plan 접두 문서와 plans 폴더를 Git 제외하고 기존 추적 계획은 로컬 보존 상태로 해제했다.
 - 2026-10-17 | Main Documentation Refresh | 메인 README를 event v2·정확한 Fusion·독립 stage·운영 ON/코드 기본 OFF·24개 migration과 검증된 API/CLI 계약에 맞추고 문서 색인을 갱신했다.
 - 2026-10-17 | Result Schema Documentation | 결과 샘플의 cutoff·선정 policy version을 현재 계약과 맞추고 독립 stage 제어 ID·실제 Fusion ID 구분 및 미구현 설명 설계 경계를 명시했다.
