@@ -2,10 +2,10 @@
 
 갱신일: 2026-10-17
 
-## 독립 후보 파이프라인 통합 설계 (2026-10-17)
+## 독립 후보 파이프라인 구조 (2026-10-17)
 
-진행 순서는 현행 계획 점검 → 상세 설계 문서 → 구현·검증 → 운영 배포다.
-모델·rubric·RRF k=10은 유지하고 독립 API/CLI·상태·retry를 추가한다.
+독립 API/CLI·상태·retry와 PostgreSQL migration 024는 운영 배포됐다.
+모델·rubric·RRF k=10을 유지하며 공통 입력 이후 Quant·LLM을 독립 실행한다.
 상세 설계는 [정량](./quantitative-pipeline-architecture.md),
 [LLM](./llm-pipeline-architecture.md), [Fusion](./fusion-pipeline-architecture.md)으로 나눈다.
 이 설계는 TradingAgents 분석이 아니라 후보 선정까지의 설계다.
@@ -60,14 +60,39 @@ flowchart LR
 공통 manifest·cutoff를 준비한 뒤 Qlib Alpha158·LightGBM 정량 Top 20과 병렬 실행한다.
 신규 이벤트 LLM v2·RRF·최종 20개 전달 어댑터는 구현됐으나 기본 비활성이다.
 Fusion 비활성 MEDIUM은 `parallel_preselection`에서 외부 제출 없이 종료한다.
-신규 기능의 운영 migration·배포·실제 외부 수신 검증·활성화는 별도 승인 작업이다.
-SHORT_5D 레거시 5~10개는 유지한다. 문서 계약은 신규 운영 배포 완료를 뜻하지 않는다.
+신규 정책과 조회 계약의 운영 활성화는 별도 승인·배포 작업이다.
+SHORT_5D 레거시 5~10개 실행 기능은 유지한다.
 
 2026-10-17 확인된 운영은 PostgreSQL024·독립 stage API/CLI까지 배포됐고
 event v2·Fusion k=10·전량 handoff가 승인 활성화돼 있다. 코드 기본 OFF와 구분한다.
 세 독립 stage의 고정 성공20개 재사용·인증·멱등성을 검증했으며 추가 LLM 호출은0건이다.
-실제 운영 증거와 오늘 정기 실행·오류 확인은
-[운영 점검서](../../../../../DAILY-PIPELINE-RUNBOOK.md)에 보존한다.
+실행·재시도는 [오케스트레이터 가이드](../../../../../orchestrator/README.md),
+오류 조회는 [Telemetry·KQL 런북](orchestrator-telemetry-runbook.md)을 따른다.
+
+### 운영과 로컬 변경의 경계
+
+| 기능 | 현재 상태 |
+|---|---|
+| 독립 Quant·LLM·Fusion stage, event v2·RRF k=10·전량 handoff | 운영 활성, 코드·설정 예제의 기본값은 OFF |
+| native LLM 검색 v4·한국어 prompt·검색 증거 witness | 로컬 변경, 기존 운영 v2를 자동 교체하지 않음 |
+| Fusion 근거 snapshot·v2 설명/결과 통합 API | 로컬 변경, 운영 v2 경로는 아직 미노출 |
+| 주간 모델 업데이트 이메일 | 오케스트레이터 배포·주간 전용 활성, 승인된 단일 수신처 사용 |
+| 일일 파이프라인·resource guardian 이메일 | 비활성, 실행·관측 기능은 유지 |
+
+일일 병렬 분기는 성공한 형제 결과를 보존한다. 둘 다 성공하면 `SUCCEEDED`, 한쪽만
+성공하면 `PARTIAL_SUCCESS`, 둘 다 실패하면 `FAILED`다. 부분 성공을 Fusion 입력이나
+외부 전달 성공으로 취급하지 않으며 Fusion은 고정된 성공 Top 20 두 개를 요구한다.
+
+LLM v2는 manifest-fenced DB packet만 평가한다. 별도 v4는 공개 회사 metadata로
+native `web_search`를 호출하고 전체 출처·공개 시점·고정 원문 버전을 검증한다.
+승인된 발췌만 새 평가 대화에 넘기며 검색 대화·추론·response ID는 넘기지 않는다.
+모델 이름·버전은 감사 metadata이며 자료 승인 기준은 아니다. 자세한 gate와 저장 경계는
+[LLM 아키텍처](llm-pipeline-architecture.md)를 따른다.
+
+정량 원본 근거와 LLM rationale·criterion 인용은 DB에 존재하지만, 과거 Fusion 결과에는
+통합 snapshot이 없을 수 있다. 조회 시 새 분석으로 꾸미거나 원본 근거 부재로 단정하지 않는다.
+최소 DDL 변경 방향과 실제 관계는 [후보 테이블·ER 문서](../../../../../SELECTION-DATABASE-ER.md)에 정리한다.
+2026-10-17 SHORT 후보·근거·연결 리포트 정리는 모델·점수·일정 제거와 별개다.
 
 오케스트레이터의 replay·멱등성·상태 전이·보안·배포 상세는
 [Durable Functions 오케스트레이터 아키텍처](orchestrator-architecture.md)를 기준으로 한다.
@@ -94,8 +119,8 @@ event v2·Fusion k=10·전량 handoff가 승인 활성화돼 있다. 코드 기�
 | 영역 | 상태 | 이 저장소의 책임 |
 |---|---|---|
 | 원천 수집·Data Spine·Qlib Alpha158·LightGBM·selection·Candidate API | CURRENT | 포함 |
-| 독립 LLM 기업·이벤트 Top 20 | IMPLEMENTED / FLAG OFF | manifest-fenced evidence·평가·별도 저장·API |
-| 이벤트 LLM v2·두 Top 20 RRF·최종 Top 20 | IMPLEMENTED / FLAG OFF | k=10·instrument union·issuer·섹터 2/4·SHORTFALL |
+| 독립 LLM 기업·이벤트 Top 20 | 운영 ON / 기본 OFF | manifest-fenced evidence·평가·별도 저장·API |
+| 이벤트 LLM v2·두 Top 20 RRF·최종 Top 20 | 운영 ON / 기본 OFF | k=10·instrument union·issuer·섹터 2/4·SHORTFALL |
 | Portal·TradingAgents·외부 분석 data/state·report | EXTERNAL | 제외, API 연동만 유지 |
 
 <!-- mermaid-checked: no braces in labels, all subgraphs closed, unique ids -->
@@ -123,8 +148,8 @@ flowchart LR
             LlmTop["Independent LLM evidence evaluation<br/>top 20 · optional · default OFF"]
             QuantApi["Quant Top 20 Store and API"]
             LlmApi["LLM Top 20 Store and API"]
-            Merge["FLAG OFF · instrument union and RRF k=10<br/>issuer · hard gate · sector 2/4"]
-            CandidateApi["FUTURE · Final Top 20 API<br/>no secondary trim · not an order"]
+            Merge["RRF k=10 · operating ON · default OFF<br/>issuer · hard gate · sector 2/4"]
+            CandidateApi["Final Top 20 API<br/>no secondary trim · not an order"]
 
             Reference --> DataSpine
             Massive --> DataSpine
@@ -172,7 +197,7 @@ flowchart LR
         PortalState --> PortalUi
     end
 
-    CandidateApi -.->|"future selection run batch · 20 candidates"| Portal
+    CandidateApi -.->|"flagged full Top20 envelope · exact ACK"| Portal
 ```
 
 ### 05:30 ET 실행 계약
@@ -227,13 +252,19 @@ flowchart LR
     Gate --> Medium["MEDIUM_20D<br/>candidate-daily-date-medium_20d"]
     Existing["기존 모델 selection 확인"]
     Medium --> Existing
-    Existing -->|"Exists"| Skip["SKIPPED_EXISTING"]
+    Existing -->|"Exists · Fusion OFF"| Skip["SKIPPED_EXISTING"]
     Existing -->|"Missing"| CandidateSubmit["Candidate DAILY·poll·정량 20개 검증"]
-    CandidateSubmit --> Stop["Fusion OFF: parallel_preselection<br/>외부 제출 0개"]
-    Skip --> Email["모델별 terminal Email"]
+    CandidateSubmit -->|"Fusion OFF"| Stop["parallel_preselection<br/>외부 제출 0개"]
+    CandidateSubmit -->|"Fusion ON"| Fusion["고정 Quant20 + LLM20<br/>RRF k=10 · final20 검증"]
+    Existing -->|"Exists · Fusion ON"| Fusion
+    Fusion --> Handoff["전달 플래그·계약 gate<br/>전량 envelope · identity/hash ACK"]
+    Skip --> Email["일일 terminal Email gate<br/>운영 OFF"]
     Stop --> Email
+    Handoff --> Email
     Email --> DailyTerminal["Daily terminal"]
     Guardian["15분 guardian"] --> Ready["readiness·제한 복구"]
+    Weekly["뉴욕 주말 gate"] --> Training["SHORT 후 MEDIUM · 독립 결과"]
+    Training --> WeeklyMail["주간 전용 ACS Email ON<br/>시작·모델별·최종 최대 4회"]
 ```
 
 오케스트레이터는 control plane이며 Candidate PostgreSQL이나 Portal MySQL에 직접
@@ -306,8 +337,8 @@ flowchart TD
         FeatureRun["Qlib Alpha158 Features"]
         ScoreRun["Pinned Model Scoring and Universe Ranking"]
         Selector["MEDIUM Daily Top 20<br/>SHORT Legacy 5 to 10"]
-        LlmRun["Independent LLM Top 20<br/>optional · default OFF"]
-        FutureFusion["FLAG OFF RRF k=10 · Final Top 20 or SHORTFALL"]
+        LlmRun["Independent LLM Top 20<br/>operating ON · default OFF"]
+        FutureFusion["RRF k=10 · Final Top 20 or SHORTFALL<br/>operating ON · default OFF"]
     end
 
     Scheduler -->|"daily"| SessionResolver
@@ -420,8 +451,8 @@ flowchart LR
         Features["Features"]
         Scores["Scores"]
         Candidates["Quant Top 20"]
-        LlmCandidates["Independent LLM Top 20<br/>optional · default OFF"]
-        FusionCandidates["FLAG OFF RRF k=10 · Final Top 20 or SHORTFALL"]
+        LlmCandidates["Independent LLM Top 20<br/>operating ON · default OFF"]
+        FusionCandidates["RRF k=10 · Final Top 20 or SHORTFALL<br/>operating ON · default OFF"]
     end
 
     P0A --> P0B
@@ -542,7 +573,8 @@ flowchart LR
 - 정기 일일 MEDIUM_20D 단일 실행, 모델별 결정적 ID와 legacy SHORT_5D·dual 흐름 보존
 - 기본 경로의 `SKIPPED_EXISTING`, Fusion 활성 시 고정 결과 확인 후 전달 재개
 - 독립 stage 실행·상태·retry·고정 계약·소유권별 중단 복구
-- 15분 resource guardian, 모델별 Email, replay-safe telemetry와 KQL runbook
+- 15분 resource guardian, replay-safe telemetry와 KQL runbook
+- 주간 전용 모델 업데이트 Email, 일일·guardian 메일은 비활성
 
 아직 미구현 또는 운영 검증 대기:
 

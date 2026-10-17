@@ -1,6 +1,6 @@
 # Durable Functions 오케스트레이터 아키텍처
 
-갱신일: 2026-10-16
+갱신일: 2026-10-17
 
 이 문서는 Candidate Engine의 일일 실행과 외부 분석 시스템 전달을 조정하는
 `orchestrator/`의 기준 설계다. 오케스트레이터는 수집·전처리·모델 점수·후보 선정
@@ -9,8 +9,9 @@ selection run을 외부 Portal에 전달하는 control plane이다.
 
 Linux FC1과 private Storage Durable backend는 기존 일일 배포 기준선이다. 주간 API
 client, New York 주말 gate, deterministic weekly parent/model, Container Apps Job
-start/status와 독립 model 결과는 구현되고 focused test로 검증됐다. 주간 코드는 아직
-Azure에 배포되지 않았고 실제 API·Job·RBAC·KQL E2E 증거도 없다.
+start/status와 독립 model 결과는 구현됐다. 2026-10-17 주간 전용 이메일을 포함한
+오케스트레이터를 배포했으며 주간 메일만 활성화했다. 실제 새 학습·승격을 실행하거나
+주간 Job·promotion·KQL 전체 E2E를 완료했다는 뜻은 아니다.
 
 ## 책임과 경계
 
@@ -49,7 +50,7 @@ flowchart TB
         Verify["Fetch and verify candidates"]
         SubmitPortal["Submit selection run reference"]
         PollPortal["Poll Portal aggregate"]
-        Notify["Send ACS Email"]
+        Notify["Daily ACS Email gate<br/>operating OFF"]
     end
 
     subgraph Services["Owned and External Services"]
@@ -95,13 +96,20 @@ sequenceDiagram
     participant M as Weekly Model Child
     participant C as Candidate Weekly API
     participant J as Container Apps Job
+    participant A as Weekly ACS Email
 
     T->>T: Convert UTC to America/New_York
     alt Not Saturday or Sunday
         T-->>T: No weekly start
-    else Weekend and no instance history
+    else Weekend and no active parent
         T->>W: Start candidate-weekly-YYYY-Www
         W->>C: GET weekly eligibility
+        alt Not eligible or ALREADY_ACCEPTED
+            W-->>T: SKIPPED, no email
+        else Eligible
+        opt New notification input and weekly email enabled
+            W->>A: STARTED summary
+        end
         W->>M: SHORT_5D child
         M->>C: POST weekly run with Idempotency-Key
         M->>J: Start with WEEKLY_RUN_ID and MODEL_PURPOSE
@@ -117,14 +125,23 @@ sequenceDiagram
             M->>C: POST activation-smoke
         end
         M-->>W: SHORT independent result
+        opt New notification input and weekly email enabled
+            W->>A: SHORT result and model IDs
+        end
         W->>M: MEDIUM_20D child even if SHORT failed
         M-->>W: MEDIUM independent result
+        opt New notification input and weekly email enabled
+            W->>A: MEDIUM result and model IDs
+            W->>A: Final aggregate summary
+        end
+        end
     end
 ```
 
 ID는 `candidate-weekly-{YYYY-Www}`와
 `candidate-weekly-{YYYY-Www}-{SHORT_5D|MEDIUM_20D}`로 결정적이다. 주말의 첫 hourly
-tick이 parent를 만들며 completed history도 재시작하지 않는다. 두 모델은 계산 자원
+tick이 parent를 만들며 활성 parent가 없으면 terminal instance도 다시 시작할 수 있다.
+업무 중복은 Candidate weekly eligibility·acceptance unique key로 차단한다. 두 모델은 계산 자원
 때문에 순차 실행하지만 성공 조건은 독립적이다. SHORT 실패·timeout은 MEDIUM을
 차단하지 않는다.
 
@@ -132,6 +149,21 @@ Job/promotion 제한 시간에는 child가 `TIMED_OUT`으로 끝나며 orchestra
 변경하지 않는다. active assignment는 Candidate PostgreSQL이 소유하므로 기존 incumbent가
 유지된다. Job override의 업무 입력은 `weekly_run_id`, `model_purpose`에 대응하는 두 env
 값뿐이며 secret·DB 설정은 기존 runtime environment 계약에서 가져온다.
+
+### 주간 메일과 공통 메일의 분리
+
+| 대상 | gate | 수신처 | 운영 |
+|---|---|---|---|
+| 주간 모델 업데이트 | `ORCHESTRATOR_WEEKLY_EMAIL_ENABLED` | `ORCHESTRATOR_WEEKLY_EMAIL_RECIPIENTS` | ON |
+| 일일 파이프라인·resource guardian | `ORCHESTRATOR_EMAIL_ENABLED` | 기존 공통 수신처 | OFF |
+
+주간 발송은 별도의 비어 있지 않은 수신처가 필수이며 공통 수신처를 합치거나 fallback하지 않는다.
+실제 주소는 운영 App Settings에만 둔다. 신규 parent 입력의
+`weekly_email_notifications=true`일 때만 알림 activity를 추가해 기존 Durable history를 보존한다.
+적격 실행에서 시작·SHORT 결과·MEDIUM 결과·최종 요약을 최대 4회 보내며 polling마다 보내지 않는다.
+업데이트 승격·기존 모델 유지·실패·timeout을 구분하고 확인된 실행·모델 ID만 포함한다.
+발송 실패는 `email_status=FAILED`와 telemetry에 남기되 다른 모델 실행이나 업무 결과를
+메일 성공으로 바꾸지 않는다. 메일 활성화는 새 학습·승격이나 메일 수신 완료의 증거가 아니다.
 
 ## 일일 제어 흐름
 
@@ -155,20 +187,28 @@ sequenceDiagram
             M->>C: ARM state and health ready
             M->>P: ARM state and readyz
             M->>C: GET existing selection
-            alt Existing valid terminal selection
-                M->>A: SKIPPED_EXISTING notification
+            alt Existing valid Quant selection and Fusion OFF
                 M-->>T: SKIPPED_EXISTING
-            else No existing selection
-                M->>A: Model STARTED notification
-                M->>C: POST DAILY with model Idempotency-Key
-            loop Until Candidate terminal or timeout
+            else Missing results or Fusion ON
+                M->>C: Resolve pinned existing results or POST DAILY with Idempotency-Key
+                loop Until accepted Candidate run terminal or timeout
                     M->>C: GET pipeline run
                     M-->>M: Durable timer
+                end
+                alt Fusion OFF
+                    M->>C: GET Quant candidates and verify exactly 20 rows
+                    M->>M: Stop at parallel_preselection with zero submissions
+                else Fusion ON
+                    M->>C: Resolve exact Fusion from pinned Quant20 and LLM20
+                    M->>M: Verify successful final20, policy and source identities
+                    opt Handoff flag and receiver contract enabled
+                        M->>P: POST complete fusion-top20-v1 envelope with Idempotency-Key
+                        P-->>M: Exact identity and hash ACK
+                    end
+                end
             end
-                M->>C: GET candidates by date and model purpose
-                M->>M: Verify exactly 20 quant rows and one selection run
-                M->>M: Stop at parallel_preselection with zero submissions
-                M->>A: Model terminal notification
+            opt Common email enabled, currently OFF
+                M->>A: Model notifications through activity
             end
         end
         M-->>T: MEDIUM_20D terminal result
@@ -249,7 +289,7 @@ unique key가 소유하며 Durable state 자체를 업무 acceptance 원장으�
 | Azure Resource Manager | 관리 ID·`DefaultAzureCredential` | Candidate·Portal App Service가 `RUNNING`인지 확인 |
 | Portal API | `Authorization: Bearer` | selection run 일괄 접수와 `daily_analysis_id` 집계 조회 |
 | TradingAgents | 서비스 readiness endpoint | `/readyz`의 `status=ready` 확인 |
-| ACS Email | 관리 ID·Email Sender RBAC | 시작과 terminal summary 전송 |
+| ACS Email | 관리 ID·Email Sender RBAC | 별도 주간 gate·수신처, 공통 파이프라인/guardian gate |
 
 모든 외부 URL은 credential·query·fragment가 없는 HTTPS base URL이어야 한다. HTTP
 redirect를 따르지 않고 JSON object만 허용하며 응답은 최대 2 MiB로 제한한다. Candidate

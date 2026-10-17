@@ -1,5 +1,33 @@
 # Change Log
 
+- 2026-10-17 | Pipeline Architecture Refresh | 공통 context 이후 독립 Quant·LLM 병렬 실행과 부분 성공 보존·고정 Fusion·전량 ACK 흐름을 현재 운영 ON/기본 OFF 상태에 맞춰 갱신했다.
+- 2026-10-17 | LLM Architecture Refresh | 운영 DB-only v2와 로컬 native 검색 v4를 구분하고 전체 출처·공개 시점·원문 버전 admission 및 새 평가 대화 격리·감사용 모델 metadata 계약을 정리했다.
+- 2026-10-17 | Orchestrator Architecture Refresh | 배포된 주간 전용 메일·최대 네 차례 요약·공통 메일 OFF와 terminal parent 재진입 시 DB acceptance로 중복을 막는 구조를 문서에 반영했다.
+- 2026-10-17 | Main and Data Documentation | 메인 README·결과/API 문서·ER 색인을 연결하고 원본 선정 근거와 과거 snapshot·미배포 v2 API를 구분하며 SHORT 데이터 정리와 실행 기능 보존을 명시했다.
+- 2026-10-17 | Source-based News Admission | 모델 이름·버전·snapshot 날짜를 뉴스 승인/차단 조건에서 제거하고 nullable 감사 metadata로 분리했으며 자료 공개일·원문 버전·전체 출처·평가 격리 검증은 유지했다.
+- 2026-10-17 | Weekly Model Email | 주간 전용 발송 스위치·수신처를 분리하고 신규 주간 실행의 시작·모델별 결과·최종 요약 및 발송 실패 상태를 기록하며 기존 Durable 입력의 replay를 보존했다.
+- 2026-10-17 | Weekly Email Production | 오케스트레이터만 FC1에 배포해 승인된 단일 수신처의 주간 알림을 활성화하고 파이프라인·리소스 가디언 메일은 비활성으로 유지했으며 운영 설정·host·기존 ACS 권한을 확인했다.
+- 2026-10-17 | Native Search Validation | 전체 회귀 616건·관련 Ruff/타입 검사와 기존 PostgreSQL 호환을 검증하고 실제 native 검색의 시점 증거 미충족을 평가 호출 없이 차단한 증적을 보존했다.
+- 2026-10-17 | SHORT Candidate Cleanup | 운영 DB의 전체 기간 SHORT_5D 선정 run 10개·후보 100건·선정 근거 200건을 삭제하고 다른 모델 후보·점수·원천을 보존했다.
+- 2026-10-17 | SHORT Report Cleanup | SHORT_5D 분석 3회·작업 30건·이벤트 300건·dispatch 30건과 연결 Blob 리포트 30개를 삭제하고 다른 리포트 448개 및 기존 네트워크 차단 설정을 보존했다.
+- 2026-10-17 | Native LLM Search Replacement | 서버 SEC 추가 다운로드·HTML 파싱 보강과 해당 v3 정책을 제거하고 Azure Responses native web_search를 사용하는 별도 v4 정책으로 대체했다.
+- 2026-10-17 | Search Quarantine Harness | 전체 consulted sources·고정 원문 버전·공개 시점·검색/평가 모델 snapshot을 검증하고 미래/미확인 검색 전체 폐기와 새 평가 대화 격리를 강제했다.
+- 2026-10-17 | Search Privacy and Evidence | 검색에는 공개 회사 metadata만 전달하며 tool 응답·admission 결정·context/policy hash를 파일로 보존하고 승인된 발췌만 기존 JSONB/설명 v3에 연결했다.
+- 2026-10-17 | Candidate Database ER | 후보 관련 공통 입력·정량·LLM·Fusion 테이블의 역할·키·관계·근거 저장 위치와 ER 다이어그램을 별도 문서로 정리했다.
+- 2026-10-17 | External Explanation Witness | 검증 외부 인용의 원문/facts hash·공개/취득 시각·artifact를 candidate-explanation-v2로 투영하고 기존 v1 snapshot·API handoff 호환을 유지했다.
+- 2026-10-17 | VLO Selection API Verification | 10월16일 VLO의 실제 원천 run을 읽기 전용 조회해 정량·LLM 근거와 RRF 정합성을 확인하고 운영 통합 설명 endpoint 미노출·검증 한계를 별도 문서와 로컬 결과 JSON에 기록했다.
+- 2026-10-17 | Verified External Scoring Contract | 기존 v2를 유지하며 고정 SEC 공시 원문의 검증된 factual projection을 점수에 반영하는 별도 v3 정책·출처 계층·원문 hash·artifact 재현 계약을 추가했다.
+- 2026-10-17 | External Enrichment Harness | 공통 및 LLM 전용 하네스에 공개·관찰·revision cutoff와 모델 기억·최신 웹·미래 결과 금지를 명시하고 원천 접근·시점·artifact 실패의 우회 성공을 금지했다.
+- 2026-10-17 | Enrichment Architecture | 데이터·LLM 아키텍처에 DB 입력·검증 외부 보강·LLM 해석·미확보 정보를 분리하고 원문 파일과 기존 JSONB 증적·정책 선택·운영 미활성 경계를 명시했다.
+- 2026-10-17 | Foundry Resource Cleanup | 승인된 추가 Foundry 두 리소스와 하위 프로젝트를 영구 제거 없이 소프트 삭제하고 기존 프로젝트 모델·인프라를 보존했으며 삭제 직후 쿼터 반환 미반영 상태를 확인했다.
+- 2026-10-17 | Korean Event LLM Prompt | 이벤트 평가·재질의를 한글로 바꾸고 자연어 응답의 한국어 검증과 한글 항목 요약을 추가하며 prompt·요약 version을 갱신해 영문 cache와 분리했다.
+- 2026-10-17 | VLO Read-only OpenAI Probe | 10월16일 VLO의 고정 packet을 읽기 전용으로 검증해 새 한글 prompt로 실제 단건 호출하고 요청·응답을 Git 제외 임시 파일에 보존했으며 DB 적재는 하지 않았다.
+- 2026-10-17 | Explanation and Historical Harness Validation | 회귀 577건·Ruff·관련 모듈 타입 검사·기존 진단 9건 불변과 격리 PostgreSQL의 설명 조회·JSONB 수치 정규화 hash·미래 수정본 차단·rollback·v1 handoff 호환을 검증했다.
+- 2026-10-17 | Historical News Revisions | 변경된 이벤트 payload의 이용 가능 시각을 관찰 이전으로 소급하지 않고 과거 소급 기록된 후속 revision도 분석 cutoff 이후 관찰본이면 차단했다.
+- 2026-10-17 | Historical LLM Cutoff Harness | 사용자 확정 run cutoff를 새 입력·screening lineage·캐시·모델 호출 전·Fusion 근거에 강제하고 재구성의 늦은 수집과 미래 공개 정보를 구분하며 하네스 identity를 고정했다.
+- 2026-10-17 | Candidate Explanation Snapshots | 추가 DDL·LLM 호출 없이 기존 rationale·scored citation과 Quant 기준·RRF 기여를 bounded Fusion JSONB에 원자적으로 저장하고 계약·설정·입출력 hash를 provenance에 보존했다.
+- 2026-10-17 | Versioned Explanation API | 정확한 Fusion run의 v2 typed 설명 조회·과거 NOT_RECORDED·무결성 실패를 구현하고 v1 필드 allowlist와 기존 handoff hash·ACK 계약을 유지했다.
+- 2026-10-17 | Explanation Contract Documentation | 공통 하네스·결과 샘플·메인 및 Backend 문서를 실제 저장·조회·실패 계약과 미배포·포털 별도 범위에 맞춰 갱신했다.
 - 2026-10-17 | Model LLM Fusion README | 메인 README의 후보 선정 설명을 모델·LLM·Fusion 세 항목으로 재구성하고 이벤트 평가 가중치·RRF 산식·통합 제약·결과 저장 및 외부 전달 경계를 명시했다.
 - 2026-10-17 | Local-only Plans | 모든 깊이의 plan.md·*.plan.md·*-plan.md·*_plan.md·plan 접두 문서와 plans 폴더를 Git 제외하고 기존 추적 계획은 로컬 보존 상태로 해제했다.
 - 2026-10-17 | Main Documentation Refresh | 메인 README를 event v2·정확한 Fusion·독립 stage·운영 ON/코드 기본 OFF·24개 migration과 검증된 API/CLI 계약에 맞추고 문서 색인을 갱신했다.

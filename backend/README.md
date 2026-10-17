@@ -45,6 +45,9 @@ OpenAPI and Swagger UI are available at `/openapi.json` and `/docs`.
 | GET | `/api/v1/fusion-selections` | Latest successful Fusion per date, optionally pinned to Quant run and policy/hash |
 | GET | `/api/v1/fusion-selections/{run_id}` | Inspect one Fusion run, including failed/shortfall |
 | GET | `/api/v1/fusion-selections/{run_id}/handoff` | Strict versioned envelope for a successful final Top 20 |
+| GET | `/api/v2/fusion-selections` | Local development: Fusion results with reasons from pinned Quant/LLM sources |
+| GET | `/api/v2/fusion-selections/{run_id}` | Local development: exact Fusion result and source reasons, including legacy runs |
+| GET | `/api/v2/fusion-selections/{run_id}/explanations` | Immutable typed Quant/LLM/RRF explanations for the exact Fusion run; legacy `NOT_RECORDED` |
 | POST | `/api/v1/candidate-stage-runs` | Run exactly one Quant, LLM or Fusion stage from a frozen context; API key + Idempotency-Key |
 | GET | `/api/v1/candidate-stage-runs/{stage_run_id}` | Authenticated stage status, contract/input hashes, result IDs and failure code |
 | POST | `/api/v1/candidate-stage-runs/{stage_run_id}/retry` | Explicitly retry a failed/shortfall stage with preserved input and contract; new Idempotency-Key |
@@ -58,6 +61,50 @@ be reused with unchanged filters. Collection endpoints show stored observations,
 not a manifest-constrained analytical input contract or historical trading replay.
 
 ### Read semantics and pagination
+
+The v2 routes describe local changes, not deployed production endpoints. Production v1 remains
+unchanged. Source reasons can exist in PostgreSQL even when an older Fusion snapshot is absent;
+see [candidate tables and ER diagrams](../SELECTION-DATABASE-ER.md).
+Combined result/source-reason reads use the exact pinned source IDs and do not create snapshots.
+
+The v2 explanation endpoint is a single-run response, not a paginated list.
+It returns `schema_version`, Fusion/context/session/cutoff identity, `selection_status`,
+`failure_code`, recording `status`, and candidate identity/position/status/explanation.
+Old runs return `NOT_RECORDED` with null explanations; reads never regenerate snapshots,
+call an LLM, fetch current sources, or resubmit a handoff. Missing runs return 404;
+corrupt/missing new-contract snapshots return a logged 500 rather than a legacy fallback.
+Existing v1 reads/handoffs explicitly allowlist their original candidate fields.
+The new endpoint and cutoff harness require code deployment, but no new DDL.
+
+Historical LLM evaluation is fenced by the frozen run `cutoff_at`, not the retry's wall clock
+or session-day midnight. Fresh inputs, screening lineage, cached packets and pre-model
+inputs must pass `llm-cutoff-v1`; Fusion also revalidates pinned source packets/citations.
+Reconstruction permits later collection of already-public information, never later
+publication. Operational replay additionally requires observation by cutoff.
+An earnings schedule known by cutoff may be in the future; a future published result may not.
+The harness and `scored-citations-ko-v1` summary identity are pinned in new stage contracts.
+No additional summary LLM request or update of historical results is performed.
+The event prompt is `llm-event-preselection-v3-ko`: instructions and repair requests are Korean.
+Natural-language summaries, citation reasons and non-null missing reasons must contain Korean;
+English-only responses fail semantic validation and use the existing bounded repair budget.
+JSON keys/enums/UUIDs and supplied source text remain unchanged. The prompt/config hash prevents
+reuse of older English response caches. This local code change is not an operational deployment.
+
+Optional native-search v4 uses `llm-event-preselection-v7-ko-search` / evidence schema 4.
+Select `config/llm_preselection/policy_event_search_v4.yaml` explicitly. Server SEC downloading
+and parsing enrichment was removed. Provider-hosted Responses `web_search` receives only public
+company/archive metadata, never the complete DB packet or internal IDs.
+The full search trace is quarantined. Every consulted source/open/find URL must be a pinned
+pre-cutoff original version; one unsafe source rejects the whole response. Ordinary dated news
+pages are not historical revision proof. Missing body content is not successful enrichment.
+Only admitted cited passages enter a new, tool-free scoring conversation. No search conversation,
+reasoning or previous_response_id crosses this boundary. Admission depends on source publication
+and original-version proof, not model names/versions. Model metadata is nullable audit information;
+aliases, missing snapshot dates and model changes do not reject otherwise admissible news.
+Raw tool evidence is content-addressed outside PostgreSQL; bounded admitted evidence goes into
+existing input JSONB. No new source tables or DDL are required. Replay reruns the admission gate.
+Fusion search snapshots use `candidate-explanation-v3`; old v1 snapshots/handoff remain unchanged.
+The mandatory source/time contract is [LLM-HARNESS.md](../src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md).
 
 Responses use `{ "items": [...], "next_cursor": null }`. When `next_cursor` is
 non-null, resend it with the same dataset and filters; page size may change.

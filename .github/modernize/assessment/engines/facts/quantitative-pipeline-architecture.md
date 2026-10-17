@@ -117,4 +117,8 @@ API의 BackgroundTasks는 영속 큐가 아니다. process 중단은 명시적 �
 공통 stage schema·API/CLI와 고정 artifact 추론 연결을 구현했다.
 전체 테스트533건, 신규 stage 모듈 타입 검사·Ruff와 격리 PostgreSQL의24개 migration,
 상태 전이·멱등성·retry·중단 복구·terminal 보호가 통과했다.
-운영 결과는 [운영 점검·배포 증거](../../../../../DAILY-PIPELINE-RUNBOOK.md)에서 로컬 검증과 구분한다.
+독립 stage와 migration 024는 운영 배포됐다. 실행·재시도는
+[오케스트레이터 가이드](../../../../../orchestrator/README.md), 운영 오류 조회는
+[Telemetry·KQL 런북](orchestrator-telemetry-runbook.md)을 따른다.
+2026-10-17 SHORT_5D 과거 후보·근거 삭제는 모델·일일 점수·명시 실행·주간 재학습을
+제거하지 않는다. 정량 근거 저장 위치는 [후보 DB·ER 문서](../../../../../SELECTION-DATABASE-ER.md)에 정리한다.

@@ -4,12 +4,12 @@
 Fusion은 새 예측 모델이 아니라 MEDIUM 정량·LLM 후보의 선정 방식이다.
 개별 분기와 전체 연결은 [전체 아키텍처](./architecture-diagram.md)를 따른다.
 
-## 1. 현행 점검·독립화 목표
+## 1. 현행 독립 실행 구조
 
-FusionService·저장·read API·전달 계약은 구현돼 있다. 독립 실행 수락·상태·retry
-API/CLI를 추가하되 기존 일일 DAG와 선정 정책은 유지한다.
+FusionService·저장·read API·전달 계약과 독립 실행 수락·상태·retry API/CLI는 운영 배포됐다.
+기존 일일 DAG와 선정 정책은 유지한다.
 독립 Fusion은 수집·학습·정량 추론·LLM 호출·외부 전달을 시작하지 않는다.
-진행 순서는 계획 점검 → 상세 문서 → 구현·검증 → 배포다.
+운영은 event v2·RRF k=10·전량 handoff 활성 상태이며 코드·설정 기본값 OFF와 구분한다.
 
 ## 2. 아키텍처
 
@@ -103,4 +103,18 @@ Quant/LLM/외부 전달 비호출을 검증한다.
 전체 테스트533건·타입 검사·Ruff가 통과했고 격리 PostgreSQL에서24개 migration 및
 실제 standalone Fusion 성공·동일 key 재사용·성공 retry 차단·실패 retry·중단 복구·
 terminal 보호를 실행해 검증했다. 새 모델 호출·외부 제출 비호출도 테스트했다.
-운영 health·auth·결과 재사용 증거는 [운영 점검서](../../../../../DAILY-PIPELINE-RUNBOOK.md)에 남긴다.
+실행·재시도는 [오케스트레이터 가이드](../../../../../orchestrator/README.md),
+운영 오류 조회는 [Telemetry·KQL 런북](orchestrator-telemetry-runbook.md)을 따른다.
+
+## 9. 선정 근거·검색 확장의 배포 경계
+
+Quant 이유와 LLM rationale·criterion 인용은 원천 테이블에 저장된다.
+새 통합 설명은 기존 `fusion_candidate.candidate` JSONB와 `fusion_run.provenance`를
+사용하는 로컬 변경이며 추가 DDL·요약용 LLM 호출은 없다. 과거 run에는 snapshot이
+없을 수 있고 v2 설명/결과 통합 API도 아직 운영 미노출이다. 조회 때 과거 snapshot을
+새로 생성하거나 서로 다른 최신 run을 합쳐 근거로 표시하지 않는다.
+
+별도 native 검색 v4 입력을 검증하는 확장과 설명 v3의 검색 witness도 로컬 변경이다.
+검색 출처·공개 시점·원문 버전·증거 hash를 재검증하며 모델 metadata는 감사용이다.
+기존 v1 조회·`fusion-top20-v1` allowlist·hash·ACK는 변경하지 않는다.
+저장 위치·관계는 [후보 테이블·ER 문서](../../../../../SELECTION-DATABASE-ER.md)를 따른다.

@@ -2,15 +2,14 @@
 
 - 작성일: 2026-10-17
 - 기준: 현재 로컬 작업 트리의 API schema·조회 repository·결과 저장 코드.
-- 목적: 종목별로 정량 점수 → LLM 평가 조건 → Fusion 산식을 설명할 때 현재 활용 가능한
-  데이터를 정리한다. 이번 문서는 API·DB·선정 로직을 변경하지 않는다.
-- 문서 구분: 1~7절은 현재 구현, 8~12절은 선정 근거 저장·조회 변경 설계다.
-  변경 설계의 필드와 API는 아직 구현된 계약이 아니다.
+- 목적: 종목별 정량 점수 → LLM 평가 근거 → Fusion 산식과 고정 run별 설명 계약을 정리한다.
+- 문서 구분: 1~7절은 기존 v1 계약, 8~12절은 구현된 선정 근거 snapshot·v2 조회와
+  포털의 별도 연동 메모다. 기존 v1 계약은 변경하지 않는다.
 - 작업 분리: 선정 근거 작업은 파이프라인 분리 작업과 별도로 구현한다.
   기존 실행 구조에서 적용 가능해야 하며, 독립 Job·신규 orchestrator·실행 API 전환을
   선행 조건으로 요구하지 않는다.
-- 현재 독립 stage API/CLI·상태·재시도는 구현·배포돼 있다. 이 문서 8~12절의
-  explanation snapshot·v2 설명 조회는 별도 미구현 설계이며 같은 완료 상태로 표현하지 않는다.
+- 독립 stage API/CLI·상태·재시도는 구현·배포돼 있다. 신규 explanation snapshot·
+  과거일 LLM 강제 하네스·v2 설명 조회는 로컬 구현·검증 대상이며 아직 운영에 배포하지 않았다.
 - 모든 UUID·종목·점수·문장은 설명용 가상 값이다. 운영 DB를 조회한 샘플이 아니다.
 - 범위는 Candidate Engine의 후보 선정 결과다. 외부 종목 분석 보고서·매매 판단의
   응답 스키마는 다루지 않는다. 포털에는 후보 근거 표시를 위한 연동 메모만 남기며
@@ -460,7 +459,7 @@ stage 결과가 원천 결과를 재사용해도 stage ID와 원천 선정 ID를
 [정량](.github/modernize/assessment/engines/facts/quantitative-pipeline-architecture.md)·
 [LLM](.github/modernize/assessment/engines/facts/llm-pipeline-architecture.md)·
 [Fusion](.github/modernize/assessment/engines/facts/fusion-pipeline-architecture.md) 설계와
-[운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따른다.
+[오케스트레이터 실행·재시도 가이드](orchestrator/README.md)를 따른다.
 
 ## 6. 선정 근거 표시를 위한 현재 가용성 정리
 
@@ -501,7 +500,7 @@ stage 결과가 원천 결과를 재사용해도 stage ID와 원천 선정 ID를
 - [Fusion 조회](backend/app/repositories/fusions.py): run·handoff 생성·hash 경계.
 - [독립 stage schema](backend/app/schemas/candidate_stages.py): 제어 상태·결과 ID.
 
-## 8. 변경 설계: DB 구조 변경 없이 선정 근거 보존
+## 8. 구현: DB 구조 변경 없이 선정 근거 보존
 
 ### 8.1 목표와 제외 범위
 
@@ -520,7 +519,7 @@ LLM 점수와 정량 예측값을 합산하는 새 알고리즘을 만들지 않
 
 ### 8.2 최소 변경 저장 결정
 
-**기본안은 신규 테이블·컬럼·인덱스·DDL migration 0개다.** 기존 저장 공간을 사용하고,
+**신규 테이블·컬럼·인덱스·DDL migration은 0개다.** 기존 저장 공간을 사용하고,
 Python의 저장 projection·검증·조회 schema만 확장한다.
 
 | 보존할 내용 | 사용할 기존 저장 공간 | 변경 방식 |
@@ -550,7 +549,7 @@ Fusion JSONB에는 사용자에게 필요한 bounded 요약과 식별 정보만 
   저장 transaction에 포함한다. 조회 시점에 다시 LLM을 호출하지 않는다.
 - LLM 저장은 Fusion 성공 여부와 독립적이다. Fusion이 실패해도 LLM의 당일 평가 근거는 남는다.
 
-## 9. 변경 설계: LLM 뉴스·재무 근거 요약
+## 9. 구현: LLM 뉴스·재무 근거 요약
 
 ### 9.1 기존 평가 결과를 활용하는 생성 방식
 
@@ -561,10 +560,14 @@ Fusion JSONB에는 사용자에게 필요한 bounded 요약과 식별 정보만 
    screening에는 있었지만 packet 잘림으로 모델에 제공되지 않은 자료를 추가하지 않는다.
 3. citation의 `reason`에는 제공 정보 중 평가에 반영된 사실과 항목의 연결을 짧게 기록한다.
    “뉴스가 있음”, “10-Q가 있음” 같은 존재 확인만으로 점수 근거를 만들지 않는다.
-4. 기존 `rationale`에는 유효한 항목별 이유를 묶어 종목별 요약을 저장한다.
-   이미 평가 응답의 종합 요약이 근거 검증을 충족하면 재사용하고, 부족하면 저장 전
-   검증된 citation으로 결정적 요약을 구성한다. 대체 생성 여부·형식 version은
-   기존 `criterion_evidence`를 변형하지 않고 설명 계약과 Fusion provenance에서 구분한다.
+4. 신규 이벤트 평가의 `rationale`에는 검증된 scored citation의 `한글 항목명: reason`을
+   실제 인용 순서로 묶어 policy 한도 이내의 결정적 요약을 저장한다.
+   임의 자유 문장이 사실을 보장한다고 추정하지 않는다. 기존 원천 평가를 읽을 때도
+   동일 결정적 요약과 정확히 일치하는 기존 문장만 `VALIDATED_ASSESSMENT`로 재사용하고,
+   그 외에는 `DETERMINISTIC_CITATIONS`로 구분한다.
+   새 평가에서 결정적으로 생성한 요약도 `DETERMINISTIC_CITATIONS`다.
+   `scored-citations-ko-v1`을 LLM input identity·window config와 Fusion provenance에 고정하며
+   기존 `criterion_evidence`는 변형하지 않는다.
 5. null 항목은 `missing_reasons`로 구분한다. 근거 부족을 설명하는 인용을 긍정 평가
    또는 점수 반영 근거처럼 소개하지 않는다.
 
@@ -572,12 +575,19 @@ Fusion JSONB에는 사용자에게 필요한 bounded 요약과 식별 정보만 
 기존 cache/input identity가 구 설명과 신 설명을 섞지 않도록 한다.
 저장된 예전 `rationale`를 새 문장으로 UPDATE하지 않는다.
 
+현재 이벤트 prompt는 `llm-event-preselection-v3-ko`다. 평가·재질의 지시는 한국어이며
+`summary`, citation `reason`, null이 아닌 `missing_reasons`는 한국어 문장으로 작성한다.
+한글이 없는 자연어 필드는 의미 검증 실패로 처리하고 기존 한도 내에서 재질의한다.
+JSON key·criterion·enum·UUID와 제공 자료 원문은 번역하지 않는다.
+prompt/policy hash·요약 version이 달라져 예전 영문 응답 cache와 섞이지 않는다.
+이 언어 변경은 로컬 구현이며 운영 배포와 구분한다.
+
 ### 9.2 사용자에게 제공할 근거 식별 정보
 
 Fusion의 `explanation.llm.evidence`에 다음 값들을 작은 snapshot으로 저장한다.
 LLM 원천 조회에도 같은 projection을 사용할 수 있지만 별도 중복 테이블은 만들지 않는다.
 
-| 필드 | 제안 의미 / 생성 규칙 |
+| 필드 | 의미 / 생성 규칙 |
 |---|---|
 | `evidence_link_id`, `source_snapshot_id`, `source_kind` | 기존 검증된 원천 식별자 |
 | `criterion` | `earnings/business/event/financial/industry` 중 실제 평가 항목 |
@@ -613,12 +623,27 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
   의미 없는 일반 설명을 대신 저장하고 설명 생성 성공으로 표시하지 않는다.
 - 설명 생성을 위해 기존의 지원 항목 개수·가중치·점수·최종 선정 여부를 변경하지 않는다.
 
-## 10. 변경 설계: 최종 Fusion 설명 snapshot
+### 9.4 과거일 분석의 필수 시점 검증
 
-### 10.1 제안 객체 샘플
+- 사용자가 확정한 정보 경계는 거래일 자정이 아니라 **해당 run의 `cutoff_at`**이다.
+- 새 packet과 재사용 packet 모두 hash·context·session·모든 source link를 검증하고,
+  모델 호출·응답 캐시 조회 전에 다시 검사한다. 실패 시 LLM 호출이나 성공 run 재사용으로
+  우회하지 않는다. screening에만 남은 lineage도 공개·관찰 시점을 검증한다.
+- 양쪽 재현 모드 모두 cutoff 후 공개 정보는 금지한다. 재구성 모드의 늦은 수집만
+  허용하며 운영 replay에서는 관찰 시각도 cutoff 이하여야 한다.
+- cutoff 전에 알려진 향후 실적 일정은 허용하지만 이후 발표된 실적 결과는 금지한다.
+  동일 자료가 여러 rubric 항목에 인용돼도 시점 gate는 완화되지 않는다.
+- Fusion은 기존 LLM packet 전체와 실제 제공된 인용의 instrument·snapshot·manifest·
+  ranking identity를 다시 검증한다. invalid 근거는 신계약 성공에서 제외하는 대신
+  `FUSION_EXPLANATION_VALIDATION_FAILED`를 기록하고 후보를 저장하지 않는다.
 
-아래 JSON은 **신규 제안 `explanation` 객체 한 개**이며 현재 API 응답이 아니다.
-4절 Fusion 후보의 JSONB에 이 객체를 추가하는 방식이다. 기존 점수·순위 필드는 그대로 둔다.
+## 10. 구현: 최종 Fusion 설명 snapshot
+
+### 10.1 저장 객체 샘플
+
+아래 JSON은 **저장되는 `explanation` 객체 한 개**의 가상 예시다.
+v2 조회에서는 후보의 `explanation`으로 반환하며 v1 응답·handoff에는 포함하지 않는다.
+4절 Fusion 후보 JSONB의 기존 점수·순위 필드는 그대로 둔다.
 가상 예시는 앞 절과 동일하게 재무·산업 점수는 null인 경우다.
 
 ```json
@@ -628,7 +653,7 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
   "price_session_date": "2026-10-15",
   "cutoff_at": "2026-10-16T09:30:00Z",
   "execution_context_id": "90000000-0000-4000-8000-000000000001",
-  "summary": "정량 예상 수익률 +4.32%로 정량 후보 3위, 실적·사업·이벤트 근거 평가 80점으로 LLM 후보 2위에 포함됐다. 두 순위를 k=10 RRF로 병합한 값은 25/156이며 최종 후보 1위로 선정됐다.",
+  "summary": "MEDIUM_20D predicted return +4.32%; overall rank 8; Quant Top20 position 3. DETERMINISTIC_CITATIONS: LLM score 80.0, position 2. RRF k=10: 25/156; Fusion position 1.",
   "quant": {
     "selected_in_source": true,
     "selection_run_id": "10000000-0000-4000-8000-000000000001",
@@ -637,7 +662,7 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
     "rank_overall": 8,
     "position": 3,
     "reason_codes": ["MODEL_TOP_RANK", "MODEL_TOP_PERCENTILE"],
-    "summary": "MEDIUM_20D 예측 수익률 +4.32%, 전체 점수 8위이며 제약 반영 후 정량 후보 3위다."
+    "summary": "MEDIUM_20D predicted return +4.32%; overall rank 8; Quant Top20 position 3."
   },
   "llm": {
     "selected_in_source": true,
@@ -646,8 +671,8 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
     "position": 2,
     "supported_count": 3,
     "weight_denominator": 70,
-    "summary_method": "VALIDATED_ASSESSMENT",
-    "summary": "제공 실적 자료와 사업·계약 관련 뉴스가 실적·사업·이벤트 평가에 반영됐다. 재무·산업 항목은 근거 부족으로 제외됐다.",
+    "summary_method": "DETERMINISTIC_CITATIONS",
+    "summary": "실적: 제공된 실적 자료의 실적 변화 근거를 earnings 80점 평가에 반영했다. | 사업: 제공된 사업 진행 사실을 business 72점 평가에 반영했다. | 이벤트: 제공된 계약 이벤트를 event 90점 평가에 반영했다.",
     "sub_scores": {
       "earnings": 80.0,
       "business": 72.0,
@@ -735,11 +760,14 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
 - 신규 explanation 계약을 적용한 **새 run의 최초 insert**에서만 snapshot을 저장한다.
   기존 run에는 `NOT_RECORDED` 상태의 조회 응답으로 “당시 근거 요약 미저장”을 알린다.
   레거시 점수와 연결 가능한 원천은 그대로 조회하되 새로 생성한 문장을 과거 snapshot처럼 표시하지 않는다.
-- 현재 `FusionRepository.read_sources()`는 LLM `rationale`와 상세 citation을 모두
-  읽지 않는다. 필요한 bounded 설명 입력을 명시적으로 추가하고 기존 packet의 metadata와 연결한다.
-- provenance에 `explanation_schema_version`, 설명 생성 설정 identity, canonical
-  설명 입력/출력 hash를 고정한다. 이 값들을 Fusion payload hash와 idempotency에
+- `FusionRepository.read_sources()`는 명시 원천 run의 Quant reason code·LLM rationale·
+  상세 citation·immutable packet·manifest 소속 lineage를 읽고 작은 표시 snapshot으로 투영한다.
+- provenance에 `explanation_schema_version`, `explanation_config`,
+  `explanation_config_hash`, `explanation_input_hash`, `explanation_output_hash`를 고정한다.
+  이 값들을 Fusion payload hash와 idempotency에
   포함해 설명 계약이 바뀌었는데 예전 run이 그대로 재사용되는 것을 방지한다.
+- 설명 출력 hash는 JSONB 왕복에서 `80.0`과 `80`이 같게 처리되도록 정수값 float를
+  정규화한 canonical JSON으로 계산한다. 기존 v1/handoff의 canonical hash 함수는 바꾸지 않는다.
 - 원천 prompt를 바꾸면 LLM prompt/cache identity도 별도로 갱신한다.
   표시 schema 변경만으로 선정 algorithm policy가 바뀌었다고 표현하지 않는다.
 - 설명 요구가 활성화된 신규 Fusion 실행에서 invalid explanation은 명시적으로 실패시킨다.
@@ -750,12 +778,48 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
 
 ## 11. 조회 API와 포털 변경 메모
 
-### Candidate Engine의 제안 변경
+### Native LLM 검색 v4의 설명 계약
+
+별도 `daily-llm-search-preselection:4`는 evidence schema 4와
+`llm-event-preselection-v7-ko-search`를 사용한다.
+서버 원문 다운로드는 제거하고 LLM native web_search와 과거 원문 admission gate를 사용한다.
+새 자료의 점수 반영은 승인된 정책 변경이며 기존 v2 결과를 덮어쓰지 않는다.
+
+- `criterion_evidence`에 `source_layer=DB_PACKET/LLM_SEARCH_VERIFIED`를 남긴다.
+  검색 인용은 같은 공시의 `search_evidence_hash`를 정확히 연결한다.
+  원본 structured response의 `information_gaps`에는 여전히 없는 정보를 한국어로 기록한다.
+- 검색 발췌는 모델의 인용 요약이지 원문 자체/사실성 보증은 아니다.
+  본문을 얻지 못한 응답은 보강 성공으로 표시하지 않으며 일반 뉴스의 과거 날짜만으로
+  revision을 입증했다고 처리하지 않는다.
+- 검색 run의 Fusion 설명은 `candidate-explanation-v3`다. 검색 인용에만
+  `external_source`가 추가되며 tool 응답 hash·evidence hash·artifact key·source URL·
+  고정 공개 시각·관찰 시각·모델 snapshot·검증 방식을 보존한다.
+- 기존 `source_snapshot_id`는 DB 공시 metadata의 parent snapshot이다.
+  검색 tool 증적의 identity와 혼동하지 않는다.
+- `candidate-explanation-v1`, 기존 v1 API와 `fusion-top20-v1`은 보존한다.
+  같은 v2 설명 조회 endpoint가 두 snapshot version을 구분해 반환한다.
+- 전체 consulted sources에 미래/현재/미확인 원문이 섞이면 검색 응답 전체를 거부한다.
+  검색의 원시 대화·reasoning·response ID는 별도 평가 모델에 전달하지 않는다.
+  모델 이름/버전은 기록용이며 alias나 버전 metadata 부재로 자료를 거부하지 않는다.
+- 검증 실패·본문 미확보는 구 정책 성공·서버 다운로드·모델 기억으로 대체하지 않는다.
+  자세한 규칙은 [LLM 하네스](src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md)를 따른다.
+
+### Candidate Engine의 구현 계약
+
+아래 v2 경로·신규 snapshot은 로컬 변경이며 아직 운영 배포가 아니다.
+결과와 고정 원천 근거를 함께 조회하는 `/api/v2/fusion-selections`·`/{run_id}`도
+로컬 개발 경로다. 과거 snapshot이 없어도 DB의 원본 근거까지 없다는 뜻은 아니며,
+이 조회로 immutable snapshot을 소급 생성하지 않는다.
 
 - 신규 versioned 설명 조회를 제공한다:
   `GET /api/v2/fusion-selections/{run_id}/explanations`.
   정확한 Fusion run ID 기준으로 `schema_version`, `fusion_run_id`,
   `price_session_date`, `cutoff_at`, 후보별 `instrument_id/issuer_id/position/explanation`을 반환한다.
+- 최상위 `status`와 후보별 `status`는 `RECORDED/NOT_RECORDED`이며,
+  최상위 `selection_status`와 `failure_code`는 원래 Fusion 실행 상태를 나타낸다.
+  과거 run의 `NOT_RECORDED` 후보는 `explanation=null`이며 조회 중 소급 생성하지 않는다.
+  알려진 신계약인데 snapshot이 누락되거나 hash·중복 수치가 다르면 HTTP 500,
+  없는 run은 HTTP 404다. invalid 설명을 정상적인 미저장으로 숨기지 않는다.
 - 새 JSONB는 `explanation`을 포함하므로 현재 `extra="forbid"`인 v1 `FusionCandidate`에
   그대로 넣으면 validation 오류가 난다. **v1 repository는 기존 필드 allowlist로
   projection**하고, 새 조회는 명시적인 typed explanation schema로 검증한다.
@@ -804,8 +868,10 @@ URL을 알아내려고 현재 웹을 재검색하거나 accession만으로 확�
 - 뉴스 제목·재무 항목·기간·시각은 실제 제공 packet에 있고, missing/null 항목을
   점수 반영 근거로 사용하지 않는다.
 - 신규 summary가 기존 정량 점수·LLM 총점·후보 개수·RRF·순위·hard gate를 바꾸지 않는다.
-- 설명·수치·citation 검증 실패 시 전체 신규 Fusion insert가 rollback되며 원천 결과는 보존된다.
+- 설명·수치·citation 검증 실패 시 신규 Fusion은 FAILED·후보 0개로 기록되고 원천 결과는
+  보존된다. 실제 후보·audit insert 중 오류는 같은 transaction의 run·설명·후보 전체를 rollback한다.
 - 동일 source·설명 version·내용 재시도는 같은 결과를 재사용하고 다른 내용은 충돌로 구분한다.
 - 기존 v1 조회·handoff 필드·canonical payload hash·20개 ACK는 변하지 않는다.
 - 과거 explanation 없는 후보도 명시적 상태로 조회되고, 조회 때 LLM 재호출·원천 웹 검색은 없다.
-- 이번 설계 작성에서는 문서 외에 DB·API·포털·운영 설정을 변경하지 않는다.
+- 1~4단계는 코드·회귀 및 격리 PostgreSQL로 검증한다. 포털·UI·운영 설정·실제 LLM 호출·
+  배포는 이번 변경에 포함하지 않는다.

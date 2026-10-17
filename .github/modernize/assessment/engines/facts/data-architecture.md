@@ -11,6 +11,72 @@
 
 후보 선정 엔진의 쓰기 책임은 `selection` 스키마까지다. 후보 이후 분석·agent 실행·report·비용·재평가는 별도 프로젝트의 책임이며 이 데이터 모델에 포함하지 않는다. 공통 불변식은 루트 `PROJECT-HARNESS.md`를 따른다.
 
+## 현재 운영·근거 저장 경계 — 2026-10-17
+
+- 운영 PostgreSQL은 migration 024까지 적용됐으며 독립 Quant·LLM·Fusion stage와
+  event v2·RRF k=10·전량 handoff가 활성화돼 있다. 아래 날짜별 적재량은 당시 기록이다.
+- 정량 선정 이유는 `selection.candidate_reason`, LLM rationale·uncertainty·항목별 인용은
+  `analytics.llm_instrument_assessment`에 저장한다. 실제 입력은 고정 evidence packet으로 추적한다.
+- 통합 설명은 새 테이블 대신 기존 `selection.fusion_candidate.candidate` JSONB의
+  `explanation`과 `selection.fusion_run.provenance`를 확장하는 로컬 계약이다.
+  과거 snapshot 부재·원본 근거 존재·운영 API 미노출을 서로 구분한다.
+- 신규 v2 설명/결과 통합 API와 native 검색 v4는 아직 운영 배포가 아니다.
+  조회 때 LLM 호출·원천 재검색·과거 immutable 결과 수정을 수행하지 않는다.
+- 2026-10-17 SHORT_5D 후보·근거와 연결 외부 리포트를 정리했으며 모델·일일 점수·원천·
+  다른 목적의 후보는 보존했다. 외부 리포트 DB를 이 저장소의 데이터 모델에 추가하지 않는다.
+
+실제 후보 관련 PK/FK·테이블 설명·4개 ER 다이어그램은
+[후보 데이터베이스 구조](../../../../../SELECTION-DATABASE-ER.md)를 따른다.
+
+## LLM 데이터 계약 변경 — 2026-10-17
+
+기존 DB 수집 원천의 범위를 늘리는 대신 별도 v4 정책에서 **LLM native 검색 도구로
+취득하고, 과거 원문 버전 gate를 통과한 발췌만 격리된 평가 모델에 제공**한다.
+기존 v2·정량 모델·과거 run·RRF 산식은 유지한다. 이 변경은 로컬 구현이며 운영 배포가 아니다.
+이전에 시도한 서버 SEC 추가 다운로드·HTML 파싱 방식은 제거했다.
+
+| 계층 | 현재 전달/보강 데이터 | 물리적 보존·identity |
+|---|---|---|
+| DB 기본 입력 | 회사/종목 식별, 뉴스 제목·description·insights, 공시 metadata, SEC fact, 실적 일정/예상치, 배당·분할 | 기존 context·DB manifest·snapshot·packet hash |
+| LLM 검색 보강 | Azure Responses의 web_search가 취득한 과거 공시의 인용 문단 | 전체 tool 응답·consulted sources·관찰 시각·model snapshot·tool/evidence hash·독립 manifest |
+| LLM 생성 | 한국어 항목 평가, 사실 간 관계 해석, 인용 이유, 부족 정보 | 기존 assessment·call response JSONB; 원천 사실로 승격하지 않음 |
+| 미승인/미확보 | 원문 revision이 불명확한 일반 뉴스·현재 페이지·미래 출처·본문 미확보 | 격리·실패; 모델 기억이나 DB-only 성공으로 대체 금지 |
+
+### DB 원천 확장과 모델 입력 증적의 구분
+
+- 새 뉴스·이벤트·재무 원천 테이블이나 DDL은 추가하지 않는다.
+- 서버는 외부 원문을 다운로드하지 않는다. 검색은 provider-hosted web_search가 수행한다.
+  검색 모델에는 공개 회사명·ticker·CIK·cutoff·공시 식별정보만 전달하고 전체 DB packet은 보내지 않는다.
+- raw 검색 응답은 content-addressed 파일/객체에 격리한다. 검색 대화·추론·response ID는
+  평가 모델에 넘기지 않고 gate를 통과한 인용 문단만 새 system/user 요청에 전달한다.
+- 실제 평가 입력과 proof는 기존 `analytics.llm_evidence_packet.packet` JSONB의
+  해당 filing `search_evidence`와 `llm_search_manifest_hash`로 보존한다.
+  따라서 모델 입력 증적 보존은 계속하되 별도 정규화 수집 DB를 늘리지 않는다.
+- 기존 `evidence_link_id`는 해당 **공시 entity**의 참조다. 기존 `source_snapshot_id`는
+  DB 공시 metadata의 물리적 snapshot이며 외부 원문 파일의 snapshot이라고 표현하지 않는다.
+  검색 증적은 `tool_response_hash/evidence_hash/artifact_key`로 식별하고
+  `source_layer=LLM_SEARCH_VERIFIED` 인용의 `search_evidence_hash`와 정확히 연결한다.
+- tool 응답 hash를 원문 본문 hash라고 표현하지 않는다. 검색 발췌는 모델이 만든 요약이며
+  의미적 사실성의 완전한 보증이 아니다. 재현은 저장 tool trace 전체를 gate에 다시 통과시키며
+  새 검색으로 옛 증적을 대체하지 않는다. artifact 누락/변조는 실패다.
+
+### 시점 및 권한 경계
+
+1. 실제 web_search_call 실행과 전체 consulted sources·open/find URL을 검증한다.
+2. 초기 승인 범위는 DB에 고정한 CIK/accession·접수 시각으로 입증되는 SEC 원문 버전이다.
+   LLM이 출력한 날짜나 일반 뉴스 페이지의 옛 날짜는 revision 증거가 아니다.
+3. 미래·현재·다른 회사·미확인 버전이 검색에 하나라도 섞이면 응답 전체를 거부한다.
+   인용이 없는 문단·본문 미확보 답변은 점수 사실로 승격하지 않는다.
+4. 쿼리/응답의 미래 주장과 원문 공개 시점 이후 결과도 차단한다. 모델 이름/버전은 감사용
+   metadata로만 기록하며 floating alias나 버전 metadata 부재는 자료 거부 조건이 아니다.
+5. 재구성은 늦은 검색만 허용하며 운영 replay는 관찰도 cutoff 이하여야 한다.
+   Azure 검색의 Bing 데이터 처리 경계를 고려해 검색에는 공개 metadata만 전달한다.
+
+운영 평가에서는 기존 transaction으로 입력·assessment·후보를 기록한다.
+단건 증적 재호출은 **DB 읽기 전용·결과 미적재**이며 별도 Git 제외 파일로 요청/응답을 남긴다.
+상세 필수 규칙은 [LLM 하네스](../../../../../src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md)와
+[LLM 아키텍처](./llm-pipeline-architecture.md)를 따른다.
+
 ### 설계 검토 반영 요약
 
 | 검토 항목 | 반영 결과 |
@@ -41,7 +107,8 @@ policy hash·응답·배치 재사용 참조·항목별 근거·결측·coverage
 별도 `selection.fusion_run`, `fusion_candidate`, `fusion_audit`는 원천 선정 run·manifest·
 정책 hash를 고정하며 원자 저장·멱등 payload 충돌 검사·append-only 제약을 사용한다.
 외부 전달 상태는 오케스트레이터에 두고 Candidate DB에 외부 분석 상태를 추가하지 않는다.
-운영 migration은 적용하지 않았으며 격리 PostgreSQL-WASM SQL 실행 검증과 구분한다.
+2026-10-16 이 설계 기록 당시에는 운영 migration 미적용 상태였다.
+2026-10-17 migration 024까지의 운영 적용과 위 최신 상태를 별도로 확인했다.
 
 ### 실제 데이터 보유 현황
 

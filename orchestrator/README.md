@@ -14,8 +14,9 @@ Application Insights/Log Analytics 운영 조회는
 
 private Storage 기반 FC1 일일 실행 기준선은 기존 배포 상태다. 주간 재학습 API client,
 New York 주말 gate, weekly parent/model orchestration, Container Apps Job start/status와
-focused test는 코드로 구현·검증됐다. **주간 변경은 Azure에 배포하거나 실제 Job/API
-E2E로 검증하지 않았다.** 아래에서 코드 검증과 배포 상태를 구분한다.
+focused test는 코드로 구현·검증됐다. 2026-10-17 주간 전용 이메일 변경을 포함한
+오케스트레이터를 Azure에 배포하고 주간 메일만 활성화했다. 이 작업에서 실제 새
+학습 Job이나 승격을 실행하지는 않았다. 아래에서 코드 검증과 배포 상태를 구분한다.
 
 ## Azure 구성
 
@@ -48,8 +49,8 @@ Container App, PostgreSQL, 포털 MySQL은 기존 외부 리소스이며 이 템
 
 코드의 안전한 기본값과 현재 운영 설정을 구분한다. 승인된2026-10-17 운영은
 event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candidate Backend에
-배포됐다. 오늘 gate·실제 고정 input·ACK·오류 재시도는
-[운영 점검서](../DAILY-PIPELINE-RUNBOOK.md)를 따른다.
+배포됐다. gate·고정 input·ACK·오류 재시도는 이 문서의 계약과
+[Telemetry·KQL 런북](../.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을 따른다.
 
 1. 타이머는 매시 30분(UTC)에 실행되고 `America/New_York` 현지 시각 05:30에만
    직전 달력 날짜의 `MEDIUM_20D` 단일 `daily_orchestrator`를 시작한다.
@@ -75,8 +76,9 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    고정했으며 `ANALYSIS_WORKER_COUNT=3`은 변경하지 않았다.
 4. 날짜와 모델 목적 기반 `Idempotency-Key`로 Candidate `DAILY` 실행을 한 번 제출하고 Durable
    timer로 상태를 확인한다. 제출 전 같은 날짜·모델의 완전한 terminal selection을
-   조회하며, 있으면 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와 Portal batch를
-   모두 생략한다. Candidate API는 canonical 요청 hash를 저장해 같은 key·payload에는
+   조회한다. Fusion 비활성 시에는 `SKIPPED_EXISTING`으로 종료하고 Candidate POST와
+   Portal batch를 생략한다. Fusion 활성 시에는 같은 고정 원천·정책의 Fusion까지 확인하고
+   미완료 handoff만 재개한다. Candidate API는 canonical 요청 hash를 저장해 같은 key·payload에는
    원래 run을 반환하고 다른 payload에는 `409`를 반환한다. MEDIUM_20D 완료 후 정량
    후보가 정확히 20개인지 날짜·순위·식별자·중복을 검증한다. 기존 10개 결과는 완료로
    인정하지 않으며 MEDIUM 제출 key의 `top20-v1` suffix로 기존 10개 요청과 구분한다.
@@ -87,19 +89,22 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    고정 run을 검증한다. 외부 전달은 추가 플래그·수신처 계약이 모두 충족될 때만 실행한다.
    레거시 SHORT_5D 명시 실행은 기존 Portal batch·분석 poll 계약을 유지한다.
    신규 최종 전달 계약은 기존 5~10개에서 **20개**로 변경하며, 최종 Top 20을
-   다시 축소하지 않는다. 이는 문서 목표이며 현재 MEDIUM 제출 차단을 해제하지 않는다.
+   다시 축소하지 않는다. 현재 승인된 운영은 Fusion·전량 handoff가 활성화돼 있으며
+   코드·예제의 기본 비활성과 구분한다.
 6. Candidate/Portal 제한 시간을 넘으면 `TIMED_OUT`으로 끝난다. 정기 일일 실행은
    `MEDIUM_20D` 정량 Top 20을 생성하며 SHORT 실행이나 LLM 결과에 의존하지 않는다. 외부 I/O와 이메일은
    activity에서만 실행되어 orchestrator replay가 부작용을 반복하지 않는다.
 7. `resource_guardian_timer`는 15분마다 같은 readiness와 승인된 start/replica/private
-   Storage 복구 계약을 독립 실행한다. 실패 시 제한된 guardian Email과 telemetry를
-   남기지만 Durable 부모를 시작하거나 기존 terminal 실행을 재시작하지 않는다.
+   Storage 복구 계약을 독립 실행한다. 실패는 telemetry에 남기며 guardian Email은
+   공통 발송 gate가 켜진 경우만 보낸다. 현재 메일은 OFF이며 Durable 부모를 시작하거나
+   기존 terminal 실행을 재시작하지 않는다.
 
 ## 주간 재학습 흐름
 
 매시 timer는 일일 gate와 독립적으로 UTC 시각을 `America/New_York`로 변환한다. 현지
-토요일·일요일 tick이면 해당 ISO week의 parent를 검토한다. 첫 tick에서만 시작하도록
-완료 상태를 포함해 같은 instance history가 하나라도 있으면 재시작하지 않는다.
+토요일·일요일 tick이면 해당 ISO week의 parent를 검토한다. 활성 parent는 재사용하며
+terminal instance는 다시 시작할 수 있다. 실제 업무 중복은 Candidate weekly
+eligibility·acceptance unique key로 차단하고 `ALREADY_ACCEPTED`는 메일 없이 skip한다.
 
 - parent ID: `candidate-weekly-{YYYY-Www}`
 - model child ID: `candidate-weekly-{YYYY-Www}-{MODEL_PURPOSE}`
@@ -136,6 +141,28 @@ backend 계약이고 Durable history가 active pointer를 대신하지 않는다
 기본값은 코드에서 `true`이며, Bicep 기본값과 로컬 예시는 발송하지 않도록 설정한다.
 2026-10-16 운영 Function App에도 `false`를 적용하고 변경 코드를 배포했다.
 guardian 경고 메일도 같은 설정을 따르며 일일·주간 실행과 guardian 자체는 유지한다.
+
+### 주간 모델 업데이트 전용 이메일
+
+`ORCHESTRATOR_WEEKLY_EMAIL_ENABLED`는 일일 파이프라인·guardian의
+`ORCHESTRATOR_EMAIL_ENABLED`와 독립적이며 기본값은 `false`다.
+주간 메일을 켜면 비어 있지 않은 `ORCHESTRATOR_WEEKLY_EMAIL_RECIPIENTS`가 필수다.
+주간 발송은 이 별도 수신처만 사용하고 공통 수신처를 합치거나 대신 사용하지 않는다.
+실제 주소는 운영 설정에만 저장하며 소스·변경 로그에는 기록하지 않는다.
+
+주간 eligibility가 통과한 신규 parent는 시작 1회, SHORT_5D·MEDIUM_20D 각각의 결과,
+최종 종합 결과를 최대 4회 보낸다. 프로젝트·ISO week·모델별 성공/기존 모델 유지/
+실패/timeout과 고정 실행 ID·확인된 신규/기존 모델 ID를 요약한다. 반복 polling이나
+`ALREADY_ACCEPTED` skip은 메일을 보내지 않는다. 발송 실패는 email telemetry와
+parent의 `email_status=FAILED`로 표시하며 provider 오류 응답이 다른 모델의 학습을
+중단시키지 않는다.
+
+기존 Durable input에는 새 알림 activity를 삽입하지 않는다. timer가 새로 만든
+`weekly_email_notifications=true` 입력부터 알림을 예약해 과거 history의 replay를
+보존한다. 주간 발송만 활성화하려면 공통 스위치를 계속 `false`로 유지한다.
+2026-10-17 운영 설정은 주간 `true`, 공통 `false`이며 승인된 단일 수신처만 사용한다.
+배포 후 host 실행 상태, 수신처 분리 설정과 관리 ID의 기존 ACS 발송 역할·연결 도메인을
+확인했다. 기존 진행 중 실행에 알림을 소급 삽입하거나 확인용 학습·승격을 실행하지 않았다.
 
 아래 인증된 수동 HTTP starter는 단일 모델 진단·one-off 호환 경로로 유지되며,
 `SHORT_5D` 또는 `MEDIUM_20D`를 명시적으로 선택한다. 모델 간 fallback은 수행하지 않는다.

@@ -22,8 +22,29 @@ RRF 최종 통합 후보 20개를 생성합니다. **성공한 최종 Fusion 20�
 - 일일 gate는 **05:30 America/New_York**입니다. 2026-10-17은 **18:30 KST**에
   직전 10월16일 거래 세션을 처리합니다. DST에 따라 한국 시각이 달라집니다.
   예정된 실행의 성공 여부는 실제 run으로 확인해야 합니다.
-- 오늘 실행의 오류 확인·단계별 재시도·배포 증거는
-  [일일 파이프라인 운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따릅니다.
+- 실행·재시도 계약은 [오케스트레이터 가이드](orchestrator/README.md),
+  오류 조회는 [Telemetry·KQL 런북](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을 따릅니다.
+- 신규 후보 근거 snapshot·v2 설명/결과 통합 조회와 과거일 LLM cutoff 강제 하네스는
+  로컬 구현이며 아직 운영에 배포하지 않았습니다. 추가 DDL·요약용 LLM 호출은 없습니다.
+  로컬 회귀 626건·Ruff·관련 모듈 타입 검사와 격리 PostgreSQL의 설명 조회·JSONB hash
+  왕복·미래 수정본 차단·원자적 rollback·기존 handoff/ACK를 검증했습니다.
+- 이벤트 LLM의 로컬 prompt는 `llm-event-preselection-v3-ko`로 변경했습니다.
+  질문·재질의와 요약·인용 이유·결측 사유는 한국어이며 JSON 식별자와 원문은 보존합니다.
+  한글이 없는 자연어 응답은 검증 실패로 처리하고 기존 재시도 한도를 적용합니다.
+  운영 배포는 별도이며 단건 확인 요청은 DB 읽기 전용·결과 미적재로 수행합니다.
+- 별도 LLM 검색 v4 정책(`config/llm_preselection/policy_event_search_v4.yaml`)은
+  Azure OpenAI native `web_search`가 추가 자료를 취득합니다. 서버의 SEC 추가 다운로드 방식은
+  제거했습니다. 검색에는 공개 회사 metadata만 보내고 전체 DB packet은 보내지 않습니다.
+  전체 검색 출처·자료 공개일·과거 원문 버전을 검증한 문단만 별도 평가 대화에 전달합니다.
+  모델 이름·버전은 재현성 기록일 뿐 자료 승인/차단 조건이 아닙니다.
+  [LLM 전용 하네스](src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md)에 따라
+  미래/현재/버전 미확인 출처가 섞이면 검색 전체를 거부하고 점수를 만들지 않습니다.
+  일반 뉴스는 날짜 표기만으로 승인하지 않으며 기존 v2·운영 설정은 유지합니다.
+  v4 코드·정책은 로컬 변경이며 이번 문서 푸시나 운영 활성화와 구분합니다.
+- 주간 모델 업데이트 메일은 운영에 별도 활성화했습니다. 시작·모델별 결과·최종 요약을
+  승인된 단일 수신처에 보내며 일일 파이프라인·리소스 가디언 메일은 계속 비활성입니다.
+- 기존 SHORT_5D 후보·선정 근거와 연결 분석 리포트는 2026-10-17 삭제했습니다.
+  이는 데이터 정리이며 SHORT 실행 기능·모델·점수·주간 재학습을 제거한 것은 아닙니다.
 
 ## 범위와 결과 계약
 
@@ -104,7 +125,7 @@ flowchart LR
         Fusion -.-> FinalApi
 
         Durable["Python Durable Functions<br/>05:30 ET daily · idempotent control plane"]
-        Operations["Private Storage · Key Vault<br/>App Insights · ACS Email flag"]
+        Operations["Private Storage · Key Vault<br/>App Insights · weekly-only ACS Email"]
         Weekly["Weekly Training-only<br/>SHORT and MEDIUM · promotion gate"]
         Registry["Immutable Artifacts<br/>active assignment · generation CAS"]
         Operations --> Durable
@@ -246,6 +267,9 @@ ACK는 외부 접수 확인이지 분석 보고서 완료가 아닙니다. 포�
 - challenger가 절대·상대 promotion gate를 통과할 때만 immutable artifact와
   generation CAS active assignment를 갱신합니다. 실패·reject는 incumbent를 유지합니다.
 - DAILY는 assignment를 실행별로 pin하고 hash·schema·model purpose·horizon을 검증합니다.
+- 주간 전용 `ORCHESTRATOR_WEEKLY_EMAIL_ENABLED`와 별도 수신처로 시작·두 모델 결과·
+  최종 요약을 최대 4회 발송합니다. 운영은 주간만 ON이며 공통 파이프라인·guardian 메일은 OFF입니다.
+  주소는 운영 설정에만 보관하며 비적격·이미 접수된 주차는 메일 없이 skip합니다.
 
 상세 계약은 [주간 재학습 설계](weekly_retraining_model_design.md)와
 [모델 변경 이력](MODEL_CHANGELOG.md)을 참고하세요.
@@ -361,7 +385,12 @@ LLM은 정량 특징·예측값을 입력받는 후처리 모델이 아니라 �
 flowchart LR
     Context["고정 context·manifest·cutoff"] --> Evidence["비가격 evidence<br/>뉴스·SEC 공시/재무·실적·기업행위"]
     Evidence --> Screening["최근 7일 이벤트 선별<br/>최대 90 issuer + 무이벤트 대조 최대 10"]
-    Screening --> Assessment["Azure OpenAI 항목별 평가<br/>동일 종목 citation·strict JSON"]
+    Screening --> Policy{"선택한 LLM 정책"}
+    Policy -->|"v2 · 운영"| Assessment["Azure OpenAI 항목별 평가<br/>동일 종목 citation·strict JSON"]
+    Policy -->|"v4 · 로컬"| Search["Native web_search<br/>공개 회사 metadata만 전달"]
+    Search --> Admission["전체 출처·공개 시점·원문 버전 검증<br/>하나라도 미확인 시 전체 실패"]
+    Admission --> Clean["승인 인용만 새 평가 대화로<br/>검색 추론·response ID 제외"]
+    Clean --> Assessment
     Assessment --> Score["근거 있는 최소 3개 항목<br/>가중치 재정규화·결측 보존"]
     Score --> Result["LLM Top 20<br/>점수·항목별 이유·evidence 저장"]
 ```
@@ -369,6 +398,8 @@ flowchart LR
 이벤트 screening은 유형별 1점이며 평가 pool을 정하는 단계입니다. 실적 일정은
 cutoff까지 알려진 전후 7일 일정을 포함하고, screening 점수를 최종 LLM 점수에 더하지 않습니다.
 평가 입력에서는 가격·Alpha158·정량 점수를 제외합니다.
+v4는 별도 정책 선택·artifact 보존·운영 검증이 필요한 로컬 확장입니다.
+검색 발췌는 원문 자체나 사실성 보장이 아니며 미승인·미확보 자료를 성공으로 대체하지 않습니다.
 
 | 평가 항목 | 가중치 |
 |---|---:|
@@ -437,8 +468,11 @@ position**이며 정량 전체 universe 순위와 구분합니다. 한 목록에
 정책은 [fusion_v1.yaml](config/analytics/fusion_v1.yaml), 상세는
 [Fusion 아키텍처](.github/modernize/assessment/engines/facts/fusion-pipeline-architecture.md)와
 [구현 지침](<Agent Implementation Instructions — Hybrid Candidate Selection with RRF.md>)을 따릅니다.
-정량·LLM 상세 근거를 하나의 종목 설명으로 함께 저장·조회하는 확장은
-[결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 별도 설계이며 아직 구현된 API가 아닙니다.
+신규 Fusion은 정량 기준·점수 반영 LLM 근거·정확한 RRF 기여를 기존 JSONB에 함께 저장합니다.
+`GET /api/v2/fusion-selections/{fusion_run_id}/explanations`는 정확한 run의 typed snapshot을
+반환합니다. 과거 미저장 결과는 `NOT_RECORDED`이며 조회 때 새 설명을 만들지 않습니다.
+v1 조회·`fusion-top20-v1` hash와 ACK는 그대로 유지합니다.
+계약과 가상 예시는 [결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 8~12절을 따릅니다.
 
 ## Point-in-time·저장 계약
 
@@ -579,8 +613,10 @@ artifact 목적·hash, 정확히 20개 선정·shortfall, SHORT 레거시 보존
 - LLM은 Azure OpenAI RBAC·고정 context canary·전체 universe shadow 검증 후 별도 활성화합니다.
 - RRF·전달 어댑터는 기본 비활성입니다. 운영 migration·배포와 Portal 수용·재전달 검증을
   완료한 현재 승인 운영에서는 활성화돼 있습니다. 다른 환경은 동일한 승인·검증 없이 켜지 않습니다.
-- 선정 근거 요약·versioned 설명 조회의 후속 설계는
-  [결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 8~12절이며 **아직 구현된 API가 아닙니다**.
+- 선정 근거 요약·versioned 설명 조회·과거일 LLM 하네스는
+  [결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 8~12절에 맞춰 로컬 구현했습니다.
+  **운영 배포와 포털/UI 연동은 별도**입니다. 과거일 정보 경계는 해당 run의 cutoff이며
+  재구성 모드도 cutoff 후 공개 정보는 허용하지 않습니다.
 - 공식 point-in-time S&P/GICS, 공식 calendar·halt, 장기 가격·복수 regime 검증,
   champion promotion·live shadow 관찰은 별도 데이터·연구 과제입니다.
 - 무료 플랜·기사 전문·공시 제3자 콘텐츠·재배포 권리를 확인해야 합니다.
@@ -597,7 +633,8 @@ artifact 목적·hash, 정확히 20개 선정·shortfall, SHORT 레거시 보존
   [LLM 상세](.github/modernize/assessment/engines/facts/llm-pipeline-architecture.md),
   [Fusion 상세](.github/modernize/assessment/engines/facts/fusion-pipeline-architecture.md)
 - [결과 스키마·선정 근거 샘플](RESULT-SCHEMA.sample.md)
-- [일일 파이프라인 오류 점검·운영 증거](DAILY-PIPELINE-RUNBOOK.md)
+- [후보 테이블 설명·선정 근거 저장 위치·ER 다이어그램](SELECTION-DATABASE-ER.md)
+- [오케스트레이터 실행·배포 가이드](orchestrator/README.md)
 - `plan.md`, `*.plan.md`, `*-plan.md`, `*_plan.md` 등 계획 파일과 `plans/`는
   [.gitignore](.gitignore)에 따라 로컬에만 유지합니다. 아키텍처·상세 설계·운영 runbook은 공유 문서입니다.
 
