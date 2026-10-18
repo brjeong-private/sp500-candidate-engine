@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
+from sp500_candidate_engine.analytics.research_eligibility import (
+    CLASSIFICATION as RESEARCH_CLASSIFICATION,
+)
+from sp500_candidate_engine.analytics.research_eligibility import (
+    POLICY_VERSION as RESEARCH_POLICY_VERSION,
+)
 from sp500_candidate_engine.analytics.source_repository import SourceRepository
 from sp500_candidate_engine.database import Database, _canonical_hash
 from sp500_candidate_engine.fusion.explanations import (
@@ -139,8 +145,6 @@ class FusionService:
                     or quant["scoring_config_hash"] != quant["model_config_hash"]
                 ):
                     raise ValueError("QUANT_ARTIFACT_OR_SCORE_MISMATCH")
-                if llm["universe_versions"] != [str(quant["universe_version_id"])]:
-                    raise ValueError("SOURCE_UNIVERSE_MISMATCH")
                 members, gates = read_selection_eligibility(
                     source, execution_context_id=context_id, target_session=target_session
                 )
@@ -148,6 +152,20 @@ class FusionService:
                     str(quant["universe_version_id"])
                 }:
                     raise ValueError("MANIFEST_UNIVERSE_MISMATCH")
+                expected_universe_links = {str(quant["universe_version_id"])}
+                for member in members:
+                    if member.get("eligibility_policy") is not None:
+                        if (
+                            context["knowledge_mode"] != "HISTORICAL_RECONSTRUCTION"
+                            or member["eligibility_policy"] != RESEARCH_POLICY_VERSION
+                            or member.get("eligibility_classification") != RESEARCH_CLASSIFICATION
+                        ):
+                            raise ValueError("RESEARCH_ELIGIBILITY_POLICY_MISMATCH")
+                        expected_universe_links.add(
+                            f"{RESEARCH_CLASSIFICATION}:{RESEARCH_POLICY_VERSION}"
+                        )
+                if sorted(llm["universe_versions"]) != sorted(expected_universe_links):
+                    raise ValueError("SOURCE_UNIVERSE_MISMATCH")
                 quant_inputs, llm_inputs = _inputs(quant), _inputs(llm)
                 assessed_candidates = llm["candidates"]
                 if not isinstance(assessed_candidates, list):

@@ -290,6 +290,57 @@ def test_service_pins_sources_and_persists_reproducible_lineage(monkeypatch):
     assert run["provenance"]["eligibility_audit_hash"]
 
 
+@pytest.mark.parametrize("corruption", [
+    None, "missing-universe", "wrong-universe", "missing-audit", "unknown-audit",
+    "duplicate-universe", "ordinary-members", "operational-mode", "wrong-policy",
+    "wrong-classification",
+])
+def test_research_audit_requires_matching_frozen_members_and_universe(monkeypatch, corruption):
+    from sp500_candidate_engine.analytics.research_eligibility import (
+        CLASSIFICATION,
+        POLICY_VERSION,
+    )
+    from sp500_candidate_engine.fusion import service as service_module
+
+    database, service, quant, llm = service_fixture(monkeypatch)
+    context = service_module.SourceRepository.read_context(None)
+    context["knowledge_mode"] = "HISTORICAL_RECONSTRUCTION"
+    members, gates = service_module.read_selection_eligibility(None)
+    for member in members:
+        member.update(eligibility_policy=POLICY_VERSION, eligibility_classification=CLASSIFICATION)
+    audit = f"{CLASSIFICATION}:{POLICY_VERSION}"
+    llm["universe_versions"] = [audit, str(UNIVERSE)]
+    if corruption == "missing-universe":
+        llm["universe_versions"] = [audit]
+    elif corruption == "wrong-universe":
+        llm["universe_versions"] = [audit, str(UUID(int=99999))]
+    elif corruption == "missing-audit":
+        llm["universe_versions"] = [str(UNIVERSE)]
+    elif corruption == "unknown-audit":
+        llm["universe_versions"].append(f"{CLASSIFICATION}:unapproved-policy")
+    elif corruption == "duplicate-universe":
+        llm["universe_versions"].append(str(UNIVERSE))
+    elif corruption == "ordinary-members":
+        for member in members:
+            member.pop("eligibility_policy")
+            member.pop("eligibility_classification")
+    elif corruption == "operational-mode":
+        context["knowledge_mode"] = "OPERATIONAL_REPLAY"
+    elif corruption == "wrong-policy":
+        members[0]["eligibility_policy"] = "unapproved-policy"
+    elif corruption == "wrong-classification":
+        members[0]["eligibility_classification"] = "OFFICIAL_STATE"
+    monkeypatch.setattr(
+        service_module, "read_selection_eligibility", lambda *args, **kwargs: (members, gates)
+    )
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert result.status == ("SUCCEEDED" if corruption is None else "FAILED")
+    assert result.selected_count == (20 if corruption is None else 0)
+    assert len(database.connection.tables.get("selection.fusion_candidate", [])) == (
+        20 if corruption is None else 0
+    )
+
+
 def test_changed_hard_gate_decision_conflicts_with_same_explicit_key(monkeypatch):
     database, service, quant, llm = service_fixture(monkeypatch)
     first = service.run(

@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-18 | Research Fusion Identity | 고정 HRECON 연구 context의 승인 적격성 감사 표식과 실제 유니버스 ID를 구분해 Fusion 입력 호환을 복구하고 누락·다른 유니버스·미승인 정책·정규 운영 혼입 차단 및 기존 실패 기록을 보존했다.
 - 2026-10-18 | Session Handoff | 10월 재처리의 원지시·확정 정책·코드/배포 변경·실완료/교체 내역·진행 중 프로세스·재개 명령·남은 손익 보고 작업을 별도 인계 문서와 11일 snapshot에 보존했다.
 - 2026-10-18 | Historical Research Quant Execution | 기존 관측만으로 8개 과거일 연구 context와 실제 Ridge Quant 후보 각20개를 검증했으며 Oct8·Oct9의 누락된 qualified 대상/워밍업 snapshot만 새 고정 입력에 추가하고 실패 기록·원본21개 action·공식 상태·수락 registry·live 모델과 weekly/active 상태를 보존했다.
 - 2026-10-18 | Ridge Loader Compatibility | 기존 LightGBM loader import에는 Ridge 수치 런타임을 추가 로드하지 않도록 지연 import를 적용하고 schema-v2 import 호환 회귀를 포함한 415개 테스트를 통과했다.
