@@ -2,6 +2,35 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## Certified eligible-scope historical fits — 2026-10-18
+
+Sep25·Oct2의 MEDIUM_20D를 각 원래 주말 cutoff로 실제 재학습했다. 독립 원천 검증이
+미완료인 9개 issuer 전체의 가격 이력·actions를 새 입력 scope에서 제외했으며 기존
+S&P 500 membership·21개 원본 action·12개 인증 proof·raw 부모·기존 모델은 보존했다.
+DD의 인증 action도 issuer 전체 제외 규칙에 따라 입력에서 제외해 실제 split 입력은
+11개다. 기존 source timestamp를 변경하거나 archive 날짜로 공개 시각을 만들지 않았다.
+
+| 데이터 anchor | 학습 LightGBM model ID | Coverage | Test blocks | Rank IC |
+|---|---|---:|---:|---:|
+| 2026-09-25 | `72d7ae33-91bf-53ae-8dcd-13e79fd04f6c` | 0.972352232557221 | 15 | -0.007180049227192266 |
+| 2026-10-02 | `6cae0332-9696-53d4-ac07-11ab7e307ea2` | 0.972352232557221 | 15 | -0.007180049227192266 |
+
+Coverage는 필터링한 494개만 분모로 삼지 않고 원래 PIT membership과 503개 reference
+floor를 보존한 `147711 / 151911`이다. 원래 historical membership 501~504개를
+503개로 다시 쓰지 않았다. 목적·20D label·train-only fitting·purge·finite·최소 test
+block과 weekly-v2 기준은 유지했다.
+
+두 실행의 Ridge Rank IC는 -0.005887378846971518로 LightGBM보다 높았다.
+기존 선택 규칙상 Ridge가 shadow winner였으므로 **LightGBM-only serving artifact
+packaging은 실패로 중단했다**. 학습 weight·모델 row는 모두 SHADOW로 보존하고
+임의로 winner를 바꾸지 않았다. 실제 fit/생성 시각은 Oct18이며 과거로 소급하지 않았다.
+기존 `301785d6-...` 모델·이미 수락된 `artifact-registry.json`·weekly/active state는
+변경하지 않았으며 새 registry는 별도 이름의 NOT READY 진단 파일이다.
+
+추가로 Sep30~Oct8에는 실제 as-of instrument-state가 0개여서 후보 inference 최소
+20개 gate를 충족하지 못한다. 학습 완료를 Quant/LLM 후보 실행 준비 완료로 표현하지
+않으며 이 reference-state gate도 완화하지 않았다.
+
 ## MEDIUM_20D v1 isolated Sunday challenger — 2026-10-18
 
 - 기존 Alpha158·LightGBM·20D raw-return 의미와 학습/평가 설정을 재사용한 별도

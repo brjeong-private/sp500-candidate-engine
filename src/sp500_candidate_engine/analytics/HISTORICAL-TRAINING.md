@@ -50,6 +50,54 @@ evidence. Operational replay continues to reject late observations and new artif
 
 ## Historical anchors and prerequisites
 
+### Certified-only issuer quarantine (isolated reconstruction)
+
+`certified_scope.py` supports a conservative data-quality subset without changing
+`SourceRepository` or ordinary source-time semantics:
+
+- Determine exclusions only from the immutable proof matrix and issuer ownership, never
+  from prices, labels, model scores or later outcomes. APH, CVNA, DD, FTV, HON, LEN, MNST,
+  NOW and PANW are the nine reviewed issuers. Expand to every share class and all of each
+  issuer's actions. Preserve all twelve certificates; DD's certified reverse split is
+  excluded too, leaving eleven admitted split facts. All 21 original rows remain intact.
+- Preserve the original universe records/memberships. The target cohorts remain 503;
+  their source-quality subset is 494/503 = 98.2107%, not a rewritten 494-member universe.
+  Scoped FULL price observations physically omit excluded issuers before preprocessing,
+  so existing Quant history and LLM v6 target-price gates reject the same issuers without
+  passing Quant ranks into LLM. Keep explicit dated scope/reason/completeness audits.
+- A new FULL projection is complete **only for its declared certified eligible scope**.
+  Original carrier snapshots/parents/hashes are retained as audit provenance, not admitted
+  as late data. New event rows use verified original SEC acceptance/publication bounds,
+  not effective-date midnight or archive dates. Price information timestamps are copied
+  from the existing admitted source; no new source-date assumption is introduced.
+  Projection `generated_at`, `fetched_at`, `created_at` and observation clocks are NOW.
+  `source_available_at` is the maximum original public-information bound of admitted
+  data, explicitly not the mint/publication time of this newly generated representation.
+- `UNKNOWN` adjustment flags are not relabelled as raw. Only already-qualified
+  `UNADJUSTED` price/volume observations are admitted; any remaining gaps stay missing
+  and are not forward-filled.
+- Training caches original point-in-time membership separately. Quarantined/unknown
+  label values are never computed; evaluation reindexes only the reference slots.
+  Historical membership sizes actually vary 501–504, so the applied denominator is the
+  sum of `max(original date membership, 503)`. This preserves every original member and
+  never shrinks the requested 503 reference. Ordinary unscoped evaluation is unchanged.
+  Coverage >= 0.8, >=3 test blocks, finite metrics, purges, processor fitting and purpose
+  contracts remain unchanged. Scoped model admission requires the matching prediction
+  quality-mask hash.
+
+Actual Sep25 and Oct2 fits each registered momentum/Ridge/LightGBM SHADOW baselines.
+LightGBM coverage was `147711 / 151911 = 0.972352232557221`, with 15 test blocks.
+Both unchanged shadow comparisons selected Ridge (Rank IC `-0.0058873788`) over
+LightGBM (`-0.0071800492`). Consequently the existing LightGBM-only serving package gate
+stopped both bindings. Do not force the LightGBM row or silently serve Ridge.
+
+Candidate readiness is a separate failed gate: existing as-of `instrument_state` rows
+are zero for Sep30–Oct8, where at least 20 candidate-eligible instruments are required.
+The two training contexts are explicitly **training-only, not candidate-ready**; no
+listing-state inference, current-metadata backdating or reference-time bypass was used.
+Oct9 has 503 globally valid states. A trained weight file is not permission to bypass
+either the serving-family or candidate-reference gate.
+
 Use actual preceding-weekend data anchors, **not** the scheduler's weekend ISO-week string:
 
 | Signal sessions (inclusive) | Training data anchor | Conventional D+1 cutoff, UTC |

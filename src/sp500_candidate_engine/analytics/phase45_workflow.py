@@ -14,6 +14,11 @@ from sp500_candidate_engine.analytics.baselines import (
     RidgeBaseline,
     compute_momentum_scores,
 )
+from sp500_candidate_engine.analytics.certified_scope import (
+    coverage_accounting,
+    expected_test_index,
+    read_context_scope,
+)
 from sp500_candidate_engine.analytics.config import VersionedConfig
 from sp500_candidate_engine.analytics.evaluation import (
     WalkForwardSpec,
@@ -55,6 +60,7 @@ class PreparedTrainingData:
     momentum: pd.Series
     metadata: pd.DataFrame
     feature_columns: tuple[str, ...]
+    original_membership: dict[pd.Timestamp, set[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -307,6 +313,7 @@ def prepare_training_data(
 ) -> PreparedTrainingData:
     dataset_path = experiment_dir / "training_dataset.parquet"
     metadata_path = experiment_dir / "candidate_metadata.parquet"
+    membership_path = experiment_dir / "original_membership.json"
     if dataset_path.exists() and metadata_path.exists():
         combined = pd.read_parquet(dataset_path)
         metadata = pd.read_parquet(metadata_path)
@@ -334,6 +341,10 @@ def prepare_training_data(
             momentum=combined["momentum"],
             metadata=metadata,
             feature_columns=tuple(features.columns),
+            original_membership={
+                pd.Timestamp(key): set(value)
+                for key, value in json.loads(membership_path.read_text(encoding="utf-8")).items()
+            } if membership_path.exists() else None,
         )
 
     provider = export_dir / "qlib_data"
@@ -377,12 +388,18 @@ def prepare_training_data(
     stored_metadata["instrument_id"] = stored_metadata["instrument_id"].astype(str)
     stored_metadata["issuer_id"] = stored_metadata["issuer_id"].astype(str)
     stored_metadata.to_parquet(metadata_path)
+    membership_path.write_text(
+        json.dumps({session.isoformat(): sorted(symbols)
+                    for session, symbols in membership.items()}, sort_keys=True),
+        encoding="utf-8",
+    )
     return PreparedTrainingData(
         features=features,
         labels=labels,
         momentum=momentum,
         metadata=metadata,
         feature_columns=tuple(features.columns),
+        original_membership=membership,
     )
 
 
@@ -440,6 +457,7 @@ def _run_phase45_workflow(
     output_root: Path,
     persist_selection: bool,
     reconstruction: HistoricalTrainingFence | None = None,
+    certified_scope: dict[str, object] | None = None,
 ) -> Phase45Summary | TrainingWorkflowSummary:
     if persist_selection != (selection_config is not None):
         raise ValueError(
@@ -462,6 +480,19 @@ def _run_phase45_workflow(
             raise HistoricalSafetyError("reconstruction training/export contract mismatch")
         fit_at = pd.Timestamp(actual_started_at)
     export_run_id = uuid.UUID(export_manifest["export_run_id"])
+    if export_manifest.get("execution_context_id"):
+        with Database(settings).connect() as connection:
+            stored_scope = read_context_scope(
+                connection, uuid.UUID(export_manifest["execution_context_id"]),
+            )
+        if certified_scope is not None and (
+            stored_scope is None
+            or stored_scope["input_artifact_sha256"] != certified_scope["input_artifact_sha256"]
+        ):
+            raise HistoricalSafetyError("Training scope differs from frozen export input")
+        certified_scope = stored_scope
+    if certified_scope is not None and reconstruction is None:
+        raise HistoricalSafetyError("Certified subset training requires reconstruction mode")
     experiment_identity = {
         "export_hash": export_manifest["content_hash"],
         "model_config_hash": model_config.config_hash,
@@ -499,6 +530,11 @@ def _run_phase45_workflow(
     )
     if reconstruction is not None:
         validate_reconstruction_data(data, reconstruction)
+    if certified_scope is not None and (
+        reconstruction is None or data.original_membership is None
+        or certified_scope.get("original_reference_count") != 503
+    ):
+        raise HistoricalSafetyError("Certified scope requires original membership coverage")
     joined = data.labels.join(data.features, how="inner")
     valid = joined["label"].notna() & data.features.notna().any(axis=1)
     usable_dates = tuple(
@@ -537,6 +573,19 @@ def _run_phase45_workflow(
         raise ValueError("evaluation.top_k must be a non-empty list")
     maximum_top_k = max(int(value) for value in top_k_values)
     prediction_rows: list[pd.DataFrame] = []
+    coverage_indexes: dict[int, pd.MultiIndex] = {}
+    if certified_scope is not None:
+        assert data.original_membership is not None
+        calendar = tuple(pd.Timestamp(value) for value in (
+            export_dir / "qlib_data" / "calendars" / "day.txt"
+        ).read_text(encoding="utf-8").splitlines())
+        coverage_indexes = {
+            fold.fold: expected_test_index(
+                membership=data.original_membership, calendar=calendar,
+                start=fold.test_start, end=fold.test_end, horizon_sessions=horizon_sessions,
+            )
+            for fold in folds
+        }
     for fold in folds:
         train_index = _segment_index(
             data.labels,
@@ -592,11 +641,20 @@ def _run_phase45_workflow(
     prediction_path = experiment_dir / "walk_forward_predictions.parquet"
     predictions.to_parquet(prediction_path, index=False)
     metrics: dict[str, dict[str, object]] = {}
+    full_coverage_index = None
+    if coverage_indexes:
+        full_coverage_index = pd.MultiIndex.from_tuples(
+            sorted({key for index in coverage_indexes.values() for key in index}),
+            names=["datetime", "instrument"],
+        )
     for model_name, frame in predictions.groupby("model"):
         indexed = frame.set_index(["datetime", "instrument"]).sort_index()
+        evaluation_labels = indexed["label"]
+        if full_coverage_index is not None:
+            evaluation_labels = evaluation_labels.reindex(full_coverage_index)
         metric = evaluate_predictions(
             indexed["score"],
-            indexed["label"],
+            evaluation_labels,
             top_k=maximum_top_k,
             min_cross_section=30,
             round_trip_cost_bps=float(
@@ -605,13 +663,14 @@ def _run_phase45_workflow(
             holding_period_sessions=holding_period_sessions,
         )
         fold_rank_ic = []
-        for _, fold_frame in frame.groupby("fold"):
+        for fold_number, fold_frame in frame.groupby("fold"):
             fold_indexed = fold_frame.set_index(
                 ["datetime", "instrument"]
             ).sort_index()
             fold_metric = evaluate_predictions(
                 fold_indexed["score"],
-                fold_indexed["label"],
+                fold_indexed["label"].reindex(coverage_indexes[int(fold_number)])
+                if coverage_indexes else fold_indexed["label"],
                 top_k=maximum_top_k,
                 min_cross_section=30,
                 round_trip_cost_bps=float(
@@ -621,6 +680,11 @@ def _run_phase45_workflow(
             )
             fold_rank_ic.append(fold_metric.rank_ic_mean)
         model_metrics = asdict(metric)
+        if full_coverage_index is not None:
+            model_metrics.update(coverage_accounting(
+                observations=metric.observations, expected_index=full_coverage_index,
+                original_reference_count=503,
+            ))
         model_metrics["test_blocks"] = len(fold_rank_ic)
         model_metrics["fold_rank_ic_median"] = float(pd.Series(fold_rank_ic).median())
         metrics[str(model_name)] = model_metrics
@@ -730,6 +794,8 @@ def _run_phase45_workflow(
             "processors": "Alpha158 raw; LightGBM none; Ridge train-only imputer/scaler",
             "promotion_allowed": False,
         }
+        if certified_scope is not None:
+            reconstruction_spec["certified_eligibility_scope"] = certified_scope
 
     with Database(settings).connect() as connection, connection.transaction():
         export_row = connection.execute(
@@ -999,6 +1065,7 @@ def run_training_only_workflow(
     label_config: VersionedConfig,
     output_root: Path,
     reconstruction: HistoricalTrainingFence | None = None,
+    certified_scope: dict[str, object] | None = None,
 ) -> TrainingWorkflowSummary:
     summary = _run_phase45_workflow(
         settings=settings,
@@ -1009,6 +1076,7 @@ def run_training_only_workflow(
         output_root=output_root,
         persist_selection=False,
         reconstruction=reconstruction,
+        certified_scope=certified_scope,
     )
     if not isinstance(summary, TrainingWorkflowSummary):
         raise RuntimeError("Training-only workflow attempted production selection")

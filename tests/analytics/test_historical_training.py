@@ -347,6 +347,34 @@ def test_suspension_does_not_disable_integrity_gates(
     assert not (tmp_path / str(req.reconstruction_id) / "artifact").exists()
 
 
+def test_scoped_model_requires_matching_prediction_quality_mask(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    req, database = setup_service(monkeypatch, METRICS)
+    artifact = reconstruct_challenger(
+        database=database, settings=MagicMock(), request=req,
+        repository_root=ROOT, output_root=tmp_path,
+    )
+    path = artifact.manifest_path.parent / "reconstruction.json"
+    proof = json.loads(path.read_text(encoding="utf-8"))
+    mask = "e" * 64
+    proof["split_spec"]["certified_eligibility_scope"] = {"quality_mask_sha256": mask}
+    proof["source_audit"]["certified_scope"] = {"quality_mask_sha256": mask}
+    path.write_text(json.dumps(proof), encoding="utf-8")
+    kwargs = {
+        "manifest_path": artifact.manifest_path, "manifest_sha256": artifact.manifest_sha256,
+        "provenance_sha256": module.sha256_file(path), "signal_session": date(2026, 9, 30),
+        "knowledge_mode": "HISTORICAL_RECONSTRUCTION",
+    }
+    with pytest.raises(HistoricalSafetyError, match="quality scopes differ"):
+        validate_reconstructed_artifact(**kwargs)
+    with pytest.raises(HistoricalSafetyError, match="quality scopes differ"):
+        validate_reconstructed_artifact(**kwargs, expected_quality_mask_sha256="f" * 64)
+    assert validate_reconstructed_artifact(
+        **kwargs, expected_quality_mask_sha256=mask,
+    ).model_version_id == artifact.manifest.model_version_id
+
+
 @pytest.mark.parametrize("future", [False, True])
 def test_rich_context_can_be_frozen_from_explicit_existing_snapshots_only(
     monkeypatch: pytest.MonkeyPatch, future: bool,
@@ -390,8 +418,9 @@ def test_rich_context_can_be_frozen_from_explicit_existing_snapshots_only(
         assert "insert into market." not in sql
 
 
+@pytest.mark.parametrize("certified_subset", [False, True])
 def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, certified_subset: bool,
 ) -> None:
     anchor = date(2026, 9, 25)
     dates = pd.bdate_range(end=anchor, periods=320)
@@ -402,7 +431,13 @@ def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors
         "exit_date": pd.Series(dates).shift(-20).to_numpy(),
     }, index=index)
     features = pd.DataFrame({"A": range(320)}, index=index, dtype=float)
-    data = PreparedTrainingData(features, labels, features["A"], pd.DataFrame(), ("A",))
+    original_membership = {
+        session: {"IA", *(f"UNSCORED{i}" for i in range(502))}
+        for session in dates
+    } if certified_subset else None
+    data = PreparedTrainingData(
+        features, labels, features["A"], pd.DataFrame(), ("A",), original_membership,
+    )
     monkeypatch.setattr(workflow, "prepare_training_data", lambda **_: data)
     ridge_fits: list[pd.Index] = []
     lgb_fits: list[dict[str, object]] = []
@@ -426,14 +461,15 @@ def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors
 
     @dataclass
     class MockMetrics:
+        observations: int = 1
         rank_ic_mean: float = 0.1
         coverage: float = 0.9
         net_top_10_return: float = -0.1
         max_drawdown_top_10: float = -0.4
 
-    def mock_metrics(*args: object, **kwargs: object) -> MockMetrics:
+    def mock_metrics(predictions: pd.Series, *args: object, **kwargs: object) -> MockMetrics:
         del args, kwargs
-        return MockMetrics()
+        return MockMetrics(observations=len(predictions))
 
     monkeypatch.setattr(workflow, "RidgeBaseline", MockModel)
     monkeypatch.setattr(workflow, "train_qlib_lightgbm", mock_train)
@@ -443,6 +479,7 @@ def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors
     (export_dir / "manifest.json").write_text(json.dumps({
         "cutoff_at": CUTOFF.isoformat(), "export_run_id": str(uuid.uuid4()),
         "calendar_end": anchor.isoformat(), "content_hash": "c" * 64,
+        "execution_context_id": str(uuid.uuid4()),
     }), encoding="utf-8")
     database = MagicMock()
     connection = database.connect.return_value.__enter__.return_value
@@ -454,14 +491,29 @@ def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors
     registry = MagicMock()
     registry.register.side_effect = lambda _: uuid.uuid4()
     monkeypatch.setattr(workflow, "ModelRegistry", lambda _: registry)
+    scope = {
+        "original_reference_count": 503, "input_artifact_sha256": "d" * 64,
+    } if certified_subset else None
+    monkeypatch.setattr(workflow, "read_context_scope", lambda *_: scope)
     config_root = ROOT / "config" / "analytics"
-    summary = workflow.run_training_only_workflow(
+    kwargs = dict(
         settings=MagicMock(), export_dir=export_dir,
         model_config=load_versioned_config(config_root / "model_lightgbm_20d_v1.yaml"),
         label_config=load_versioned_config(config_root / "label_forward_return_20d_v1.yaml"),
         output_root=tmp_path / "training",
         reconstruction=HistoricalTrainingFence(anchor, CUTOFF),
     )
+    if certified_subset:
+        calendar_dir = export_dir / "qlib_data" / "calendars"
+        calendar_dir.mkdir(parents=True)
+        (calendar_dir / "day.txt").write_text(
+            "\n".join(value.date().isoformat() for value in dates), encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="coverage eligibility"):
+            workflow.run_training_only_workflow(**kwargs)
+        registry.register.assert_not_called()
+        return
+    summary = workflow.run_training_only_workflow(**kwargs)
     assert summary.model_purpose == "MEDIUM_20D"
     assert len(lgb_fits) >= 4
     final = lgb_fits[-1]

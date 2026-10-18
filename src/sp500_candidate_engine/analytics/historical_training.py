@@ -19,6 +19,7 @@ from sp500_candidate_engine.analytics.artifacts import (
     package_model_artifact,
     sha256_file,
 )
+from sp500_candidate_engine.analytics.certified_scope import DATASET_CODE, read_scope_artifact
 from sp500_candidate_engine.analytics.config import load_versioned_config
 from sp500_candidate_engine.analytics.historical_export import (
     HistoricalInputContext,
@@ -106,6 +107,7 @@ def _validate_sources(
     rows = connection.execute(  # type: ignore[attr-defined]
         """
         SELECT ss.source_snapshot_id, ss.source_available_at, ss.coverage_end, ss.fetched_at,
+               ss.dataset_code, ss.storage_uri, ss.content_hash,
                EXISTS (
                    SELECT 1 FROM ops.data_quality_issue dqi
                    WHERE dqi.ingestion_run_id = ss.ingestion_run_id
@@ -126,6 +128,25 @@ def _validate_sources(
             raise HistoricalSafetyError("training snapshot coverage exceeds anchor")
         if row["blocking"]:
             raise HistoricalSafetyError("blocking quality issue in training manifest")
+    scopes = [
+        read_scope_artifact(
+            uri=row["storage_uri"], expected_sha256=row["content_hash"],
+            cutoff_at=request.training_cutoff,
+        )
+        for row in rows if row.get("dataset_code") == DATASET_CODE
+    ]
+    if len(scopes) > 1:
+        raise HistoricalSafetyError("Ambiguous certified eligibility scopes")
+    if scopes:
+        scope = scopes[0]
+        if scope["universe_version_id"] != str(request.universe_version_id):
+            raise HistoricalSafetyError("Certified scope universe binding mismatch")
+        scope_row = next(row for row in rows if row.get("dataset_code") == DATASET_CODE)
+        if (
+            scope_row["source_available_at"]
+            != datetime.fromisoformat(scope["data_publication_max"])
+        ):
+            raise HistoricalSafetyError("Certified fact publication/snapshot bound mismatch")
     # Observations acquired later are permitted, publication/revision availability is not.
     future = connection.execute(  # type: ignore[attr-defined]
         """
@@ -197,6 +218,7 @@ def _validate_sources(
         "normalized_future_revision_count": 0,
         "normalized_source_available_at_max": future["source_available_at_max"],
         "observation_policy": "Late acquisition allowed; source/revision availability fenced.",
+        **({"certified_scope": scopes[0]} if scopes else {}),
     }
 
 
@@ -273,6 +295,8 @@ def reconstruct_challenger(
             label_config=load_versioned_config(config_root / "label_forward_return_20d_v1.yaml"),
             output_root=root / "training",
             reconstruction=HistoricalTrainingFence(request.anchor_session, request.training_cutoff),
+            **({"certified_scope": context.source_audit["certified_scope"]}
+               if context.source_audit.get("certified_scope") else {}),
         )
         if (
             summary.model_purpose != "MEDIUM_20D"
@@ -325,6 +349,7 @@ def reconstruct_challenger(
                     "historical_training.py", "historical_training_context.py",
                     "historical_safety.py", "phase45_workflow.py", "training.py",
                     "features.py", "baselines.py", "evaluation.py", "historical_export.py",
+                    "certified_scope.py",
                 )
             },
             "runtime_versions": {
@@ -361,6 +386,7 @@ def validate_reconstructed_artifact(
     provenance_sha256: str,
     signal_session: date,
     knowledge_mode: str,
+    expected_quality_mask_sha256: str | None = None,
 ) -> ArtifactManifest:
     """Admission seam for an explicit Quant artifact override, never an active assignment."""
     if knowledge_mode != "HISTORICAL_RECONSTRUCTION":
@@ -379,6 +405,17 @@ def validate_reconstructed_artifact(
     anchor = date.fromisoformat(proof["request"]["anchor_session"])
     HistoricalTrainingFence(anchor, cutoff).validate()
     split = proof["split_spec"]
+    trained_scope = split.get("certified_eligibility_scope")
+    if trained_scope is not None:
+        if (
+            expected_quality_mask_sha256 is None
+            or trained_scope["quality_mask_sha256"] != expected_quality_mask_sha256
+            or proof["source_audit"]["certified_scope"]["quality_mask_sha256"]
+            != expected_quality_mask_sha256
+        ):
+            raise HistoricalSafetyError("Model and prediction context quality scopes differ")
+    elif expected_quality_mask_sha256 is not None:
+        raise HistoricalSafetyError("Model was not fitted under the certified quality scope")
     if (
         proof["contract_version"] != CONTRACT_VERSION
         or proof["knowledge_mode"] != "HISTORICAL_RECONSTRUCTION"

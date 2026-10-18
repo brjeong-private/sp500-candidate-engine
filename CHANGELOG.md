@@ -1,5 +1,8 @@
 # Change Log
 
+- 2026-10-18 | Certified Historical Scope | 12개 proof와 21개 원본을 보존하고 미인증 9개 issuer 전체를 새 certified-only 입력에서 격리해 기존 membership·일반 SourceRepository 시간 규칙을 유지했으며 원래 PIT cohort 및 503 reference 분모와 scope hash admission을 검증했다.
+- 2026-10-18 | Earlier Weekly Actual Fits | Sep25·Oct2 모델을 실제 SHADOW 학습해 coverage 147711/151911·15 test block을 기록했으나 기존 winner가 Ridge여서 LightGBM serving binding은 중단했으며 과거 reference-state 0/최소20 gate·기존301785 모델·수락 registry·active/weekly 상태는 변경하지 않았다.
+
 - 2026-10-18 | LLM Cohort Budget Compatibility | 병렬 평가가 기존 고유 packet 추정량·검색 입력의 cohort admission 한도를 반복 HTTP payload·schema·재시도 누적 비용으로 재해석하던 오류를 제거하고 요청별 공유 rate limit·실사용 감사·캐시 재사용 및 실제 규모 회귀 검증을 유지했다.
 - 2026-10-18 | LLM Batch Parallelism | 이벤트 평가에 기본 직렬·선택적 bounded 병렬 배치를 추가하고 공유 quota·외부 검색 포함 입력 예산·재시도·실패 감사·캐시와 결정적 집계 순서를 보존했다.
 - 2026-10-18 | Historical Sunday Admission | 기존 주말 validator·일요일 scheduler 계약으로 Oct9 anchor·신규 Oct11 09:30 UTC 지식 cutoff를 검증하고 짧은 로컬 경로의 새 UUID에서 SHADOW 모델을 완료했으며 기존 토요일 context·이전 모델·주간 run·활성 할당·실제 생성 시각은 보존했다.
