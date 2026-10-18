@@ -719,6 +719,7 @@ def test_medium_inference_never_falls_back_to_short_artifact(service):
     "violation",
     [None, "manifest_hash", "model_hash", "future_training", "feature_order", "registry_hash"],
 )
+@pytest.mark.parametrize("model_family", ["lightgbm", "ridge"])
 @pytest.mark.parametrize(
     (
         "model_purpose",
@@ -761,6 +762,7 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     score_semantics,
     horizon,
     model_version,
+    model_family,
 ):
     import numpy as np
     import pandas as pd
@@ -772,6 +774,8 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     from sp500_candidate_engine.database import _canonical_hash
     from sp500_candidate_engine.selection.repository import SelectionRepository
 
+    if model_family == "ridge" and model_purpose != "MEDIUM_20D":
+        pytest.skip("Ridge serving is explicitly MEDIUM_20D only")
     target = date(2026, 10, 8)
     root = Path(__file__).parents[2]
     model = load_versioned_config(
@@ -794,20 +798,24 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     model_id = uuid.uuid4()
     model_bytes = b"explicit-pinned-model"
     model_hash = hashlib.sha256(model_bytes).hexdigest()
+    training_hash = "f" * 64 if model_family == "ridge" else model_hash
     names = [f"feature-{index}" for index in range(158)]
     manifest = json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": 3 if model_family == "ridge" else 2,
             "model_purpose": model_purpose,
             "label_semantics": label_semantics,
             "prediction_semantics": score_semantics,
             "horizon_sessions": horizon,
             "model_version_id": str(model_id),
-            "model_file": "lightgbm.txt",
+            "model_file": "ridge.json" if model_family == "ridge" else "lightgbm.txt",
             "model_sha256": model_hash,
             "feature_config_hash": feature.config_hash,
             "model_config_hash": config_hash,
             "feature_names": names,
+            **({
+                "model_family": "ridge", "training_artifact_sha256": training_hash,
+            } if model_family == "ridge" else {}),
         }
     ).encode()
     manifest_path = root / "test-artifact-store" / "manifest.json"
@@ -836,6 +844,11 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     booster.predict.return_value = np.arange(instrument_count, dtype=float)
     constructor = MagicMock(return_value=booster)
     monkeypatch.setitem(sys.modules, "lightgbm", SimpleNamespace(Booster=constructor))
+    ridge = MagicMock()
+    ridge.predict.return_value = np.arange(instrument_count, dtype=float)
+    monkeypatch.setattr(
+        "sp500_candidate_engine.analytics.artifacts.load_numeric_ridge", lambda *_: ridge,
+    )
     monkeypatch.setattr("importlib.metadata.version", lambda _: "test")
     export_id, context_id, universe_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     export = MagicMock(
@@ -851,8 +864,8 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
         Result(
             [
                 dict(
-                    artifact_hash=model_hash if violation != "registry_hash" else "invalid",
-                    model_name="lightgbm",
+                    artifact_hash=training_hash if violation != "registry_hash" else "invalid",
+                    model_name=model_family,
                     version=model_version,
                     config_hash=config_hash,
                     label_semantics=label_semantics,
@@ -934,6 +947,7 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
             )
         train.assert_not_called()
         booster.predict.assert_not_called()
+        ridge.predict.assert_not_called()
         return
     result = service.run_candidate_inference(
         service.settings,
@@ -962,7 +976,12 @@ def test_pinned_inference_exports_warmup_predicts_and_reuses_model_without_train
     assert write_scores.call_args.kwargs["prediction_horizon"] == horizon
     assert persist.call_args.kwargs["cutoff_at"] == execution.backfill_cutoff(target)
     train.assert_not_called()
-    booster.predict.assert_called_once()
+    if model_family == "ridge":
+        ridge.predict.assert_called_once()
+        constructor.assert_not_called()
+    else:
+        booster.predict.assert_called_once()
+        ridge.predict.assert_not_called()
     writes.assert_called_once()
     output = json.loads(writes.call_args.args[0])
     assert output["model_purpose"] == model_purpose

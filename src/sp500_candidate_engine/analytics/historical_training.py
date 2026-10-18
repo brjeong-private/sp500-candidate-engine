@@ -29,7 +29,10 @@ from sp500_candidate_engine.analytics.historical_safety import (
     HistoricalSafetyError,
     HistoricalTrainingFence,
 )
-from sp500_candidate_engine.analytics.phase45_workflow import run_training_only_workflow
+from sp500_candidate_engine.analytics.phase45_workflow import (
+    TrainingWorkflowSummary,
+    run_training_only_workflow,
+)
 from sp500_candidate_engine.analytics.promotion import (
     DEFAULT_WEEKLY_POLICY_VERSION,
     evaluate_promotion,
@@ -42,6 +45,15 @@ from sp500_candidate_engine.database import Database, _canonical_hash, _stable_u
 from sp500_candidate_engine.models import NEW_YORK
 
 CONTRACT_VERSION = "historical-medium-20d-challenger-v1"
+CODE_COMPONENTS = (
+    "historical_training.py", "historical_training_context.py", "historical_safety.py",
+    "phase45_workflow.py", "training.py", "features.py", "baselines.py", "evaluation.py",
+    "historical_export.py", "certified_scope.py", "artifacts.py", "ridge_artifact.py",
+)
+
+
+def _code_hashes() -> dict[str, str]:
+    return {name: sha256_file(Path(__file__).parent / name) for name in CODE_COMPONENTS}
 
 
 @dataclass(frozen=True)
@@ -265,6 +277,7 @@ def reconstruct_challenger(
     # Exclusive reservation also prevents retrying a completed or interrupted fit in place.
     root.mkdir(parents=True, exist_ok=False)
     generated_at = datetime.now(UTC)
+    training_code_hashes = _code_hashes()
     try:
         context = _isolated_context(database, request)
         export = HistoricalQlibExportService(database).export(
@@ -298,62 +311,122 @@ def reconstruct_challenger(
             **({"certified_scope": context.source_audit["certified_scope"]}
                if context.source_audit.get("certified_scope") else {}),
         )
-        if (
-            summary.model_purpose != "MEDIUM_20D"
-            or summary.prediction_horizon_sessions != 20
-            or summary.return_policy != "PRICE_RETURN"
-            or summary.export_run_id != export.export_run_id
-            or summary.selected_shadow_model != "lightgbm"
-        ):
-            raise HistoricalSafetyError("selected challenger is not a deployable 20D LightGBM")
-        evaluation = evaluate_promotion(
-            policy=policy, model_purpose="MEDIUM_20D",
-            challenger_metrics=summary.metrics["lightgbm"], incumbent_metrics=None,
+        return bind_fitted_challenger(
+            database=database, request=request, summary=summary,
+            training_execution_context_id=context.execution_context_id,
+            export_dir=export_dir, repository_root=repository_root,
+            output_directory=root / "artifact", generated_at=generated_at,
+            training_code_hashes=training_code_hashes,
         )
-        if any(gate.enforced and not gate.passed for gate in evaluation.gate_results.values()):
-            raise HistoricalSafetyError("challenger failed retained weekly integrity gates")
-        with database.connect() as connection:
-            registered = connection.execute(
-                "SELECT * FROM analytics.model_version WHERE model_version_id = %s",
-                (summary.model_version_id,),
-            ).fetchone()
-        if registered is None or registered["promotion_status"] != "SHADOW":
-            raise HistoricalSafetyError("reconstructed challenger must remain SHADOW")
-        packaged = package_model_artifact(
-            source_directory=summary.experiment_dir,
-            output_directory=root / "artifact",
-            model_version_id=summary.model_version_id,
-            model_purpose="MEDIUM_20D",
-            registered_model=registered,
-            config_root=config_root,
+    except Exception:
+        (root / "FAILED").write_text(
+            "Reconstruction failed; no activation was attempted. Use a new reconstruction ID.\n",
+            encoding="utf-8",
         )
-        provenance = {
+        raise
+
+
+def bind_fitted_challenger(
+    *, database: Database, request: ReconstructionRequest, summary: TrainingWorkflowSummary,
+    training_execution_context_id: uuid.UUID, export_dir: Path, repository_root: Path,
+    output_directory: Path, generated_at: datetime,
+    training_code_hashes: dict[str, str] | None = None,
+) -> PackagedArtifact:
+    """Bind existing fitted winners without retraining, changing rows, or selecting substitutes."""
+    request.validate()
+    config_root = repository_root / "config" / "analytics"
+    policy_path = weekly_retraining_policy_path(config_root, DEFAULT_WEEKLY_POLICY_VERSION)
+    policy = load_weekly_retraining_policy(policy_path)
+    export_manifest = json.loads((export_dir / "manifest.json").read_text(encoding="utf-8"))
+    with database.connect() as connection:
+        source_audit = _validate_sources(connection, request)
+        registered = connection.execute(
+            "SELECT * FROM analytics.model_version WHERE model_version_id = %s",
+            (summary.model_version_id,),
+        ).fetchone()
+        export = connection.execute(
+            "SELECT * FROM analytics.qlib_export_run WHERE export_run_id = %s",
+            (summary.export_run_id,),
+        ).fetchone()
+        training_context = connection.execute(
+            "SELECT * FROM ops.execution_context WHERE execution_context_id = %s",
+            (training_execution_context_id,),
+        ).fetchone()
+    if (
+        registered is None or registered["promotion_status"] != "SHADOW"
+        or summary.model_purpose != "MEDIUM_20D"
+        or summary.prediction_horizon_sessions != 20 or summary.return_policy != "PRICE_RETURN"
+        or summary.selected_shadow_model not in {"lightgbm", "ridge"}
+        or registered["model_name"] != summary.selected_shadow_model
+        or registered["export_run_id"] != summary.export_run_id
+        or export is None or export["execution_context_id"] != training_execution_context_id
+        or export["status"] != "SUCCEEDED"
+        or training_context is None
+        or training_context["input_manifest_id"] != request.input_manifest_id
+        or training_context["cutoff_at"] != request.training_cutoff
+        or training_context["knowledge_mode"] != "HISTORICAL_RECONSTRUCTION"
+        or export_manifest["execution_context_id"] != str(training_execution_context_id)
+        or export_manifest["content_hash"] != export["artifact_hash"]
+        or registered["metrics"] != summary.metrics[summary.selected_shadow_model]
+        or policy.performance_gates_enabled
+    ):
+        raise HistoricalSafetyError("selected challenger/export is not a bound SHADOW 20D winner")
+    evaluation = evaluate_promotion(
+        policy=policy, model_purpose="MEDIUM_20D",
+        challenger_metrics=summary.metrics[summary.selected_shadow_model], incumbent_metrics=None,
+    )
+    if any(gate.enforced and not gate.passed for gate in evaluation.gate_results.values()):
+        raise HistoricalSafetyError("challenger failed retained weekly integrity gates")
+    candidates = [
+        name for name in ("lightgbm", "ridge")
+        if name in summary.metrics and float(summary.metrics[name]["coverage"]) >= 0.8
+        and int(summary.metrics[name]["test_blocks"]) >= 3
+    ]
+    winner = max(candidates, key=lambda name: (
+        *(float(summary.metrics[name][key]) for key in (
+            "rank_ic_mean", "fold_rank_ic_median", "net_top_10_return", "max_drawdown_top_10",
+        )), name,
+    ))
+    if summary.selected_shadow_model != winner:
+        raise HistoricalSafetyError("fitted challenger is not the unchanged comparison winner")
+    for relative, checksum in export_manifest["artifacts"].items():
+        path = (export_dir / relative).resolve()
+        if not path.is_relative_to(export_dir.resolve()) or sha256_file(path) != checksum:
+            raise HistoricalSafetyError("reconstruction export artifact checksum mismatch")
+    packaged = package_model_artifact(
+        source_directory=summary.experiment_dir, output_directory=output_directory,
+        model_version_id=summary.model_version_id, model_purpose="MEDIUM_20D",
+        registered_model=registered, config_root=config_root,
+        allow_ridge=True,
+    )
+    provenance = {
             "contract_version": CONTRACT_VERSION,
             "knowledge_mode": "HISTORICAL_RECONSTRUCTION",
             "promotion_allowed": False,
             "status": "CHALLENGER_READY",
             "request": asdict(request),
-            "training_execution_context_id": str(context.execution_context_id),
-            "source_audit": context.source_audit,
-            "export_run_id": str(export.export_run_id),
-            "export_content_hash": export.artifact_hash,
+            "training_execution_context_id": str(training_execution_context_id),
+            "source_audit": source_audit,
+            "export_run_id": str(summary.export_run_id),
+            "export_content_hash": export["artifact_hash"],
             "export_manifest_sha256": sha256_file(export_dir / "manifest.json"),
             "model_version_id": str(summary.model_version_id),
             "manifest_sha256": packaged.manifest_sha256,
             "model_sha256": packaged.model_sha256,
+            "model_family": packaged.manifest.model_family,
+            "training_artifact_sha256": packaged.manifest.registered_artifact_sha256,
+            "selection_rule": "Unchanged eligible Ridge/LightGBM comparison; no substitution",
             "policy_version": policy.version,
             "policy_sha256": sha256_file(policy_path),
-            "training_code_sha256": {
-                name: sha256_file(Path(__file__).parent / name)
-                for name in (
-                    "historical_training.py", "historical_training_context.py",
-                    "historical_safety.py", "phase45_workflow.py", "training.py",
-                    "features.py", "baselines.py", "evaluation.py", "historical_export.py",
-                    "certified_scope.py",
-                )
-            },
+            "training_code_sha256": training_code_hashes,
+            "binding_code_sha256": _code_hashes(),
+            "training_code_attestation": (
+                "Captured before this fit" if training_code_hashes is not None
+                else "No contemporaneous code hash attestation for this retained fitted checkpoint"
+            ),
             "runtime_versions": {
-                name: version(name) for name in ("pyqlib", "lightgbm", "pandas", "pyarrow")
+                name: version(name)
+                for name in ("pyqlib", "lightgbm", "pandas", "pyarrow", "scikit-learn", "numpy")
             },
             "weekly_gate_results": {
                 name: asdict(gate) for name, gate in evaluation.gate_results.items()
@@ -366,17 +439,19 @@ def reconstruct_challenger(
                 "Universe/GICS history is limited to the explicitly frozen manifest.",
                 "No incumbent comparison, activation, smoke, CAS or rollback is attempted.",
             ],
-        }
-        with (root / "artifact" / "reconstruction.json").open("x", encoding="utf-8") as stream:
-            json.dump(provenance, stream, default=str, indent=2, sort_keys=True)
-            stream.write("\n")
-        return packaged
-    except Exception:
-        (root / "FAILED").write_text(
-            "Reconstruction failed; no activation was attempted. Use a new reconstruction ID.\n",
-            encoding="utf-8",
-        )
-        raise
+    }
+    with (output_directory / "reconstruction.json").open("x", encoding="utf-8") as stream:
+        json.dump(provenance, stream, default=str, indent=2, sort_keys=True)
+        stream.write("\n")
+    validate_reconstructed_artifact(
+        manifest_path=packaged.manifest_path, manifest_sha256=packaged.manifest_sha256,
+        provenance_sha256=sha256_file(output_directory / "reconstruction.json"),
+        signal_session=request.signal_session, knowledge_mode="HISTORICAL_RECONSTRUCTION",
+        expected_quality_mask_sha256=source_audit.get("certified_scope", {}).get(
+            "quality_mask_sha256",
+        ),
+    )
+    return packaged
 
 
 def validate_reconstructed_artifact(
@@ -424,6 +499,12 @@ def validate_reconstructed_artifact(
         or proof["manifest_sha256"] != manifest_sha256
         or proof["model_sha256"] != manifest.model_sha256
         or proof["model_version_id"] != str(manifest.model_version_id)
+        or (
+            manifest.model_family == "ridge" and (
+                proof.get("model_family") != "ridge"
+                or proof.get("training_artifact_sha256") != manifest.training_artifact_sha256
+            )
+        )
         or sha256_file(manifest_path.parent / manifest.model_file) != manifest.model_sha256
         or anchor != preceding_weekend_anchor(signal_session)
         or cutoff >= datetime.combine(signal_session, time(), tzinfo=NEW_YORK)

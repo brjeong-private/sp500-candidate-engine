@@ -227,6 +227,13 @@ class SourceRepository:
         execution_context_id: uuid.UUID,
         target_session: date,
     ) -> list[dict[str, object]]:
+        from sp500_candidate_engine.analytics.research_eligibility import read_research_members
+
+        research = read_research_members(
+            self, execution_context_id=execution_context_id, target_session=target_session,
+        )
+        if research is not None:
+            return research
         return self.connection.execute(
             """
             WITH eligible_versions AS (

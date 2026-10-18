@@ -2,6 +2,29 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## Actual winning Ridge serving / research eligibility — 2026-10-18
+
+사용자 선택에 따라 이미 학습한 실제 Ridge winner를 재학습 없이 schema-v3 numeric JSON으로
+패키징했다. fitted median imputer·빈 열 유지·StandardScaler·float32/64 연산·계수·절편·158개
+feature 순서를 보존하며 serving에서는 pickle을 읽지 않는다. 원래 joblib hash와 model ID를
+새 serving JSON hash와 별도로 결합하고 기존 LightGBM schema-v2·301785·live binding은 보존한다.
+
+| Anchor | 실제 Ridge model ID | Serving JSON SHA256 | 원래 fitted pipeline 대비 최대 오차 |
+|---|---|---|---:|
+| Sep25 | `861b5f38-f10c-565f-989d-7253d34c13f5` | `35f5042b19956621368f8ffc5abd0283991e0ed0e246d5d538aedf5b38efea4a` | 4.0978193283081055e-8 |
+| Oct2 | `3fc6ebf4-03ee-5624-bfab-cd259fe2accb` | `969c8a1080f701e7f9753bbc40667e1b836990e2984e72c2301d48c5faa209fe` | 6.705522537231445e-8 |
+
+각 520개 비교에 실제 저장 Alpha158 행·NaN·float32/64를 포함했다. 기존 선택 규칙·15개
+test block·coverage 147711/151911·actual Oct18 fit clock·SHADOW 상태는 그대로다.
+새 `artifact-registry-ridge-v1.json`만 생성했으며 기존 accepted registry는 수정하지 않았다.
+
+별도 사용자 승인 연구 정책 `historical-membership-price-research-v1`은 기존 해당일 가격과
+당시 S&P500 membership으로 DAILY 대상 적격성만 판단한다. 새 immutable context·결과에
+`EXPERIMENTAL_RESEARCH_ELIGIBILITY`, `official_historical_state_verified=false`를 명시한다.
+공식 과거 종목 상태를 복원했다고 주장하지 않으며 원본 ref 상태·timestamp를 바꾸지 않는다.
+9개 issuer 격리·동일 Quant/LLM 적격성·고정 cutoff·품질·lookback·미래자료 차단은 유지한다.
+LLM rubric으로 가격이나 Quant 점수를 전달하지 않고 정규 운영·승격 정책은 변경하지 않는다.
+
 ## Certified eligible-scope historical fits — 2026-10-18
 
 Sep25·Oct2의 MEDIUM_20D를 각 원래 주말 cutoff로 실제 재학습했다. 독립 원천 검증이

@@ -750,6 +750,10 @@ def _run_phase45_workflow(
     ridge_fit_completed_at = datetime.now(UTC)
     ridge_path = experiment_dir / "ridge.joblib"
     ridge_final.save(ridge_path)
+    if reconstruction is not None:
+        ridge_final.save_numeric(
+            experiment_dir / "ridge.json", training_artifact_sha256=_hash_file(ridge_path),
+        )
     lightgbm_fit_started_at = datetime.now(UTC)
     lightgbm_final = train_qlib_lightgbm(
         features=data.features,

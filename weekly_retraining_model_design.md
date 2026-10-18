@@ -186,6 +186,13 @@ evaluator와 decision persistence가 연결되지 않았다.
 
 ## 6. Immutable schema-v2 artifact
 
+기존 LightGBM schema-v2와 정규 weekly packaging 기본값은 유지한다. 사용자 승인
+historical MEDIUM_20D Ridge winner는 별도 schema-v3 numeric JSON으로 제공할 수 있다.
+`allow_ridge=True`를 명시한 재구성 binder만 이 family를 허용하며 정규 weekly job은
+기본값을 바꾸지 않는다. 원래 joblib registry hash와 safe JSON hash를 구분하고
+serving에서 pickle·processor refit을 사용하지 않는다. 상세 contract·실제 parity는
+[역사 학습 문서](src/sp500_candidate_engine/analytics/HISTORICAL-TRAINING.md)를 따른다.
+
 ### Packaging 입력 검증
 
 `package_model_artifact()`는 선택된 registry row와 다음을 대조한다.

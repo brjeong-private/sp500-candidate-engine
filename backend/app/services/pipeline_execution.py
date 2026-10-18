@@ -657,10 +657,10 @@ class PipelineExecutionService:
             )
         from importlib.metadata import version
 
-        import lightgbm
         import numpy as np
         import pandas as pd
 
+        from sp500_candidate_engine.analytics.artifacts import ArtifactManifest, load_numeric_ridge
         from sp500_candidate_engine.analytics.config import load_versioned_config
         from sp500_candidate_engine.analytics.features import (
             Alpha158FeatureService,
@@ -668,6 +668,10 @@ class PipelineExecutionService:
         )
         from sp500_candidate_engine.analytics.historical_export import HistoricalQlibExportService
         from sp500_candidate_engine.analytics.phase45_workflow import TrainingDataRepository
+        from sp500_candidate_engine.analytics.research_eligibility import (
+            CLASSIFICATION,
+            POLICY_VERSION,
+        )
         from sp500_candidate_engine.analytics.score_repository import ScoreRepository
         from sp500_candidate_engine.analytics.scoring import rank_daily_scores
         from sp500_candidate_engine.database import _canonical_hash
@@ -684,9 +688,10 @@ class PipelineExecutionService:
         manifest_bytes = manifest_path.read_bytes()
         if hashlib.sha256(manifest_bytes).hexdigest() != configured_manifest_sha256:
             raise RuntimeError("Candidate artifact manifest SHA256 mismatch")
-        manifest = json.loads(manifest_bytes)
-        if manifest.get("schema_version") != 2:
-            raise RuntimeError("Unsupported candidate artifact manifest version")
+        artifact_manifest = ArtifactManifest.from_bytes(
+            manifest_bytes, expected_purpose=model_purpose,
+        )
+        manifest = artifact_manifest.to_dict()
         expected_manifest_contract = {
             "model_purpose": model_purpose,
             "label_semantics": contract["label_semantics"],
@@ -771,8 +776,8 @@ class PipelineExecutionService:
             ).fetchone()
         if (
             model_row is None
-            or model_row["artifact_hash"] != model_hash
-            or model_row["model_name"] != "lightgbm"
+            or model_row["artifact_hash"] != artifact_manifest.registered_artifact_sha256
+            or model_row["model_name"] != artifact_manifest.model_family
             or str(model_row["version"]) != str(model_config.payload["version"])
             or model_row["config_hash"] != effective_model_hash
             or model_row["label_semantics"] != contract["label_semantics"]
@@ -785,9 +790,15 @@ class PipelineExecutionService:
             raise RuntimeError(
                 "Pinned registry model is incompatible or includes future training data"
             )
-        booster = lightgbm.Booster(model_file=str(model_path))
-        if booster.num_feature() != len(feature_names):
-            raise RuntimeError("LightGBM artifact feature dimension mismatch")
+        ridge = None
+        if artifact_manifest.model_family == "ridge":
+            ridge = load_numeric_ridge(artifact_manifest, model_path)
+        else:
+            import lightgbm
+
+            booster = lightgbm.Booster(model_file=str(model_path))
+            if booster.num_feature() != len(feature_names):
+                raise RuntimeError("LightGBM artifact feature dimension mismatch")
         start_date = self.candidate_history_start(target_date)
         export = HistoricalQlibExportService(self.database).export(
             start_date=start_date,
@@ -797,11 +808,32 @@ class PipelineExecutionService:
             decision_cutoff=backfill_cutoff(target_date),
             input_context=input_context,
         )
+        research_ids = None
         with self.database.connect() as connection:
             context = connection.execute(
-                "SELECT cutoff_at FROM ops.execution_context WHERE execution_context_id = %s",
+                "SELECT cutoff_at,config_version,knowledge_mode FROM ops.execution_context "
+                "WHERE execution_context_id = %s",
                 (export.execution_context_id,),
             ).fetchone()
+            if context is not None and context.get("config_version") == POLICY_VERSION:
+                from sp500_candidate_engine.analytics.source_repository import SourceRepository
+                from sp500_candidate_engine.selection.eligibility import read_selection_eligibility
+
+                if (
+                    model_purpose != "MEDIUM_20D"
+                    or context.get("knowledge_mode") != "HISTORICAL_RECONSTRUCTION"
+                ):
+                    raise RuntimeError("Research eligibility is reconstruction MEDIUM_20D only")
+                members, gates = read_selection_eligibility(
+                    SourceRepository(connection),
+                    execution_context_id=export.execution_context_id, target_session=target_date,
+                )
+                research_ids = {
+                    str(member["instrument_id"]) for member in members
+                    if not gates[member["instrument_id"]]
+                }
+                if len(research_ids) < 20:
+                    raise RuntimeError("Research eligibility has fewer than 20 admissible members")
         if context is None or context["cutoff_at"] > backfill_cutoff(target_date):
             raise RuntimeError("Inference export context exceeds the requested decision cutoff")
         cutoff_at = context["cutoff_at"]
@@ -827,6 +859,10 @@ class PipelineExecutionService:
         )
         target_timestamp = pd.Timestamp(target_date)
         eligible = membership[target_timestamp]
+        if research_ids is not None:
+            eligible = eligible.intersection({
+                f"I{uuid.UUID(value).hex.upper()}" for value in research_ids
+            })
         complete_prices = prices[["open", "close"]].notna().all(axis=1)
         history_counts = complete_prices.groupby(level="instrument").sum()
         target_features = features.loc[
@@ -842,7 +878,10 @@ class PipelineExecutionService:
         if target_features.empty:
             raise RuntimeError("No eligible candidates have complete warm-up history and features")
         prediction = pd.Series(
-            booster.predict(target_features.to_numpy(), num_threads=1),
+            (
+                ridge.predict(target_features) if ridge is not None
+                else booster.predict(target_features.to_numpy(), num_threads=1)
+            ),
             index=target_features.index,
             name="score",
         )
@@ -875,6 +914,13 @@ class PipelineExecutionService:
             relaxed_sector_cap=int(policy_payload["relaxed_sector_cap"]),
         )
         selected = select_candidates(scores=scores, metadata=candidate_metadata, policy=policy)
+        if research_ids is not None:
+            from dataclasses import replace
+
+            selected = replace(selected, candidates=tuple(
+                replace(candidate, reason_codes=(*candidate.reason_codes, CLASSIFICATION))
+                for candidate in selected.candidates
+            ))
         generated_at = datetime.now(UTC)
         with self.database.connect() as connection, connection.transaction():
             score_repository = ScoreRepository(connection)
@@ -920,6 +966,10 @@ class PipelineExecutionService:
             model_status=str(model_row["promotion_status"]),
             promotion_gate_passed=False,
         )
+        if research_ids is not None:
+            payload["eligibility_policy"] = POLICY_VERSION
+            payload["eligibility_classification"] = CLASSIFICATION
+            payload["official_historical_state_verified"] = False
         candidate_dir = self.workspace_dir / "data" / "output" / "candidates"
         candidate_dir.mkdir(parents=True, exist_ok=True)
         candidate_path = candidate_dir / f"{target_date}-{selection_run_id}.json"

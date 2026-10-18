@@ -1,10 +1,11 @@
 # Historical MEDIUM_20D challengers (non-promoting)
 
 This is a **model-training** reconstruction seam, not an operational replay, a weekly
-promotion retry, or a candidate/portfolio runner. Implemented and unit tested; the
+promotion retry, or a portfolio runner. The separately approved research-only DAILY
+eligibility/inference extension is described below. Implemented and unit tested; the
 explicit Oct9 Sunday alternative below has a verified local **SHADOW** artifact, not
 a deployment or promotion. No provider collection, Azure mutation, active assignment, live
-environment binding, weekly-v1 run, candidate, or report is changed by this implementation.
+environment binding, weekly-v1 run, existing candidate, or report is changed.
 
 ## Contract and isolation
 
@@ -20,10 +21,9 @@ environment binding, weekly-v1 run, candidate, or report is changed by this impl
   namespace prevents model-registry upserts from touching previous weekly-v1 exports/models.
   Reusing a UUID/output directory or derived DB context fails before another fit.
 - It reuses `HistoricalQlibExportService`, raw Alpha158, the existing purged walk-forward
-  evaluation, Ridge/LightGBM fitting, registry, weekly-v2 evaluator, and schema-v2 packaging.
-  There is no shortcut model or custom estimator. As with the existing deployable artifact
-  contract, if the winning shadow model is not LightGBM, packaging **fails** rather than
-  relabelling Ridge weights or silently substituting another model.
+  evaluation, Ridge/LightGBM fitting, registry and weekly-v2 evaluator. LightGBM keeps
+  byte-compatible schema-v2 packaging; the user-approved actual Ridge winner uses the
+  data-only schema-v3 contract below. Neither family is substituted for the winner.
 - All features/evaluation rows end at the historical anchor. Only matured training and
   evaluation labels enter fitting/evaluation; the latest inference date does **not** need
   its forward 20-session label. Final train/validation labels are purged at their boundary.
@@ -37,7 +37,7 @@ environment binding, weekly-v1 run, candidate, or report is changed by this impl
   `passed`, thresholds and `enforced=false` remain visible. Coverage >= 0.80, >= 3 test
   blocks, finite required metrics, source/PIT, purpose, feature dimensions and artifact
   hashes remain enforced. No current incumbent is queried or claimed beaten.
-- Output is a local isolated schema-v2 manifest/weights plus `reconstruction.json`,
+- Output is a local isolated versioned manifest/weights plus `reconstruction.json`,
   bound by model ID and both artifact hashes. CLI also prints the provenance SHA256.
   Only SHADOW registrations are created. The seam never calls weekly finalization,
   promotion-decision writes, champion updates, CAS, active assignment, smoke or rollback.
@@ -53,7 +53,8 @@ evidence. Operational replay continues to reject late observations and new artif
 ### Certified-only issuer quarantine (isolated reconstruction)
 
 `certified_scope.py` supports a conservative data-quality subset without changing
-`SourceRepository` or ordinary source-time semantics:
+ordinary source-time semantics. The separately approved research-policy dispatch in
+`SourceRepository` is explicit and does not alter its untagged/default state query:
 
 - Determine exclusions only from the immutable proof matrix and issuer ownership, never
   from prices, labels, model scores or later outcomes. APH, CVNA, DD, FTV, HON, LEN, MNST,
@@ -88,15 +89,84 @@ evidence. Operational replay continues to reject late observations and new artif
 Actual Sep25 and Oct2 fits each registered momentum/Ridge/LightGBM SHADOW baselines.
 LightGBM coverage was `147711 / 151911 = 0.972352232557221`, with 15 test blocks.
 Both unchanged shadow comparisons selected Ridge (Rank IC `-0.0058873788`) over
-LightGBM (`-0.0071800492`). Consequently the existing LightGBM-only serving package gate
-stopped both bindings. Do not force the LightGBM row or silently serve Ridge.
+LightGBM (`-0.0071800492`). The initial LightGBM-only serving gate stopped both bindings.
+Subsequently the user explicitly selected the **actual winning Ridge**, not LightGBM
+substitution. Both existing fitted winners are now bound without another fit.
 
-Candidate readiness is a separate failed gate: existing as-of `instrument_state` rows
+Official-reference candidate readiness was a separate failed gate: existing `instrument_state`
+rows
 are zero for Sep30–Oct8, where at least 20 candidate-eligible instruments are required.
 The two training contexts are explicitly **training-only, not candidate-ready**; no
 listing-state inference, current-metadata backdating or reference-time bypass was used.
 Oct9 has 503 globally valid states. A trained weight file is not permission to bypass
-either the serving-family or candidate-reference gate.
+either the serving-family or candidate-reference gate. The later research-only policy is
+an explicit, differently named eligibility contract, not a claim those official rows exist.
+
+### Actual Ridge serving (schema v3)
+
+- Model IDs remain `861b5f38-f10c-565f-989d-7253d34c13f5` (Sep25) and
+  `3fc6ebf4-03ee-5624-bfab-cd259fe2accb` (Oct2). SHADOW, source/export bindings,
+  original checkpoint hashes, actual Oct18 fit times, and selected metrics are unchanged.
+- `ridge.json` contains only fitted numeric arrays: median-imputer statistics,
+  StandardScaler means/scales, Ridge coefficients/intercept, dtypes and exact feature order.
+  The supported contract requires `keep_empty_features=true`, no missing indicators,
+  and centering/scaling enabled; empty training columns retain their fitted zero statistic
+  and scale. Unsupported transformations, nonfinite arrays, invalid scales, dimensions,
+  changed feature order, infinities and invalid JSON fail closed. Prediction never fits.
+- Schema v3 adds `model_family=ridge` and `training_artifact_sha256`. The latter binds
+  the **original registered joblib checksum**; `model_sha256` binds the separate safe JSON.
+  The original registry row/URI/hash is not rewritten or renamed. Existing schema v2
+  serialization, LightGBM loader, live model301785 and app bindings stay unchanged.
+  Generic packaging requires explicit `allow_ridge=True` (CLI `--allow-ridge`); the
+  reconstruction binder opts in, but normal weekly packaging defaults do not change.
+- Serving and downloads never deserialize pickle/joblib. The bounded offline conversion
+  used only the two user-approved, locally trained, registry-hash-verified checkpoints.
+  New reconstruction training exports arrays directly from the fitted in-memory pipeline.
+  The packager also verifies the retained checkpoint bytes against the registered hash.
+- Each actual conversion compared 520 predictions against the original sklearn pipeline:
+  real stored Alpha158 rows, all/partial NaNs, zero values and float32/float64. Maximum
+  absolute differences were `4.0978193283081055e-8` and `6.705522537231445e-8`
+  (rtol `1e-6`, atol `1e-7`); fitted statistics were copied, not recomputed.
+- `bind_fitted_challenger` revalidates frozen source/context/export checksums, registered
+  selected-model identity, unchanged winner comparison, retained weekly-v2 gates, source,
+  label and processor clocks before packaging. It performs no training or DB writes.
+  Binding-time source hashes are not contemporaneous training-code attestations for old
+  checkpoints. New fits capture code hashes before fitting; retained checkpoints explicitly
+  record that limitation. The first two schema-v3 bindings preserve their immutable bytes;
+  their separately pinned conversion audit clarifies the legacy `training_code_sha256`
+  field as binding-time hashes, not evidence that the newer serving code trained them.
+- New registry: `data\output\historical-models\execution-20261018\artifact-registry-ridge-v1.json`.
+  The earlier accepted `artifact-registry.json` remains immutable. The new registry's READY
+  means **artifact admission**, not permission to ignore prediction-context eligibility.
+
+### Approved research-only DAILY eligibility (2026-10-18)
+
+The historical status table is like a dated identity/status record: existing dated prices
+and S&P500 membership do not themselves supply that missing official record. The approved
+alternative explicitly uses those two existing facts to define **research eligibility**;
+it does not manufacture an old ACTIVE/LISTED record.
+
+- Policy `historical-membership-price-research-v1`; classification
+  `EXPERIMENTAL_RESEARCH_ELIGIBILITY`; `official_historical_state_verified=false`.
+  It requires an explicitly new DAILY context with this config version, one certified
+  immutable scope, `HISTORICAL_RECONSTRUCTION`, and exact D+1 NY05:30 cutoff.
+  Operational replay, untagged contexts, normal timers and weekly defaults do not opt in.
+- Original dated membership/issuer identity remains unchanged. Admission requires the
+  exact target-session, manifest-bound valid UNADJUSTED OHLCV with publication before
+  cutoff, known adjustment flags, no conflicting versions and ordinary action/quality gates.
+  The nine-issuer quarantine remains context-scoped; all 503 original members remain in
+  membership/audit, while 494 satisfy source-quality eligibility. Quant additionally
+  retains complete warm-up/finite-feature gates. No feature/label fill is added.
+- New contexts use actual NOW generation/observation times; `ref.instrument_state` and
+  all original source rows/timestamps are untouched. Official status/exchange stay null,
+  not inferred from a current record. Each Quant candidate carries the experimental reason
+  code, and the result/contract/context retain the explicit classification.
+- Both Quant and independent LLM consume the same source-quality eligibility gates.
+  The LLM records a non-rubric UNIVERSE eligibility audit link, **not a fabricated
+  INSTRUMENT_STATE** link. Prices and Quant scores never become v6 rubric evidence.
+- Freezing the context does not execute LLM/Fusion or external consumers. Internal Quant
+  execution uses an explicitly pinned new registry in child-process environment only.
+  No production deployment or active assignment is needed for local internal stages.
 
 Use actual preceding-weekend data anchors, **not** the scheduler's weekend ISO-week string:
 

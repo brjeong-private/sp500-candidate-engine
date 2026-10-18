@@ -19,6 +19,7 @@ from sp500_candidate_engine.analytics.artifacts import (
     MODEL_PURPOSES,
     ArtifactManifest,
     ArtifactValidationError,
+    load_numeric_ridge,
     sha256_bytes,
     sha256_file,
 )
@@ -218,6 +219,11 @@ class ModelArtifactLoader:
         model_path = destination / manifest.model_file
         if not model_path.is_file() or sha256_file(model_path) != manifest.model_sha256:
             return None
+        if manifest.model_family == "ridge":
+            try:
+                load_numeric_ridge(manifest, model_path)
+            except ArtifactValidationError as exc:
+                raise ModelArtifactLoadError(str(exc)) from exc
         return MaterializedModelArtifact(
             manifest=manifest,
             manifest_path=manifest_path,

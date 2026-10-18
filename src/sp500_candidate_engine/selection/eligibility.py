@@ -40,7 +40,7 @@ def read_selection_eligibility(
     gate_reasons = {}
     for member in members:
         instrument_id = uuid.UUID(str(member["instrument_id"]))
-        reasons: list[str] = []
+        reasons: list[str] = list(member.get("research_gate_reasons", ()))
         if unmapped_blocking:
             reasons.append("UNMAPPED_BLOCKING_QUALITY_ISSUE")
         selected_bars = [bar for bar in bars if str(bar["instrument_id"]) == str(instrument_id)]

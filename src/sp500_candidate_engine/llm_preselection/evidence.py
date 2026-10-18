@@ -396,6 +396,10 @@ class EvidencePacketBuilder:
         }
         if self.config.event_policy:
             packet["execution_context_id"] = str(execution_context_id)
+        if member.get("eligibility_policy") is not None:
+            packet["identity"]["eligibility_policy"] = member["eligibility_policy"]
+            packet["identity"]["eligibility_classification"] = member["eligibility_classification"]
+            packet["identity"]["official_historical_state_verified"] = False
         if self.config.enrichment is not None:
             packet["identity"]["cik"] = self.repository.read_issuer_cik(issuer_id=issuer_id)
         packet = _json_value(packet)  # type: ignore[assignment]
@@ -605,17 +609,28 @@ class EvidencePacketBuilder:
                 },
                 member.get("effective_at"),  # type: ignore[arg-type]
             ),
-            (
-                "INSTRUMENT_STATE",
-                str(member["instrument_state_id"]),
+        ]
+        if member.get("eligibility_policy") is not None:
+            # Eligibility audit only: this is not official instrument-state or rubric evidence.
+            rows.append((
+                "UNIVERSE",
+                f"EXPERIMENTAL_RESEARCH_ELIGIBILITY:{member['eligibility_policy']}",
+                {
+                    "source_snapshot_id": member["research_eligibility_snapshot_id"],
+                    "source_available_at": member["research_information_available_at"],
+                    "observed_at": member["research_generated_at"],
+                },
+                None,
+            ))
+        else:
+            rows.append((
+                "INSTRUMENT_STATE", str(member["instrument_state_id"]),
                 {
                     "source_snapshot_id": member["state_snapshot_id"],
                     "source_available_at": member["source_available_at"],
                     "observed_at": member.get("observed_at"),
-                },
-                None,
-            ),
-        ]
+                }, None,
+            ))
         for kind, items, key in (
             ("NEWS", news, "event_revision_id"),
             ("EARNINGS", earnings, "event_revision_id"),

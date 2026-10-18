@@ -562,6 +562,16 @@ against the registered model, plus artifact/manifest/config hashes, training cut
 and feature dimension/order. Current inference supports raw, unprocessed Alpha158.
 Missing or invalid artifacts fail closed without cross-purpose fallback.
 
+The isolated, explicitly approved MEDIUM_20D Ridge winner also supports schema v3:
+`model_family=ridge`, safe numeric `ridge.json`, and `training_artifact_sha256` binding
+the unchanged registered fitted checkpoint. Serving never loads pickle/joblib or refits
+preprocessing. Exact imputer/scaler arrays, dtypes, feature order and coefficients are
+validated; schema-v2 LightGBM bytes remain compatible. Packaging Ridge requires explicit
+`--allow-ridge`; normal weekly packaging defaults are unchanged. Historical overrides
+also require separately checksum-bound reconstruction provenance and matching quality scope.
+See [historical training](../src/sp500_candidate_engine/analytics/HISTORICAL-TRAINING.md).
+No live assignment or appsetting changes are implicit.
+
 Provision the selected registered artifact before preparing the deployment ZIP:
 
 ```powershell

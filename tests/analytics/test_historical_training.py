@@ -238,6 +238,10 @@ def setup_service(
             "snapshot_source_available_at_max": CUTOFF,
         },
     ))
+    monkeypatch.setattr(module, "_validate_sources", lambda *_: {
+        "normalized_future_revision_count": 0,
+        "snapshot_source_available_at_max": CUTOFF,
+    })
     config_root = ROOT / "config" / "analytics"
     model = load_versioned_config(config_root / "model_lightgbm_20d_v1.yaml")
     label = load_versioned_config(config_root / "label_forward_return_20d_v1.yaml")
@@ -249,6 +253,8 @@ def setup_service(
         "processor_version_id": None, "label_semantics": "RAW_STOCK_20D_RETURN",
         "model_purpose": "MEDIUM_20D", "return_policy": "PRICE_RETURN",
         "promotion_status": "SHADOW",
+        "export_run_id": export_id,
+        "metrics": metrics,
         "split_spec": {
             "fit_at": datetime.now(UTC).isoformat(),
             "fit_completed_at": datetime.now(UTC).isoformat(),
@@ -271,7 +277,23 @@ def setup_service(
         pd.DataFrame({f"feature::F{i}": [1.0] for i in range(158)}).to_parquet(
             path / "training_dataset.parquet",
         )
-        connection.execute.return_value.fetchone.return_value = registered
+        def execute(sql, _params):
+            row = registered
+            if "FROM analytics.qlib_export_run" in sql:
+                row = {
+                    "execution_context_id": context_id, "status": "SUCCEEDED",
+                    "artifact_hash": "c" * 64,
+                }
+            elif "FROM ops.execution_context" in sql:
+                row = {
+                    "input_manifest_id": req.input_manifest_id, "cutoff_at": CUTOFF,
+                    "knowledge_mode": "HISTORICAL_RECONSTRUCTION",
+                }
+            cursor = MagicMock()
+            cursor.fetchone.return_value = row
+            return cursor
+
+        connection.execute.side_effect = execute
         return TrainingWorkflowSummary(
             "experiment", path, export_id, model_id, "lightgbm",
             {"lightgbm": metrics}, "MEDIUM_20D", 20, "PRICE_RETURN", False,
@@ -454,6 +476,9 @@ def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors
 
         def save(self, path: Path) -> None:
             path.write_text("mock model", encoding="utf-8")
+
+        def save_numeric(self, path: Path, **_: object) -> None:
+            path.write_text("mock numeric model", encoding="utf-8")
 
     def mock_train(**kwargs: object) -> MockModel:
         lgb_fits.append(kwargs)

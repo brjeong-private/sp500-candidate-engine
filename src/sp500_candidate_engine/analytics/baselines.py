@@ -65,3 +65,16 @@ class RidgeBaseline:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.pipeline, path)
+
+    def save_numeric(self, path: Path, *, training_artifact_sha256: str) -> None:
+        from sp500_candidate_engine.analytics.artifacts import _write_immutable
+        from sp500_candidate_engine.analytics.ridge_artifact import export_fitted_ridge
+
+        if self.pipeline is None:
+            raise RuntimeError("Ridge baseline is not fitted")
+        content = export_fitted_ridge(
+            self.pipeline,
+            feature_names=tuple(self.pipeline.feature_names_in_),  # type: ignore[attr-defined]
+            training_artifact_sha256=training_artifact_sha256,
+        )
+        _write_immutable(Path(path), content)

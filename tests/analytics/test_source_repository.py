@@ -245,14 +245,14 @@ def test_read_filings_enforces_acceptance_and_observation_cutoff() -> None:
 
 
 def test_read_universe_requires_manifested_active_point_in_time_state() -> None:
-    connection = _Connection([[]])
+    connection = _Connection([[], []])
 
     SourceRepository(connection).read_universe_members(  # type: ignore[arg-type]
         execution_context_id=uuid.uuid4(),
         target_session=date(2026, 1, 9),
     )
 
-    sql = connection.sql[0]
+    sql = connection.sql[1]
     assert "uv.source_snapshot_id = imm.source_snapshot_id" in sql
     assert "state.source_snapshot_id = imm.source_snapshot_id" in sql
     assert "uv.announced_at <= ec.cutoff_at" in sql

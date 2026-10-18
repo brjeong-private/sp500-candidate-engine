@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | Winning Ridge Serving | 실제 Sep25·Oct2 Ridge winner의 fitted imputer·scaler·계수·feature 순서를 numeric JSON schema-v3로 보존하고 기존 checkpoint·모델 identity와 결합해 재학습 없이 parity를 검증했으며 LightGBM schema-v2·기존301785·수락 registry·live 할당은 변경하지 않았다.
+- 2026-10-18 | Explicit Research Eligibility | 승인된 연구 전용 DAILY context에서만 기존 해당일 UNADJUSTED 가격·당시 S&P500 membership으로 적격성을 판단하고 9개 issuer 격리·Quant/LLM 공통 gate와 공식 과거 상태 미검증 표식을 보존하며 원본 상태·시각·정규 운영을 변경하지 않는다.
 - 2026-10-18 | Historical Research Eligibility | 추가 수집 없이 기존 해당일 가격·S&P500 구성으로 과거 연구용 적격성을 판단하는 사용자 승인 범위와 공식 상태 미검증·시점 보존·정규 운영 불변 조건을 공통 하네스에 명시했다.
 - 2026-10-18 | Certified Historical Scope | 12개 proof와 21개 원본을 보존하고 미인증 9개 issuer 전체를 새 certified-only 입력에서 격리해 기존 membership·일반 SourceRepository 시간 규칙을 유지했으며 원래 PIT cohort 및 503 reference 분모와 scope hash admission을 검증했다.
 - 2026-10-18 | Earlier Weekly Actual Fits | Sep25·Oct2 모델을 실제 SHADOW 학습해 coverage 147711/151911·15 test block을 기록했으나 기존 winner가 Ridge여서 LightGBM serving binding은 중단했으며 과거 reference-state 0/최소20 gate·기존301785 모델·수락 registry·active/weekly 상태는 변경하지 않았다.
