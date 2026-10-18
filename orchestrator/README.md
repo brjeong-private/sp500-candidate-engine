@@ -19,6 +19,10 @@ New York 주말 gate, weekly parent/model orchestration, Container Apps Job star
 focused test는 코드로 구현·검증됐다. 2026-10-17 주간 전용 이메일 변경을 포함한
 오케스트레이터를 Azure에 배포하고 주간 메일만 활성화했다. 이 작업에서 실제 새
 학습 Job이나 승격을 실행하지는 않았다. 아래에서 코드 검증과 배포 상태를 구분한다.
+2026-10-18에는 코드 revision `7f12171`의 Backend·학습 Job 이미지·Function을 함께
+배포해 아래 20D 전용 주간 정책·terminal 재실행 차단·정규 일일 Fusion gate를 적용했다.
+배포 식별자와 비학습 smoke 결과는
+[주간 후속 확인 문서](../WEEKLY-MODEL-FOLLOW-UP-2026-W42.md#51-운영-배포-증적)에 기록했다.
 
 ## Azure 구성
 
@@ -61,8 +65,8 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
    검사가 업무 중복을 막는다. 전환 전 dual 부모가 활성 상태이면 새 실행을 시작하지 않는다.
    기존 dual orchestration과 `SHORT_5D` 수동·API 모델 선택은 호환 경로로 유지한다.
    신규 정규 실행은 Fusion 전용이며 `FUSION_ENABLED`가 누락되거나 `false`이면
-   설정 오류로 시작을 차단한다. 이 타이머 차단은 로컬 변경이며 이번 작업에서
-   배포하지 않았다. 운영 Fusion 활성 설정은 읽기 전용으로 재확인했다.
+   설정 오류로 시작을 차단한다. 이 타이머 차단은 2026-10-18 Function 배포에 포함됐으며
+   기존 운영 Fusion 활성 설정은 변경하지 않았다.
 2. Candidate `exchange-sessions` 조회로 XNYS 거래일인지 확인한다.
 3. `DefaultAzureCredential`로 Candidate/Portal App Service, Candidate PostgreSQL,
    Portal MySQL을 읽고 중지 상태이면 `start`한다. TradingAgents Container App은
@@ -143,9 +147,10 @@ backend 계약이고 Durable history가 active pointer를 대신하지 않는다
 신규 Backend 기본 정책은 `weekly-v2-20d-performance-suspended`다. 다음 별도 지시까지
 유한한 성능 메트릭의 절대/상대 기준만 강제하지 않고 데이터·artifact·활성화 무결성은
 유지한다. 결과 메일에는 확인된 policy version과 성능 기준 임시 중지를 표시한다.
-기존 `weekly-v1` run은 원래 판정을 유지한다. 이번 정책과 terminal 재실행 차단의 운영
-적용에는 Backend·학습 Job·Function 배포가 필요하며, 2026-10-18 근거 조회 Backend
-hotfix 배포에 이 변경이 포함됐다는 뜻은 아니다.
+기존 `weekly-v1` run은 원래 판정을 유지한다. 이번 정책과 terminal 재실행 차단은
+2026-10-18 Backend·학습 Job·Function 전체 배포로 운영에 반영됐다.
+기존 설정·Durable history는 보존했으며 실제 재학습·승격이나 종료된 이번 주 실행의
+재시작은 수행하지 않았다.
 
 모델 종결 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`, `PARTIAL_FAILED`, `TIMED_OUT`,
 `FAILED`다. 비거래일은 `SUCCEEDED`와 `skipped=true`로 기록한다.

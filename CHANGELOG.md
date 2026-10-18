@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | Full Application Release | main의 7f12171 전체 코드를 Backend·immutable 학습 이미지·Function에 배포해 20D 전용 주간 정책·성능 기준 임시 비강제·종료 실행 재시작 차단을 반영하고 기존 후보·근거·운영 설정·B2·private 네트워크를 보존했으며 실제 재학습·승격은 실행하지 않았다.
+- 2026-10-18 | Weekly Deployment Record | 공통 하네스·주간 설계·오케스트레이터 가이드·W42 후속 문서의 미배포 상태를 실제 배포 결과로 갱신하고 배포 ID·image digest·비학습 정책 검증과 신규 재학습 E2E 미실행 경계를 기록했다.
 - 2026-10-18 | Repository Release Preparation | 사용자 승인에 따라 저장소 전체 변경과 후속 문서를 함께 커밋·푸시하고 동일 코드의 Backend·학습 Job·오케스트레이터 배포를 준비했으며 비밀값·실행 데이터와 기존 리소스 SKU·네트워크 정책은 변경 대상에서 제외했다.
 - 2026-10-18 | Weekly 20D Only | 신규 주말 Durable 입력·자동 예약·기본 주간 접수를 MEDIUM_20D로 한정하고 기존 두 목적 history·v1 run 호환과 일일 Fusion을 보존했으며 배포하지 않았다.
 - 2026-10-18 | Temporary Performance Gate Suspension | 사용자 확인에 따라 별도 v2 정책에서 다음 지시까지 네 성능 메트릭의 절대·상대 기준만 비강제하고 실제 판정·enforced 증적·정책 알림을 기록하며 데이터·finite 지표·artifact·활성화 검사는 유지했다.

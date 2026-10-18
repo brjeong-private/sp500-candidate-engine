@@ -96,12 +96,37 @@ ORDER BY w.model_purpose, w.anchor_session;
 - coverage ≥ 0.80·test_blocks ≥ 3, 유한한 지표·incumbent 지표의 유효성,
   point-in-time 입력·특징·목적·artifact 검증, immutable upload·CAS·smoke·rollback은 유지한다.
 - 과거 weekly-v1 파일·판정은 변경하지 않는다. 기존 REJECTED run을 다시 학습하거나 소급 승격하지 않는다.
-- 이번 변경은 **코드·정책에 반영했으며 아직 운영 배포하지 않았다.**
-  신규 정책을 이해하는 학습 Job 이미지, Backend, 20D 입력을 만드는 Function을 맞춰 배포해야 한다.
-  앞선 기간검색 근거 조회 Backend hotfix와는 다른 변경이다.
+- 이번 변경은 **2026-10-18 Backend·학습 Job 이미지·Function 운영 배포를 완료했다.**
+  앞선 기간검색 근거 조회 Backend hotfix뿐 아니라 신규 정책과 terminal 재실행 차단도 포함한다.
+  실제 재학습·승격이나 이번 주 REJECTED run 재실행은 수행하지 않았다.
 
 모델 업데이트가 끝나도 자동으로 성능 기준을 되살리지 않는다. 사용자 별도 지시가 필요하다.
 성능 기준 비강제는 실제 예측력 개선이나 수익을 보장하지 않으며 미달 모델도 승격될 수 있다.
+
+### 5.1 운영 배포 증적
+
+배포 원본은 `main`에 푸시한 `7f12171fa166ccc55b7afe44a0a45c6414da168d`의
+깨끗한 Git archive다. 뒤따르는 문서 갱신 commit은 배포 코드 변경이 아니다.
+
+| 대상 | 배포 식별자 | 확인 결과 |
+|---|---|---|
+| Candidate Backend | `6c239663-d55f-42dc-af6e-e3ce8dbd9ba4` | 배포 성공, live·ready 정상, 배포 artifact의 기본 정책·evaluator·v2 YAML 원본 hash 일치 |
+| 학습 Container Apps Job | `candidate-training:7f12171` | 아래 immutable digest로 template 갱신 성공, 기존 command·환경·리소스·identity 보존 |
+| Function 오케스트레이터 | `a2843ed9-b6f4-4d06-b90b-16fcac0a229e` | private Storage를 유지한 remote-build OneDeploy 성공, host Running·함수 24개 indexing |
+| 비학습 이미지 smoke | `sp500-candidate-training-vzbmfij` | Succeeded, 실제 학습 모듈 hash·20D 전용 정책·성능 비강제·coverage 미달 거부 확인 |
+
+학습 이미지 digest:
+`sha256:f0133c29fb79635bb893fdfede88ec7186d11e0bad45dadd1d10b9cb30ca2d7e`.
+Job은 변경 가능한 tag 대신 이 digest를 참조한다. 기본 cloud builder의 private ACR
+접근이 차단되어 기존 private-network Kudu 경로에서 동일 의존성의 기존 image에
+커밋된 코드·설정 layer를 게시했다. registry 공개 접근이나 방화벽은 완화하지 않았다.
+
+10월15·16일 Fusion 후보는 각각 20개와 기존 v1 응답 hash를 유지했고,
+설명 API는 각각 `RECORDED`·20개 및 기간검색 증적 5개·10개를 반환했다.
+Backend·Function 설정, FC1 host/network, Job의 image 외 template·configuration·identity,
+private ACR 정책과 두 App Service의 B2·1 instance가 배포 전과 같음을 확인했다.
+DB 크기·데이터, 모델 assignment, 외부 Portal 앱은 이 배포에서 변경하지 않았다.
+비학습 smoke는 evaluator만 검증하며 신규 주간 재학습·승격·활성화 E2E를 실행한 것이 아니다.
 
 ## 6. 나중에 follow-up할 내용
 

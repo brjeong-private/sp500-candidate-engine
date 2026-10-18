@@ -67,8 +67,9 @@ Rank IC·구간 Rank IC·Top-10 순수익률·최대낙폭의 절대/상대 성�
 수치는 계속 계산·저장하고 실제 통과 여부와 `enforced=false`를 구분한다.
 coverage·test block 수·finite 지표·시점/입력/목적/artifact 무결성·CAS·smoke·rollback은
 유지한다. 과거 `weekly-v1` 판정이나 이미 종료한 이번 주 run을 수정·재실행·강제 승격하지 않는다.
-이 정책 변경은 코드·설정 변경이며 운영 적용에는 일치하는 Backend·학습 Job·오케스트레이터
-배포가 필요하다. 이번 주 미달 내역과 복구 절차는
+2026-10-18 코드 revision `7f12171`의 Backend·학습 Job 이미지·오케스트레이터 운영
+배포를 완료했다. 실제 재학습·승격은 실행하지 않았으며 종료된 이번 주 run을 재시작하지 않는다.
+이번 주 미달 내역·복구 절차·배포 증적은
 [`WEEKLY-MODEL-FOLLOW-UP-2026-W42.md`](WEEKLY-MODEL-FOLLOW-UP-2026-W42.md)에 남긴다.
 
 독립 후보 실행은 기존 execution context에서 QUANTITATIVE·LLM_PRESELECTION·FUSION
