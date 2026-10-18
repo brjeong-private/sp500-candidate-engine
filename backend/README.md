@@ -45,8 +45,8 @@ OpenAPI and Swagger UI are available at `/openapi.json` and `/docs`.
 | GET | `/api/v1/fusion-selections` | Latest successful Fusion per date, optionally pinned to Quant run and policy/hash |
 | GET | `/api/v1/fusion-selections/{run_id}` | Inspect one Fusion run, including failed/shortfall |
 | GET | `/api/v1/fusion-selections/{run_id}/handoff` | Strict versioned envelope for a successful final Top 20 |
-| GET | `/api/v2/fusion-selections` | Local development: Fusion results with reasons from pinned Quant/LLM sources |
-| GET | `/api/v2/fusion-selections/{run_id}` | Local development: exact Fusion result and source reasons, including legacy runs |
+| GET | `/api/v2/fusion-selections` | Fusion results with reasons from pinned Quant/LLM sources |
+| GET | `/api/v2/fusion-selections/{run_id}` | Exact Fusion result and source reasons, including legacy runs |
 | GET | `/api/v2/fusion-selections/{run_id}/explanations` | Immutable typed Quant/LLM/RRF explanations for the exact Fusion run; legacy `NOT_RECORDED` |
 | POST | `/api/v1/candidate-stage-runs` | Run exactly one Quant, LLM or Fusion stage from a frozen context; API key + Idempotency-Key |
 | GET | `/api/v1/candidate-stage-runs/{stage_run_id}` | Authenticated stage status, contract/input hashes, result IDs and failure code |
@@ -62,8 +62,8 @@ not a manifest-constrained analytical input contract or historical trading repla
 
 ### Read semantics and pagination
 
-The v2 routes describe local changes, not deployed production endpoints. Production v1 remains
-unchanged. Source reasons can exist in PostgreSQL even when an older Fusion snapshot is absent;
+The v1 and v2 Fusion read routes are deployed. Source reasons can exist in PostgreSQL
+even when an older Fusion snapshot is absent;
 see [candidate tables and ER diagrams](../SELECTION-DATABASE-ER.md).
 Combined result/source-reason reads use the exact pinned source IDs and do not create snapshots.
 
@@ -75,6 +75,17 @@ pinned quantitative source internally, preserving its scores, candidates and
 integrity checks. This is logical deletion of the independent result, not
 physical erasure of evidence required by a retained Fusion result.
 
+Candidate responses expose `company_name`: Quant uses the scoring run's historical
+`ref.universe_member.security_name`, and LLM uses its stored candidate name.
+Both v1/v2 Fusion list and detail responses now also expose
+`candidates[].company_name`, resolved through the exact pinned Quant selection run,
+its scoring run and its historical universe version. This includes LLM-only final
+candidates; names are not restricted to the Quant Top 20 and never come from today's
+universe or a fresh provider lookup. The field is a read projection: no immutable
+Fusion JSONB, stored payload hash, scores, ranks or explanation snapshots are rewritten.
+The strict `fusion-top20-v1` handoff deliberately retains its original allowlist
+without `company_name`, keeping existing hashes, acknowledgement and retry identity.
+
 The v2 explanation endpoint is a single-run response, not a paginated list.
 It returns `schema_version`, Fusion/context/session/cutoff identity, `selection_status`,
 `failure_code`, recording `status`, and candidate identity/position/status/explanation.
@@ -82,7 +93,7 @@ Old runs return `NOT_RECORDED` with null explanations; reads never regenerate sn
 call an LLM, fetch current sources, or resubmit a handoff. Missing runs return 404;
 corrupt/missing new-contract snapshots return a logged 500 rather than a legacy fallback.
 Existing v1 reads/handoffs explicitly allowlist their original candidate fields.
-The new endpoint and cutoff harness require code deployment, but no new DDL.
+These read endpoints require no new DDL.
 
 Historical LLM evaluation is fenced by the frozen run `cutoff_at`, not the retry's wall clock
 or session-day midnight. Fresh inputs, screening lineage, cached packets and pre-model

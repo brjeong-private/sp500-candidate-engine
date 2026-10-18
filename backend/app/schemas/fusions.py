@@ -16,6 +16,7 @@ class FusionCandidate(ReadModel):
     instrument_id: UUID
     issuer_id: UUID
     ticker: str
+    company_name: str
     sector: str | None
     position: int = Field(ge=1, le=20)
     quant_rank: int | None = Field(default=None, ge=1, le=20)

@@ -39,7 +39,8 @@ def row():
         score = Fraction(2, 10 + position)
         candidates.append({
             "instrument_id": UUID(int=position), "issuer_id": UUID(int=position + 100),
-            "ticker": f"T{position}", "sector": f"S{position % 10}", "position": position,
+            "ticker": f"T{position}", "company_name": f"Historical Company {position}",
+            "sector": f"S{position % 10}", "position": position,
             "quant_rank": position, "quant_rank_overall": position + 100,
             "quant_predicted_return": -0.01 if position == 20 else 0.1,
             "llm_rank": position, "llm_assessment_rank": position + 10, "llm_score": 75.3571,
@@ -135,6 +136,18 @@ def test_api_handoff_and_independent_consumer_agree_on_exact_wire_contract(monke
     fusion_contract.verify_ack(ack(payload), payload, identities)
 
 
+def test_company_name_is_read_only_and_does_not_change_handoff_identity(monkeypatch):
+    stored = row()
+    monkeypatch.setattr(FusionReadRepository, "fetch", lambda *args: [copy.deepcopy(stored)])
+    repository = FusionReadRepository(MagicMock())
+    before = repository.handoff(RUN)
+    assert repository.get_run(RUN).candidates[0].company_name == "Historical Company 1"
+    assert all("company_name" not in candidate for candidate in before["candidates"])
+    stored["candidates"][0]["company_name"] = "A Different Display Name"
+    assert repository.handoff(RUN) == before
+    assert repository.get_run(RUN).payload_hash == stored["payload_hash"]
+
+
 def test_api_routes_serve_stored_run_and_reject_short_fusion(monkeypatch):
     application = FastAPI()
     application.state.database = MagicMock()
@@ -153,11 +166,18 @@ def test_api_routes_serve_stored_run_and_reject_short_fusion(monkeypatch):
         response = client.get(f"/api/v1/fusion-selections/{RUN}")
         assert response.status_code == 200
         assert len(response.json()["candidates"]) == 20
+        assert response.json()["candidates"][0]["company_name"] == "Historical Company 1"
+        assert "member.universe_version_id = scoring.universe_version_id" in calls[-1][0]
+        assert "source.selection_run_id = r.quant_selection_run_id" in calls[-1][0]
+        assert "quant_result_deletion" not in calls[-1][0]
         response = client.get(f"/api/v1/fusion-selections/{RUN}/handoff")
         assert response.status_code == 200
         assert response.json()["selection_type"] == "FUSION"
         response = client.get("/api/v1/fusion-selections", params={"date": str(DAY)})
         assert response.status_code == 200
+        assert response.json()["items"][0]["candidates"][0]["company_name"] == (
+            "Historical Company 1"
+        )
         assert calls[-1][1] == [None, DAY, DAY, 101]
         assert client.get(
             "/api/v1/fusion-selections", params={"model_purpose": "SHORT_5D"}

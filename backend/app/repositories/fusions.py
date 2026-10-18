@@ -44,7 +44,8 @@ _V1_FIELDS = frozenset({
 def _v1_run(row: dict) -> FusionRun:
     return FusionRun.model_validate({
         **row, "candidates": [
-            {key: value for key, value in candidate.items() if key in _V1_FIELDS}
+            {key: value for key, value in candidate.items()
+             if key in _V1_FIELDS or key == "company_name"}
             for candidate in row["candidates"]
         ],
     })
@@ -55,8 +56,17 @@ _COLUMNS = """
     r.policy_version, r.config_hash, r.rrf_k, r.requested_count, r.selected_count,
     r.union_count, r.status, r.failure_code, r.sector_cap_relaxed, r.provenance,
     r.payload_hash, r.created_at,
-    COALESCE((SELECT jsonb_agg(candidate.candidate ORDER BY candidate.position)
+    COALESCE((SELECT jsonb_agg(
+                  candidate.candidate || jsonb_build_object('company_name', member.security_name)
+                  ORDER BY candidate.position)
               FROM selection.fusion_candidate candidate
+              LEFT JOIN selection.selection_run source
+                  ON source.selection_run_id = r.quant_selection_run_id
+              LEFT JOIN analytics.scoring_run scoring
+                  ON scoring.scoring_run_id = source.scoring_run_id
+              LEFT JOIN ref.universe_member member
+                  ON member.universe_version_id = scoring.universe_version_id
+                 AND member.instrument_id = candidate.instrument_id
               WHERE candidate.fusion_run_id = r.fusion_run_id), '[]'::jsonb) AS candidates
 """
 

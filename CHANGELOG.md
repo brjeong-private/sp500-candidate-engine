@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-10-18 | Fusion Candidate Company Names | Fusion v1/v2 후보 목록·단건에 pinned Quant scoring의 역사적 universe 회사명을 추가하고 immutable 결과·설명·기존 handoff allowlist와 hash는 보존했다.
+- 2026-10-18 | September-October Quant Result Deletion | 9월30일~10월14일 MEDIUM_20D 독립 정량 11run·220후보를 논리 삭제하고 Fusion 검증에 필요한 후보·600개 사유·점수·모델·LLM 원천은 물리 보존했다.
+- 2026-10-18 | Quant Report Cleanup | 검증한 복구본을 유지한 채 해당 기간에 남아 있던 기존 정량 분석8회·작업80건·이벤트800건·dispatch80건·원본Blob80개만 삭제하고 Fusion 분석과 다른 리포트472개는 보존했다.
+- 2026-10-18 | Fusion Architecture Contract | Fusion 상세 아키텍처와 Backend 문서에 회사명 원천·읽기/전달 계약 분리·논리 삭제/원천 보존·외부 리포트 정리 경계와 실제 처리 수량·검증 불변식을 반영했다.
+- 2026-10-18 | Fusion Company API Production | 기존 운영 source와 일치하는 bundle에 조회 두 파일만 교체해 배포하고 성공 Fusion13회·회사명260개·handoff/선정근거 보존·삭제 Quant 공개0건과 B2·네트워크·App Settings 불변을 확인했다.
 - 2026-10-18 | Approved Partial Paper Evaluation | 사용자 승인 218/220개 보고서의 본문·등급·hash를 읽기 전용으로 검증해 누락 2건을 신호 없음으로 분리하고 기존 금액·체결 규칙의 비용 제외/편도0.1% 가상 손익·상세 한국어 보고서·원장·출처/모델 계보·오프라인 재현 증적을 gitignore 대상에 저장했으며 원래220개 gate·원천·리소스 설정은 변경하지 않았다.
 - 2026-10-18 | October Candidate Replay Completion | 11거래일의 Quant·LLM·Fusion 각220개와 정상 분석일자 전량 ACK를 완료하고 백업된 기존 Quant13run·130후보·260사유만 추가 정리했으며 원래 scoring16개·주차 모델·두 registry와 보고서 결과 제외 범위를 보존했다.
 - 2026-10-18 | Final Worker Capacity Restore | 모든 후보 작업 후 전역 큐의 안정적 0건을 확인해 임시3replica를 한 번만1replica·worker3으로 원복하고 실제 Healthy1개·기존 image/Multiple mode·양쪽 B2 유지·DB SKU 미변경을 기록했다.

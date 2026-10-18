@@ -395,7 +395,7 @@ def stored_read_row(database):
     run = database.connection.tables["selection.fusion_run"][-1]
     row = {key: value for key, value in run.items() if key in FusionRun.model_fields}
     row["candidates"] = [
-        copy.deepcopy(item["candidate"])
+        {**copy.deepcopy(item["candidate"]), "company_name": "Historical Company"}
         for item in database.connection.tables.get("selection.fusion_candidate", [])
         if item["fusion_run_id"] == run["fusion_run_id"]
     ]
