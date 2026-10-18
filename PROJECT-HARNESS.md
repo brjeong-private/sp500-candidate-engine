@@ -357,6 +357,11 @@ LLM score는 예상 수익률·확률·confidence로 표현하지 않는다.
 최종 instrument·issuer·원천 목록 순위·RRF·position·품질·선정/제외 사유를 보존한다.
 run·candidate·필수 audit는 단일 transaction으로 저장하고 입력 불일치와 중복은 fail closed한다.
 원천 두 결과·Fusion 결과·외부 전달 상태를 구분하며 전달 실패로 성공 후보를 덮어쓰지 않는다.
+사용자가 Fusion 보존과 독립 정량 결과 삭제를 함께 요청하면
+`selection.quant_result_deletion`에 run 단위 삭제 표시를 남긴다. 정량 공개 조회는 날짜·범위·
+명시적 run ID 모두 해당 결과를 제외하며, 삭제 표시의 우회 옵션을 API에 노출하지 않는다.
+Fusion의 고정 원천 검증에 필요한 점수·후보·사유는 보존하고 정확한 pinned run의 내부 조회만
+허용한다. 이 삭제는 원천의 물리 삭제나 Fusion 결과·근거의 변경을 뜻하지 않는다.
 전달 재시도와 수신 확인은 오케스트레이터 control plane에 두고 Candidate schema에
 외부 분석 job·report 상태를 추가하지 않는다.
 

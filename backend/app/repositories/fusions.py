@@ -169,7 +169,7 @@ class FusionReadRepository(ReadRepository):
             if run.quant_selection_run_id is None or run.llm_preselection_run_id is None:
                 raise ValueError("Fusion source run identity is missing")
             quantitative = CandidateRepository(self.database).list_candidates(
-                selection_run_id=run.quant_selection_run_id, limit=20,
+                selection_run_id=run.quant_selection_run_id, limit=20, include_deleted=True,
             )
             llm = LLMPreselectionRepository(self.database).get_preselection(
                 run.llm_preselection_run_id
@@ -179,7 +179,8 @@ class FusionReadRepository(ReadRepository):
                 or llm.status != "SUCCEEDED" or llm.ranking_status != "SUCCEEDED"
                 or llm.selected_count != 20 or len(llm.candidates) != 20
                 or llm.execution_context_id != run.execution_context_id
-                or llm.price_session_date != run.price_session_date or llm.cutoff_at != run.cutoff_at
+                or llm.price_session_date != run.price_session_date
+                or llm.cutoff_at != run.cutoff_at
             ):
                 raise ValueError("Fusion source result identity/status mismatch")
             assessments = self.fetch(

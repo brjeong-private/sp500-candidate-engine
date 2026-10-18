@@ -10,10 +10,12 @@ from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from backend.app.repositories.candidates import CandidateRepository
 from backend.app.repositories.fusions import FusionReadRepository
+from backend.app.repositories.llm_preselections import LLMPreselectionRepository
 from backend.app.routers import fusions
 from backend.app.schemas.fusions import FusionRun
 from sp500_candidate_engine.database import _canonical_hash
@@ -63,6 +65,31 @@ def row():
 def envelope(monkeypatch):
     monkeypatch.setattr(FusionReadRepository, "fetch", lambda *args: [row()])
     return FusionReadRepository(MagicMock()).handoff(RUN)
+
+
+def test_fusion_reads_deleted_pinned_quant_source_without_relaxing_integrity(monkeypatch):
+    calls = []
+
+    def fetch(self, sql, parameters):
+        calls.append((sql, parameters))
+        return []
+
+    monkeypatch.setattr(CandidateRepository, "fetch", fetch)
+    monkeypatch.setattr(
+        FusionReadRepository, "explanations", lambda *args: SimpleNamespace(candidates=[]),
+    )
+    monkeypatch.setattr(
+        LLMPreselectionRepository, "get_preselection", lambda *args: object(),
+    )
+    with pytest.raises(HTTPException) as error:
+        FusionReadRepository(MagicMock()).with_reasons(FusionRun.model_validate(row()))
+    assert error.value.status_code == 500
+    assert "integrity validation" in error.value.detail
+    assert len(calls) == 1
+    sql, parameters = calls[0]
+    assert "selection.quant_result_deletion" not in sql
+    assert "s.selection_run_id = %s" in sql
+    assert parameters == [None, QUANT, 21]
 
 
 def settings(**changes):

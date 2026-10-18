@@ -67,6 +67,14 @@ unchanged. Source reasons can exist in PostgreSQL even when an older Fusion snap
 see [candidate tables and ER diagrams](../SELECTION-DATABASE-ER.md).
 Combined result/source-reason reads use the exact pinned source IDs and do not create snapshots.
 
+Quantitative result deletion is recorded by run in
+`selection.quant_result_deletion` (migration 025). All public candidate reads,
+including explicit run IDs, exclude deleted results. There is no public
+`include_deleted` parameter. Fusion source-reason reads still resolve the exact
+pinned quantitative source internally, preserving its scores, candidates and
+integrity checks. This is logical deletion of the independent result, not
+physical erasure of evidence required by a retained Fusion result.
+
 The v2 explanation endpoint is a single-run response, not a paginated list.
 It returns `schema_version`, Fusion/context/session/cutoff identity, `selection_status`,
 `failure_code`, recording `status`, and candidate identity/position/status/explanation.

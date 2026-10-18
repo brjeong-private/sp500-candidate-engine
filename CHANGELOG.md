@@ -1,5 +1,8 @@
 # Change Log
 
+- 2026-10-18 | October 15-16 Quant Deletion Production | 사용자 요청에 따라 migration 025와 독립 정량 조회 패치만 기존 Backend 배포본에 적용하고 두 날짜의 최신 20D 결과를 논리 삭제해 날짜·명시적 ID·우회 시도 모두 0건 반환 및 Fusion 후보·선정 근거·고정 원천·다른 날짜·운영 설정 불변을 확인했다.
+- 2026-10-18 | Fusion-preserving Quant Deletion | 정량 결과의 run 단위 삭제 표시와 날짜·범위·명시적 ID 공개 조회 제외를 추가하고 Fusion의 정확한 고정 원천 내부 조회와 무결성 검증은 유지해 정량 20D 결과 삭제와 Fusion 보존을 분리했다.
+- 2026-10-18 | Quant Deletion Contract | 공통 하네스·Backend 문서·후보 DB ER에 원천 물리 삭제와 독립 결과의 논리 삭제 차이·공개 우회 차단·migration 025 테이블과 적용 조건을 기록했다.
 - 2026-10-18 | Historical Source Lineage Gate | 승인된 재구성의 read-only 재귀 검토에서 과거 derived split의 raw 부모가 cutoff 이후임을 확인해 세 anchor 학습 전 중단하고, 부모 유형 설명·늦은 부모 차단 회귀 검증과 generic daily freeze의 미래 입력 전체 rollback 경계를 보강했으며 안전 검사는 완화하지 않았다.
 - 2026-10-18 | Historical Model Reconstruction | 기존 snapshot의 명시적 rich manifest 고정·격리 context/export·실제 생성 시각·학습 라벨 성숙 및 processor train-only 검증을 재사용 학습 CLI에 추가하고 MEDIUM_20D SHADOW artifact와 해시 결합 증적만 생성하며 정규 승격·활성 모델·과거 weekly-v1 run은 변경하지 않는다.
 - 2026-10-18 | Historical Training Runbook | 9월30일~10월14일 신호의 직전 주말 anchor·입력 고정/학습 명령·독립 Quant artifact override 검증·운영 Job 기본 실행 금지와 미실행/미배포 전제를 모델 전용 문서에 기록했다.

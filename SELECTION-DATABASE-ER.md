@@ -1,8 +1,8 @@
 # 후보 종목 DB 테이블 설명과 ER 다이어그램
 
-작성일: 2026-10-17. 갱신일: 2026-10-18. 저장소 SQL migration `001`~`024`와 현재 저장·조회 구현 기준이다.
+작성일: 2026-10-17. 갱신일: 2026-10-18. 저장소 SQL migration `001`~`025`와 현재 저장·조회 구현 기준이다.
 아래는 후보 선정과 근거 추적에 필요한 핵심 테이블의 논리 구조이며, 모든 컬럼을 나열한
-전체 DB 사전은 아니다. DB 변경이나 migration 실행은 하지 않았다.
+전체 DB 사전은 아니다. 문서 변경과 실제 migration 적용은 별도 작업으로 구분한다.
 
 용어를 처음 접한다면 [매니페스트·스냅샷과 저장 위치 쉬운 설명](DATA-STORAGE-GUIDE.md)을
 먼저 읽으면 된다. 원본 파일·DB 행·허용 입력 목록·LLM 검색 증적과 실제 평가 입력의 차이를 설명한다.
@@ -256,6 +256,7 @@ erDiagram
 | `selection.selection_run` | `selection_run_id` | `scoring_run_id` FK; 거래일·cutoff·정책/hash·요청/선정 수·상태·멱등 key | 정량 후보 선정 실행 |
 | `selection.candidate` | `(selection_run_id, instrument_id)` | 양쪽 FK; `position`, `score`, `predicted_return`, 전체/섹터 순위·percentile·품질 | 제약 적용 후 선정된 정량 후보 |
 | `selection.candidate_reason` | `candidate_reason_id` | 후보 복합 FK; 선택적 `event_revision_id` FK; `reason_code`, `priority`, `reason_fingerprint`, `reason_detail` JSONB | 후보별 선정 사유와 상세 정보 |
+| `selection.quant_result_deletion` | `selection_run_id` | 정량 run FK; `deleted_at`, `reason` | Fusion 원천은 보존하면서 독립 정량 결과를 공개 조회에서 논리 삭제 |
 
 ```mermaid
 erDiagram
@@ -265,6 +266,7 @@ erDiagram
     SCORING_RUN ||--o{ DAILY_SCORE : scoring_run_id
     SCORING_RUN ||--o{ SELECTION_RUN : scoring_run_id
     SELECTION_RUN ||--o{ QUANT_CANDIDATE : selection_run_id
+    SELECTION_RUN ||--o| QUANT_RESULT_DELETION : selection_run_id
     INSTRUMENT ||--o{ DAILY_SCORE : instrument_id
     INSTRUMENT ||--o{ QUANT_CANDIDATE : instrument_id
     QUANT_CANDIDATE ||--o{ CANDIDATE_REASON : candidate_composite_key
@@ -303,6 +305,11 @@ erDiagram
         real predicted_return
         int rank_overall
     }
+    QUANT_RESULT_DELETION {
+        uuid selection_run_id PK,FK
+        timestamptz deleted_at
+        text reason
+    }
     CANDIDATE_REASON {
         uuid candidate_reason_id PK
         uuid selection_run_id FK
@@ -316,6 +323,10 @@ erDiagram
 `candidate.position`은 섹터·issuer 제약 때문에 다를 수 있다.
 현재 MEDIUM은 성공 시 20개, SHORT 레거시는 5~10개다. 초기 `015`의 개수 제약만
 보면 현재와 다르므로 후속 `022` migration까지 함께 읽어야 한다.
+
+`025`의 삭제 표시가 있는 정량 run은 날짜·범위·명시적 ID의 공개 후보 조회에서 제외한다.
+Fusion 결과·선정 근거는 그 run의 후보·사유·점수를 고정 원천으로 계속 읽으므로
+물리 행과 FK는 유지한다. 이 내부 원천 조회의 우회 옵션은 외부 API에 노출하지 않는다.
 
 주간 학습은 `analytics.weekly_training_run`, 승격 여부와 gate 결과는
 `analytics.model_promotion_decision`에 남긴다. 현재 활성 모델은

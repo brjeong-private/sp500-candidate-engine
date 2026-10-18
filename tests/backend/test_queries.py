@@ -344,6 +344,41 @@ def test_candidates_explicit_short_model_has_no_fallback(monkeypatch, database):
     assert "COALESCE(m.model_purpose" not in sql
 
 
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {},
+        {"date": DAY.isoformat()},
+        {"selection_run_id": str(ID)},
+        {"selection_run_id": str(ID), "include_deleted": "true"},
+    ],
+)
+def test_deleted_quant_result_is_excluded_from_all_public_reads(
+    monkeypatch, client, parameters,
+):
+    def fetch(self, sql, values):
+        assert "NOT EXISTS" in sql
+        assert "selection.quant_result_deletion" in sql
+        return []
+
+    monkeypatch.setattr(CandidateRepository, "fetch", fetch)
+    response = client.get("/api/v1/candidates", params=parameters)
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "next_cursor": None}
+
+
+def test_deleted_quant_source_can_still_be_read_internally(monkeypatch, database):
+    calls = capture(monkeypatch, CandidateRepository, [candidate_row()])
+    page = CandidateRepository(database).list_candidates(
+        selection_run_id=ID, include_deleted=True,
+    )
+    assert len(page.items) == 1
+    sql, values = calls[0]
+    assert "selection.quant_result_deletion" not in sql
+    assert "s.selection_run_id = %s" in sql
+    assert values == [None, ID, 101]
+
+
 @pytest.mark.parametrize("dataset", list(Dataset))
 def test_collection_schemas_provenance_and_sql(monkeypatch, client, dataset):
     calls = capture(monkeypatch, CollectionDataRepository, [record_row(dataset)])

@@ -20,6 +20,7 @@ class CandidateRepository(ReadRepository):
         end_date: date | None = None,
         selection_run_id: UUID | None = None,
         model_purpose: str = "MEDIUM_20D",
+        include_deleted: bool = False,
         ticker: str | None = None,
         instrument_id: UUID | None = None,
         issuer_id: UUID | None = None,
@@ -53,6 +54,11 @@ class CandidateRepository(ReadRepository):
                 raise HTTPException(422, "Invalid candidate cursor") from None
         parameters.append(anchor)
         run_conditions = ["s.created_at <= boundary.anchor"]
+        if not include_deleted:
+            run_conditions.append(
+                "NOT EXISTS (SELECT 1 FROM selection.quant_result_deletion deletion "
+                "WHERE deletion.selection_run_id = s.selection_run_id)"
+            )
         if selection_run_id is None:
             run_conditions.append("s.status = 'SUCCEEDED'")
             run_conditions.append("m.model_purpose = %s")
