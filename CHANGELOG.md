@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-18 | Candidate-only Replay Continuation | 후속 사용자 지시에 따라 남은 후보 LLM·Fusion·정상 분석일자 전량 전달까지만 재개하고 보고서 본문·등급·결과 정리·손익 계산은 제외하며 중간 증량 유지와 최종 전역 큐 완료 후 단일 원복을 보존했다.
 - 2026-10-18 | Replay Capacity Lifecycle | 후속 사용자 지시에 따라 이번 10월 재처리의 중간 큐 공백에는 증량한 worker 용량을 유지하고 전체 보고서·검증·교체·손익 계산 완료 후 한 번만 원복하도록 실행 제어와 인계를 변경했다.
 - 2026-10-18 | Fusion DB Citation Projection | 동일 DB 원천·평가 항목의 서로 다른 근거 문장을 외부 검색과 같은 결정적 단일 설명으로 결합하고 원래 LLM 증거·점수·서로 다른 계층 분리·완전 중복 및 provenance 충돌 차단을 유지했다.
 - 2026-10-18 | Research Fusion Identity | 고정 HRECON 연구 context의 승인 적격성 감사 표식과 실제 유니버스 ID를 구분해 Fusion 입력 호환을 복구하고 누락·다른 유니버스·미승인 정책·정규 운영 혼입 차단 및 기존 실패 기록을 보존했다.
