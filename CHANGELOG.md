@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | October Candidate Replay Completion | 11거래일의 Quant·LLM·Fusion 각220개와 정상 분석일자 전량 ACK를 완료하고 백업된 기존 Quant13run·130후보·260사유만 추가 정리했으며 원래 scoring16개·주차 모델·두 registry와 보고서 결과 제외 범위를 보존했다.
+- 2026-10-18 | Final Worker Capacity Restore | 모든 후보 작업 후 전역 큐의 안정적 0건을 확인해 임시3replica를 한 번만1replica·worker3으로 원복하고 실제 Healthy1개·기존 image/Multiple mode·양쪽 B2 유지·DB SKU 미변경을 기록했다.
 - 2026-10-18 | Model-specific Backfill Routing | 명시적 LLM backfill에 날짜·부분 재시도에 안정적인 모델 분담과 모델별 공유 quota를 추가하고 전역 환경 변경·날짜 내 모델 혼합·정규 실행 변경 없이 배정 deployment/context를 기록하도록 했다.
 - 2026-10-18 | LLM Runtime Headroom | Azure의 두 배포별 100만 TPM과 최근 사용량을 확인하고 신규 backfill은 기존 v6의 모델별 25만 TPM을 사용하도록 안내했으며 진행 중 평가·Azure 배포·B2·DB SKU는 변경하지 않았다.
 - 2026-10-18 | Interrupted Replay Recovery | 이전 세션 abort 뒤 종료된 LLM 프로세스·해제된 lock·미저장 5일을 확인해 성공일 제외·고정 입력/검색 증적/공유 한도 재사용으로 현재 세션에 인계하고 기존 진행 표식 보존과 결과 JSON 원자적 교체를 적용했다.

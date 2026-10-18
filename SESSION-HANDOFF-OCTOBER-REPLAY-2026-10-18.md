@@ -1,7 +1,8 @@
-# 새 세션 인계: 2026년 10월 후보·분석 보고서 재처리
+# 2026년 10월 후보 재처리 인계·완료 기록
 
-작성: 2026-10-18 17:20 KST 전후. **작업 완료 보고서가 아니라 실행 중 작업의 인계 문서**다.
-수치는 작성 시점 기준이다. 행동 전에 실제 프로세스·결과 파일·DB 상태를 다시 확인한다.
+최초 작성: 2026-10-18 17:20 KST 전후. 최초 본문은 당시 실행 중 작업의 인계 기록이다.
+**후속 후보 범위 작업은 2026-10-18 21:58 KST에 완료했다. 최신 결과는 §14를 따른다.**
+아래 초기 프로세스·중간 상태·원래 보고서/손익 지시를 현재의 재실행 지시로 사용하지 않는다.
 
 **병행 승인(2026-10-18 20:24 KST):** 새 App Service 대신 실제 모델 사용량을 확인하고
 명시적 backfill의 모델별 날짜 분담·quota 분리를 구현한다. `gpt-6-astra`와 `gpt-6.1-sol`은
@@ -455,3 +456,59 @@ Portalstrict추가 `7a58963`,`487e479`,`4d9bc47`은 `a3b6c1e`로롤백했다.
 > 나머지8일LLM→Fusion→기존날짜filterreport→안전한old교체→확정USD500전략손익까지계속한다.
 > 승인된Ridge/연구용적격성을사용하고B2·원천·현재active모델을보존한다.
 > 임시replica는원복하고코드/report는commit만하며push하지않는다.
+
+## 14. 후속 후보 범위 최종 완료 — 2026-10-18 21:58 KST
+
+최종 승인 범위는 후보 선정과 정상 분석일자의 전량 외부 전달까지다.
+9/30~10/14의 11거래일에 대해 **Quant·LLM·Fusion을 각각 220개 저장**했고,
+최종 Fusion 220개 전량 ACK를 **21:32:17 KST**에 확인했다.
+각 성공 run의 실제 후보 수 20개와 원천 ID를 DB에서 다시 확인했다.
+
+| 신호 날짜 | 최종 성공 Fusion run ID |
+|---|---|
+| 2026-09-30 | `a84fe7ee-5c53-4ecd-a9e6-502fac0a1efd` |
+| 2026-10-01 | `16a28e63-243e-4fb6-8b60-3d55298138c4` |
+| 2026-10-02 | `c50dd0bc-8403-4498-9d61-9167ebfb77c8` |
+| 2026-10-05 | `9dde7376-ae59-4ac3-86d1-164422d84bdd` |
+| 2026-10-06 | `2a4bb146-064a-4546-b90b-bfd6364155bc` |
+| 2026-10-07 | `fdde1646-f3d1-401a-8edf-bd3fb74338dc` |
+| 2026-10-08 | `259c624d-07a5-4c56-8b42-76158e1869b6` |
+| 2026-10-09 | `f8a69138-4f4d-4ff2-a62c-b5cefc174235` |
+| 2026-10-12 | `9070a46a-9b87-4421-a132-117b4be3ce65` |
+| 2026-10-13 | `50c21c34-24ff-4f0e-9f6c-1696975fd91b` |
+| 2026-10-14 | `52800c74-701f-4cee-9010-773ce99b7ef0` |
+
+### 기존 후보 교체와 보존
+
+- 처음 백업한 정확한 ID 중 남아 있던 **13개 Quant run·130개 후보·260개 사유**만
+  8개의 날짜별 transaction으로 삭제했다. 이전 세션의 10/12~14 정리와 합쳐 원래
+  16개 run·160개 후보·320개 사유의 잔존 행은 0이다. 백업 파일은 보존했다.
+- 새 Quant·LLM·Fusion 결과, 기존 16개 scoring run, 세 주차 모델과 artifact를 보존했다.
+  accepted registry와 Ridge registry는 인계된 SHA-256과 동일하다.
+- 기본 수집을 다시 하지 않았고, 연구용 적격성·고정 cutoff·manifest·실제 생성 시각을
+  유지했다. 실패한 최초 Fusion 두 건도 삭제하거나 성공으로 덮어쓰지 않았다.
+- 이 결과는 HRECON 연구용 후보다. 공식 과거 종목 상태나 당시 실운영 성과를 인증하지 않는다.
+
+### 외부 범위와 용량
+
+18:05 KST 범위 변경 이후에는 보고서 본문·등급·개별 결과를 검증하지 않았고,
+Portal/Blob 추가 정리나 포트폴리오·손익 계산을 수행하지 않았다.
+§8~11의 원래 절차는 완료 조건이 아니다. 외부 큐의 0건 확인은 보고서 성공 인증도 아니다.
+
+전역 pending/running 합계는 **21:53 KST에 0**, **21:55 KST에 2분간 안정적 0**이었다.
+최종 fresh 확인 후 한 번만 원복해 **21:57:42 KST에 min1/max1·worker3**가 됐다.
+21:58 KST 재조회에서 실제 replica 1개·Healthy·활성 revision 1개·전역 큐 0을 확인했다.
+
+- 최종 활성 revision: `ca-jongmok-tradingagents--octreplay-125601`.
+- 기존 rollback image digest·Multiple mode·worker 3개를 유지했다.
+- Portal/Candidate App Service는 모두 B2·인스턴스 1개다. DB SKU는 변경하지 않았다.
+- 새 App Service는 만들지 않았다. 다중 모델 backfill 기능은 `627ee8a`에 커밋했으며
+  이번 실행의 모델이나 메모리 내 limiter를 강제 변경하지 않았다. 다음 신규 명시 실행부터
+  모델별 날짜 분담과 기존 v6 한도를 사용할 수 있다. Git push는 하지 않았다.
+
+최종 증적은 후속 세션 `cdaec8e8-8a3b-4e73-88db-f3ec29e36f1e`의 `files`에 있다.
+`continuation-candidate-deliveries-complete.json`은 11일의 Quant/LLM/Fusion ID와 ACK를,
+`candidate-only-replacement`는 백업 ID별 plan·INTENT·commit 영수증을 보존한다.
+`final-candidate-database-verification.json`, `final-artifact-registry-verification.json`,
+`final-operations-verification.json`은 최종 DB·artifact·리소스 상태를 기록한다.
+최초 JSON snapshot은 당시의 역사적 증적이므로 덮어쓰지 않았다.
