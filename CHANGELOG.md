@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | Historical Research Quant Execution | 기존 관측만으로 8개 과거일 연구 context와 실제 Ridge Quant 후보 각20개를 검증했으며 Oct8·Oct9의 누락된 qualified 대상/워밍업 snapshot만 새 고정 입력에 추가하고 실패 기록·원본21개 action·공식 상태·수락 registry·live 모델과 weekly/active 상태를 보존했다.
+- 2026-10-18 | Ridge Loader Compatibility | 기존 LightGBM loader import에는 Ridge 수치 런타임을 추가 로드하지 않도록 지연 import를 적용하고 schema-v2 import 호환 회귀를 포함한 415개 테스트를 통과했다.
 - 2026-10-18 | Winning Ridge Serving | 실제 Sep25·Oct2 Ridge winner의 fitted imputer·scaler·계수·feature 순서를 numeric JSON schema-v3로 보존하고 기존 checkpoint·모델 identity와 결합해 재학습 없이 parity를 검증했으며 LightGBM schema-v2·기존301785·수락 registry·live 할당은 변경하지 않았다.
 - 2026-10-18 | Explicit Research Eligibility | 승인된 연구 전용 DAILY context에서만 기존 해당일 UNADJUSTED 가격·당시 S&P500 membership으로 적격성을 판단하고 9개 issuer 격리·Quant/LLM 공통 gate와 공식 과거 상태 미검증 표식을 보존하며 원본 상태·시각·정규 운영을 변경하지 않는다.
 - 2026-10-18 | Historical Research Eligibility | 추가 수집 없이 기존 해당일 가격·S&P500 구성으로 과거 연구용 적격성을 판단하는 사용자 승인 범위와 공식 상태 미검증·시점 보존·정규 운영 불변 조건을 공통 하네스에 명시했다.

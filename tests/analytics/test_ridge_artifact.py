@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import uuid
 
 import numpy as np
@@ -21,6 +23,17 @@ from sp500_candidate_engine.analytics.ridge_artifact import (
     verify_ridge_parity,
 )
 from tests.analytics.test_artifacts import ROOT, _registered
+
+
+def test_lightgbm_loader_import_does_not_import_ridge_runtime():
+    result = subprocess.run(
+        [sys.executable, "-c", (
+            "import sys; import backend.app.services.model_artifacts;"
+            "assert 'sp500_candidate_engine.analytics.ridge_artifact' not in sys.modules"
+        )],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture

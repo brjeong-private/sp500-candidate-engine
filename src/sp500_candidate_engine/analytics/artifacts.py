@@ -9,17 +9,21 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 import pyarrow.parquet as parquet
 
 from sp500_candidate_engine.analytics.config import load_versioned_config
-from sp500_candidate_engine.analytics.ridge_artifact import RIDGE_FILE_NAME, NumericRidge
 from sp500_candidate_engine.database import _canonical_hash
+
+if TYPE_CHECKING:
+    from sp500_candidate_engine.analytics.ridge_artifact import NumericRidge
 
 MANIFEST_SCHEMA_VERSION = 2
 RIDGE_MANIFEST_SCHEMA_VERSION = 3
 MANIFEST_FILE_NAME = "manifest.json"
 MODEL_FILE_NAME = "lightgbm.txt"
+RIDGE_FILE_NAME = "ridge.json"
 SHA256_LENGTH = 64
 
 
@@ -213,6 +217,8 @@ class PackagedArtifact:
 
 
 def load_numeric_ridge(manifest: ArtifactManifest, path: Path) -> NumericRidge:
+    from sp500_candidate_engine.analytics.ridge_artifact import NumericRidge
+
     manifest.validate()
     if manifest.model_family != "ridge" or sha256_file(path) != manifest.model_sha256:
         raise ArtifactValidationError("Numeric Ridge family/checksum mismatch")
@@ -281,7 +287,11 @@ def package_model_artifact(
     model_file = RIDGE_FILE_NAME if family == "ridge" else MODEL_FILE_NAME
     weights = source / model_file
     model_hash = sha256_file(weights)
-    numeric_ridge = NumericRidge.load(weights) if family == "ridge" else None
+    numeric_ridge = None
+    if family == "ridge":
+        from sp500_candidate_engine.analytics.ridge_artifact import NumericRidge
+
+        numeric_ridge = NumericRidge.load(weights)
     training_hash = (
         numeric_ridge.training_artifact_sha256 if numeric_ridge is not None else model_hash
     )

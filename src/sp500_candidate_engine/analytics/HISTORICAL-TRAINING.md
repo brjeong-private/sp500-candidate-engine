@@ -155,7 +155,15 @@ it does not manufacture an old ACTIVE/LISTED record.
   exact target-session, manifest-bound valid UNADJUSTED OHLCV with publication before
   cutoff, known adjustment flags, no conflicting versions and ordinary action/quality gates.
   The nine-issuer quarantine remains context-scoped; all 503 original members remain in
-  membership/audit, while 494 satisfy source-quality eligibility. Quant additionally
+  membership/audit, leaving at most 494 before target-price gates. Actual missing target
+  prices remain exclusions (Oct6: 492 eligible; two additional missing-price records).
+  A backfill coverage date is not proof of qualified target prices: the bounded Oct8/9
+  correction explicitly reviewed same-day operational FULLs even where the backfill
+  claimed that date but contained UNKNOWN observations. It admits only already-stored
+  rows/snapshots available by cutoff and preserves the failed Oct8 attempt.
+  Oct9 also required those qualified Oct8 observations for the unchanged warm-up gate;
+  its first failed Quant/context remains preserved, and a new context completed.
+  Quant additionally
   retains complete warm-up/finite-feature gates. No feature/label fill is added.
 - New contexts use actual NOW generation/observation times; `ref.instrument_state` and
   all original source rows/timestamps are untouched. Official status/exchange stay null,
@@ -167,6 +175,51 @@ it does not manufacture an old ACTIVE/LISTED record.
 - Freezing the context does not execute LLM/Fusion or external consumers. Internal Quant
   execution uses an explicitly pinned new registry in child-process environment only.
   No production deployment or active assignment is needed for local internal stages.
+
+Actual final checks completed for all eight dates (maximum two dates concurrently):
+
+| Signal | New research context | Eligible target prices | Fully gated scores | Quant candidates |
+|---|---|---:|---:|---:|
+| Sep30 | `6b40ea01-9816-5e58-a6fa-8109b31ad247` | 494 | 484 | 20 |
+| Oct1 | `ae0177e9-a4e2-52d5-aabe-2b124d1e6041` | 494 | 484 | 20 |
+| Oct2 | `c701ca8d-db2d-5578-9c4d-b165119b4388` | 494 | 484 | 20 |
+| Oct5 | `16f1cd57-073c-5764-b116-aebf2836f4fc` | 494 | 484 | 20 |
+| Oct6 | `51c7b08b-6ad8-59eb-b110-2babd870c881` | 492 | 482 | 20 |
+| Oct7 | `99e18263-6030-5af4-92f0-363e9087e0aa` | 494 | 481 | 20 |
+| Oct8 | `13b73a76-8abb-5d36-a77f-2011a9e71433` | 494 | 481 | 20 |
+| Oct9 | `d381ef8f-74ca-5bea-87ff-3188a8d99a7e` | 494 | 481 | 20 |
+
+All rows are `EXPERIMENTAL_RESEARCH_ELIGIBILITY`, **not verified historical reference
+status**. Original membership is 503; nine quarantined issuers remain absent from every
+score/candidate. Quant's additional warm-up/finite-feature exclusions do not define the
+independent LLM ranking. No LLM or Fusion was executed by this reconstruction runner.
+Read-only final verification also checked original model rows, all 21 original actions,
+original snapshot metadata, model301785, official-state counts, and weekly/active state.
+
+The complete private execution handoff is
+`data\output\historical-models\execution-20261018\handoff-ridge-research-final.json`.
+It pins actual selection/scoring/stage IDs, reviewed members, per-asset exclusions,
+logs and safe artifact hashes. The accepted old registry remains
+`6544fd1dc6277d46f630a04371377220f7311f2d27f0789b42d1687f529fd90e`;
+the separate Ridge registry is
+`cdcc452851ae446ab1abd30cdb81379fbfdb4e71efcc9e914e51a87ca29a02f7`.
+The first Sep30 receipt's legacy member counter is clarified in the handoff; official
+state is still unverified/zero, never 503 inferred official records.
+
+For an explicitly approved internal stage, use the helper with a **new** attempt UUID;
+do not change live appsettings or run the promotion-capable training job:
+
+```powershell
+& .\.venv-alpha158\Scripts\python.exe `
+  .\data\output\historical-models\execution-20261018\run_research_quant_stage.py `
+  --registry-file .\data\output\historical-models\execution-20261018\artifact-registry-ridge-v1.json `
+  --frozen <actual frozen.json path from handoff> --attempt-id <new UUID>
+```
+
+The eight stages are already successful; do not execute them again unnecessarily.
+Parent-owned independent v6 LLM preparation must use this research-aware code/context,
+not an older deployed runtime that still requires official instrument-state joins.
+Ordinary result-read APIs need no deployment for the existing generic model/reason fields.
 
 Use actual preceding-weekend data anchors, **not** the scheduler's weekend ISO-week string:
 
