@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from collections.abc import Callable
@@ -29,6 +30,7 @@ _REASON_CODES = (
 )
 _QUALITY_LEVELS = ("HIGH", "MEDIUM", "LOW")
 _UNCERTAINTY_LEVELS = ("LOW", "MEDIUM", "HIGH")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -130,18 +132,6 @@ class LlmRankingError(RuntimeError):
     def __init__(self, message: str, attempts: tuple[CallAttempt, ...]) -> None:
         super().__init__(message)
         self.attempts = attempts
-
-
-@dataclass
-class _InputTokenBudget:
-    limit: int
-    reserved: int = 0
-
-    def reserve(self, tokens: int) -> None:
-        # No await between checking and reserving: shared by one rank's async batches.
-        if self.reserved + tokens > self.limit:
-            raise ValueError("LLM assessment total input token budget exceeded")
-        self.reserved += tokens
 
 
 class AzureOpenAIPreselectionRanker:
@@ -273,7 +263,6 @@ class AzureOpenAIPreselectionRanker:
         schema: dict[str, object],
         execution_context_id: uuid.UUID | None = None,
         attempt_offset: int = 0,
-        input_token_budget: _InputTokenBudget | None = None,
     ) -> tuple[dict[str, object], str, tuple[CallAttempt, ...]]:
         request_identity: dict[str, object] = {
             "messages": messages, "schema_name": schema_name, "schema": schema,
@@ -307,13 +296,13 @@ class AzureOpenAIPreselectionRanker:
                 f"{run_id}:{stage}:{batch_no}:{attempt_no}:{input_hash}",
             )
             reservation = None
+            acquiring_quota = False
             try:
-                if self.rate_limiter is not None or input_token_budget is not None:
-                    estimated = (len(json.dumps(messages)) + len(json.dumps(schema)) + 3) // 4
-                    if input_token_budget is not None:
-                        input_token_budget.reserve(estimated)
                 if self.rate_limiter is not None:
+                    estimated = (len(json.dumps(messages)) + len(json.dumps(schema)) + 3) // 4
+                    acquiring_quota = True
                     reservation = await self.rate_limiter.acquire(estimated)
+                    acquiring_quota = False
                 response = await self.client.complete(
                     messages=messages, schema_name=schema_name, schema=schema,
                 )
@@ -347,6 +336,12 @@ class AzureOpenAIPreselectionRanker:
                     else None
                 )
                 error_code = type(error).__name__
+                if acquiring_quota and isinstance(error, ValueError):
+                    error_code = "REQUEST_RATE_LIMIT_REJECTED"
+                    logger.info("LLM request quota rejected", extra={
+                        "batch_no": batch_no, "status": "FAILED", "error_code": error_code,
+                        "budget_scope": "HTTP_REQUEST",
+                    })
                 attempts.append(
                     CallAttempt(
                         call_attempt_id=attempt_id,

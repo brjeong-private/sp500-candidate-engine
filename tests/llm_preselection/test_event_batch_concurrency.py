@@ -20,6 +20,10 @@ from sp500_candidate_engine.llm_preselection.config import (
     RateLimits,
     load_llm_preselection_config,
 )
+from sp500_candidate_engine.llm_preselection.enrichment_contract import (
+    SEARCH_OMISSION_GAP,
+    SEARCH_OMISSION_VERSION,
+)
 from sp500_candidate_engine.llm_preselection.event_ranker import EventPreselectionRanker
 from sp500_candidate_engine.llm_preselection.evidence import EvidenceLink, EvidencePacket
 from sp500_candidate_engine.llm_preselection.ranker import (
@@ -27,7 +31,6 @@ from sp500_candidate_engine.llm_preselection.ranker import (
     LlmRankerSettings,
     LlmRankingError,
     RankingResult,
-    _InputTokenBudget,
 )
 from sp500_candidate_engine.llm_preselection.rate_limits import LlmRateLimiter, TokenReservation
 from sp500_candidate_engine.llm_preselection.service import LlmPreselectionService
@@ -82,7 +85,7 @@ class _Client(AzureOpenAIClient):
     async def complete(
         self, *, messages: list[dict[str, str]], schema_name: str, schema: dict[str, object],
     ) -> AzureOpenAIResponse:
-        assert schema_name == "event_assessments_v2"
+        assert schema_name in {"event_assessments_v2", "event_assessments_search_v4"}
         rows = json.loads(messages[1]["content"])
         batch_no = (UUID(rows[0]["instrument_id"]).int - 1) // 5
         attempt = self.counts.get(batch_no, 0)
@@ -121,9 +124,14 @@ class _Client(AzureOpenAIClient):
                             else row["evidence"][0]["evidence_link_id"],
                             "reason": "제공된 계약 소식을 반영했습니다.",
                         }
-                        for key in supported
+                        for key in supported if fault != "criterion" or key != "earnings"
                     ],
                 })
+                if schema_name == "event_assessments_search_v4":
+                    values[-1]["information_gaps"] = ["외부 검색 근거가 없습니다."]
+                    for citation in values[-1]["evidence"]:
+                        citation["source_layer"] = "DB_PACKET"
+                        citation["search_evidence_hash"] = None
             return AzureOpenAIResponse({"assessments": values}, 10, 5, 15)
         except asyncio.CancelledError:
             self.cancelled.append(batch_no)
@@ -282,42 +290,18 @@ def test_parallel_dates_and_batches_share_one_rpm_tpm_limiter(limits: RateLimits
 
 
 @pytest.mark.parametrize("fault", ["semantic", "transport"])
-def test_total_input_budget_is_shared_and_charges_retries(
-    fault: str, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_parallel_cohort_budget_does_not_charge_http_payloads_or_retries(fault: str) -> None:
     config = _config()
-    probe = EventPreselectionRanker(SETTINGS, config, client=_Client())
-    batches = [_packets()[start:start + 5] for start in range(0, 20, 5)]
-    estimates = [
-        (len(json.dumps(probe._assessment_messages(list(batch))))
-         + len(json.dumps(probe._assessment_schema(list(batch)))) + 3) // 4
-        for batch in batches
-    ]
-    limit = sum(estimates[:3])
-    reservations: list[int] = []
-    reserve = _InputTokenBudget.reserve
-
-    def record(budget: _InputTokenBudget, tokens: int) -> None:
-        try:
-            reserve(budget, tokens)
-        finally:
-            reservations.append(budget.reserved)
-
-    monkeypatch.setattr(_InputTokenBudget, "reserve", record)
+    packets = _packets()
+    limit = sum(packet.estimated_tokens for packet in packets)
     client = _Client({0: (fault,)})
-    with pytest.raises(LlmRankingError) as failed:
-        _rank(EventPreselectionRanker(
-            SETTINGS, replace(config, limits=replace(config.limits, total_input_tokens=limit)),
-            client=client, assessment_concurrency=3,
-        ))
-    assert sum(client.input_estimates) == limit
-    assert max(reservations) == limit and all(value <= limit for value in reservations)
-    assert client.counts == {0: 1, 1: 1, 2: 1}
-    assert [(item.batch_no, item.attempt_no) for item in failed.value.attempts] == [
-        (0, 1), (0, 2), (1, 1), (2, 1),
-    ]
-    assert failed.value.attempts[1].error_code == "ValueError"
-    assert all(item.status == "SUCCEEDED" for item in failed.value.attempts[-2:])
+    result = _rank(EventPreselectionRanker(
+        SETTINGS, replace(config, limits=replace(config.limits, total_input_tokens=limit)),
+        client=client, assessment_concurrency=3,
+    ), packets)
+    assert sum(client.input_estimates) > limit
+    assert len(result.candidates) == 20 and len(result.attempts) == 5
+    assert client.counts == {0: 2, 1: 1, 2: 1, 3: 1}
 
 
 def test_cache_hits_do_not_consume_request_budget_or_quota_and_keep_hashes() -> None:
@@ -326,7 +310,7 @@ def test_cache_hits_do_not_consume_request_budget_or_quota_and_keep_hashes() -> 
     config = _config()
     client = _Client()
     ranker = EventPreselectionRanker(
-        SETTINGS, replace(config, limits=replace(config.limits, total_input_tokens=1)),
+        SETTINGS, replace(config, limits=replace(config.limits, total_input_tokens=400)),
         client=client, assessment_concurrency=3,
     )
     def cached(input_hash: str, context: UUID, include_failed: bool) -> CachedCompletion | None:
@@ -344,30 +328,165 @@ def test_cache_hits_do_not_consume_request_budget_or_quota_and_keep_hashes() -> 
     ]
 
 
-def test_parallel_request_budget_subtracts_search_usage_without_precharging_retries() -> None:
+def test_parallel_cohort_admission_subtracts_search_usage_once_and_rejects_excess(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     config = _config()
-    initial_client = _Client()
-    _rank(EventPreselectionRanker(SETTINGS, config, client=initial_client))
-    request_total = sum(initial_client.input_estimates)
-    external = config.limits.total_input_tokens - request_total
-    client = _Client()
+    packets = _packets()
+    external = config.limits.total_input_tokens - sum(item.estimated_tokens for item in packets)
+    client = _Client({0: ("transport",)})
     ranker = EventPreselectionRanker(
         SETTINGS, config, client=client, assessment_concurrency=3,
     )
+    caplog.set_level(logging.INFO, logger="sp500_candidate_engine.llm_preselection.event_ranker")
     result = asyncio.run(ranker.rank(
-        llm_ranking_run_id=UUID(int=1000), packets=_packets(), external_input_tokens=external,
+        llm_ranking_run_id=UUID(int=1000), packets=packets, external_input_tokens=external,
     ))
-    assert len(result.candidates) == 20 and len(client.started) == 4
-    assert sum(client.input_estimates) + external == config.limits.total_input_tokens
-    retry_client = _Client({0: ("transport",)})
+    assert len(result.candidates) == 20 and len(client.started) == 5
+    assert sum(client.input_estimates) + external > config.limits.total_input_tokens
+    retry_client = _Client()
     retry = EventPreselectionRanker(
         SETTINGS, config, client=retry_client, assessment_concurrency=3,
     )
-    with pytest.raises(LlmRankingError):
+    with pytest.raises(ValueError, match="Enriched LLM input exceeds"):
         asyncio.run(retry.rank(
-            llm_ranking_run_id=UUID(int=1000), packets=_packets(), external_input_tokens=external,
+            llm_ranking_run_id=UUID(int=1000), packets=packets, external_input_tokens=external + 1,
         ))
-    assert sum(retry_client.input_estimates) + external <= config.limits.total_input_tokens
+    assert not retry_client.started
+    records = [
+        record for record in caplog.records if record.message == "Event assessment cohort admission"
+    ]
+    assert [record.status for record in records] == ["ACCEPTED", "REJECTED"]
+    assert records[-1].budget_scope == "COHORT_ADMISSION"
+    assert records[-1].error_code == "COHORT_INPUT_LIMIT_EXCEEDED"
+
+
+def _october_scale_packets(config: LlmPreselectionConfig) -> tuple[EvidencePacket, ...]:
+    estimates = [
+        83358, 83555, 83424, 85338, 84229, 82182, 89623, 83238, 75653, 83941,
+        84861, 81676, 86744, 84697, 81901, 86580, 83929, 87031, 68804,
+    ]
+    probe = EventPreselectionRanker(SETTINGS, config, client=_Client())
+    packets = [
+        replace(
+            item, packet={
+                **item.packet, "details": "", "filings": [], "schema_version": "4",
+                "llm_search_omission": {
+                    "schema_version": SEARCH_OMISSION_VERSION, "status": "OMITTED",
+                    "reason_code": "SEARCH_INPUT_UNAVAILABLE",
+                    "artifact_key": "a" * 64 + ".json", "information_gap": SEARCH_OMISSION_GAP,
+                },
+            },
+            estimated_tokens=962171 // 94 + int(index < 962171 % 94),
+        )
+        for index, item in enumerate(_packets(94))
+    ]
+    for batch_no, start in enumerate(range(0, len(packets), 5)):
+        batch = packets[start:start + 5]
+        characters = (
+            len(json.dumps(probe._assessment_messages(batch)))
+            + len(json.dumps(probe._assessment_schema(batch)))
+        )
+        padding = 4 * estimates[batch_no] - 3 - characters
+        for index, item in enumerate(batch):
+            share = padding // len(batch) + int(index < padding % len(batch))
+            payload = {**item.packet, "details": '"' * (share // 4) + "X" * (share % 4)}
+            packets[start + index] = replace(
+                item, packet=payload, packet_hash=_canonical_hash(payload),
+            )
+        shaped = packets[start:start + 5]
+        assert (
+            len(json.dumps(probe._assessment_messages(shaped)))
+            + len(json.dumps(probe._assessment_schema(shaped))) + 3
+        ) // 4 == estimates[batch_no]
+    return tuple(packets)
+
+
+def test_october_scale_matches_serial_and_reuses_17_cached_batches() -> None:
+    config = replace(load_llm_preselection_config(
+        Path(__file__).resolve().parents[2] / "config" / "llm_preselection"
+        / "policy_event_optional_search_v6.yaml"
+    ), base_delay_seconds=0)
+    packets = _october_scale_packets(config)
+    search_input = 856438
+    assert sum(item.estimated_tokens for item in packets) + search_input == 1818609
+    results = []
+    for concurrency in (1, 3):
+        client = _Client({1: ("criterion",), 14: ("criterion",)})
+        ranker = EventPreselectionRanker(
+            SETTINGS, config, client=client, assessment_concurrency=concurrency,
+        )
+        clock = [0.0]
+
+        async def sleep(seconds: float, clock: list[float] = clock) -> None:
+            clock[0] += seconds
+            await asyncio.sleep(0)
+
+        ranker.rate_limiter = LlmRateLimiter(
+            RateLimits(30, 125000, 4096), clock=lambda clock=clock: clock[0], sleep=sleep,
+        )
+        result = asyncio.run(ranker.rank(
+            llm_ranking_run_id=UUID(int=1000), packets=packets, external_input_tokens=search_input,
+        ))
+        assert sum(client.input_estimates) + search_input == 2603722
+        assert len(result.attempts) == 21 and len(result.assessments) == 94
+        assert sum(item.error_code == "OUTPUT_VALIDATION_FAILED" for item in result.attempts) == 2
+        assert all(item.input_tokens is not None for item in result.attempts)
+        results.append(result)
+    assert results[0].assessments == results[1].assessments
+    assert results[0].candidates == results[1].candidates
+    assert [item.input_hash for item in results[0].attempts] == [
+        item.input_hash for item in results[1].attempts
+    ]
+    preserved = replace(
+        results[1], attempts=tuple(
+            item for item in results[1].attempts if item.batch_no not in {16, 18}
+        ),
+    )
+    cache = _cache(preserved)
+    retry_client = _Client()
+    retry = EventPreselectionRanker(
+        SETTINGS, config, client=retry_client, assessment_concurrency=3,
+    )
+    def cached(input_hash: str, context: UUID, include_failed: bool) -> CachedCompletion | None:
+        assert context == UUID(int=999)
+        result = cache.get(input_hash)
+        if not include_failed and result is not None:
+            assert input_hash not in {
+                item.input_hash for item in preserved.attempts if item.status == "FAILED"
+            }
+        return result
+
+    retry.response_cache = cached
+    retried = asyncio.run(retry.rank(
+        llm_ranking_run_id=UUID(int=2000), packets=packets, external_input_tokens=search_input,
+    ))
+    assert retry_client.started == [16, 18]
+    assert sum(item.cache_source_attempt_id is not None and item.status == "SUCCEEDED"
+               for item in retried.attempts) == 17
+    assert retried.assessments == results[1].assessments
+    assert retried.candidates == results[1].candidates
+
+
+def test_request_tpm_rejection_has_distinct_safe_audit_code(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = _Client()
+    ranker = EventPreselectionRanker(
+        SETTINGS, _config(), client=client, assessment_concurrency=3,
+    )
+    ranker.rate_limiter = LlmRateLimiter(RateLimits(30, 100, 1))
+    caplog.set_level(logging.INFO, logger="sp500_candidate_engine.llm_preselection.ranker")
+    with pytest.raises(LlmRankingError, match="REQUEST_RATE_LIMIT_REJECTED") as failed:
+        _rank(ranker)
+    assert not client.started and len(failed.value.attempts) == 3
+    assert all(item.error_code == "REQUEST_RATE_LIMIT_REJECTED" for item in failed.value.attempts)
+    records = [
+        record for record in caplog.records if record.message == "LLM request quota rejected"
+    ]
+    assert len(records) == 3
+    assert all(record.budget_scope == "HTTP_REQUEST" and record.status == "FAILED"
+               for record in records)
 
 
 @pytest.mark.parametrize("external", [-1, True, 1.5])

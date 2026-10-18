@@ -20,7 +20,6 @@ from sp500_candidate_engine.llm_preselection.ranker import (
     LlmRankerSettings,
     LlmRankingError,
     RankingResult,
-    _InputTokenBudget,
 )
 from sp500_candidate_engine.llm_preselection.summaries import citation_summary
 from sp500_candidate_engine.llm_preselection.temporal import (
@@ -44,9 +43,9 @@ class _CriterionScoreError(ValueError):
 class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
     """Assess serially by default; opt in to 2–4 concurrent batches.
 
-    Parallel batches share the existing limiter and a per-rank estimated request
-    input budget, including retries but excluding cache hits. ``rank`` accepts
-    already consumed search input tokens to keep the combined budget bounded.
+    Parallel batches share the existing limiter on every uncached HTTP attempt.
+    ``rank`` admits the unique packet estimate plus consumed search input once;
+    that cohort cap is not a cumulative HTTP payload, schema or retry cost cap.
     Failed parallel windows drain before raising, retaining completed attempts.
     """
 
@@ -76,6 +75,21 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                 and self.config.enrichment.on_admission_failure == "OMIT_EXTERNAL"
             ),
         )
+        if self.assessment_concurrency > 1:
+            cohort_tokens = (
+                sum(packet.estimated_tokens for packet in packets) + external_input_tokens
+            )
+            rejected = cohort_tokens > self.config.limits.total_input_tokens
+            logger.info("Event assessment cohort admission", extra={
+                "budget_scope": "COHORT_ADMISSION",
+                "estimated_cohort_input_tokens": cohort_tokens,
+                "external_input_tokens": external_input_tokens,
+                "input_token_limit": self.config.limits.total_input_tokens,
+                "status": "REJECTED" if rejected else "ACCEPTED",
+                "error_code": "COHORT_INPUT_LIMIT_EXCEEDED" if rejected else None,
+            })
+            if rejected:
+                raise ValueError("Enriched LLM input exceeds its total token budget")
         assessments: list[InstrumentAssessment] = []
         attempts: list[CallAttempt] = []
         ordered = sorted(packets, key=lambda packet: packet.instrument_id.hex)
@@ -92,15 +106,11 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                     assessments.extend(parsed)
                     attempts.extend(calls)
             else:
-                remaining = self.config.limits.total_input_tokens - external_input_tokens
-                if remaining < 0:
-                    raise LlmRankingError("External LLM input exceeds the total input budget", ())
-                budget = _InputTokenBudget(remaining)
                 for start in range(0, len(batches), self.assessment_concurrency):
                     results = await asyncio.gather(
                         *(
                             self._assess_batch(
-                                llm_ranking_run_id, batch_no, batches[batch_no], budget,
+                                llm_ranking_run_id, batch_no, batches[batch_no],
                             )
                             for batch_no in range(
                                 start, min(start + self.assessment_concurrency, len(batches))
@@ -152,7 +162,6 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
 
     async def _assess_batch(
         self, run_id: uuid.UUID, batch_no: int, batch: list[EvidencePacket],
-        input_token_budget: _InputTokenBudget | None = None,
     ) -> tuple[list[InstrumentAssessment], tuple[CallAttempt, ...]]:
         attempts: list[CallAttempt] = []
         messages = self._assessment_messages(batch)
@@ -171,7 +180,6 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                         uuid.UUID(str(batch[0].packet["execution_context_id"]))
                         if "execution_context_id" in batch[0].packet else None
                     ),
-                    input_token_budget=input_token_budget,
                 )
                 attempts.extend(calls)
                 batch_attempts += len(calls)
@@ -230,7 +238,7 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
             })
             raise LlmRankingError(str(error), tuple([*attempts, *error.attempts])) from error
         except Exception as error:
-            if input_token_budget is None:
+            if self.assessment_concurrency == 1:
                 raise
             logger.info("Event assessment batch", extra={
                 "batch_no": batch_no, "assessed_count": 0, "status": "FAILED",
