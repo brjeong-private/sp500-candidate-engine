@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | Historical Model Reconstruction | 기존 snapshot의 명시적 rich manifest 고정·격리 context/export·실제 생성 시각·학습 라벨 성숙 및 processor train-only 검증을 재사용 학습 CLI에 추가하고 MEDIUM_20D SHADOW artifact와 해시 결합 증적만 생성하며 정규 승격·활성 모델·과거 weekly-v1 run은 변경하지 않는다.
+- 2026-10-18 | Historical Training Runbook | 9월30일~10월14일 신호의 직전 주말 anchor·입력 고정/학습 명령·독립 Quant artifact override 검증·운영 Job 기본 실행 금지와 미실행/미배포 전제를 모델 전용 문서에 기록했다.
 - 2026-10-18 | Full Application Release | main의 7f12171 전체 코드를 Backend·immutable 학습 이미지·Function에 배포해 20D 전용 주간 정책·성능 기준 임시 비강제·종료 실행 재시작 차단을 반영하고 기존 후보·근거·운영 설정·B2·private 네트워크를 보존했으며 실제 재학습·승격은 실행하지 않았다.
 - 2026-10-18 | Weekly Deployment Record | 공통 하네스·주간 설계·오케스트레이터 가이드·W42 후속 문서의 미배포 상태를 실제 배포 결과로 갱신하고 배포 ID·image digest·비학습 정책 검증과 신규 재학습 E2E 미실행 경계를 기록했다.
 - 2026-10-18 | Repository Release Preparation | 사용자 승인에 따라 저장소 전체 변경과 후속 문서를 함께 커밋·푸시하고 동일 코드의 Backend·학습 Job·오케스트레이터 배포를 준비했으며 비밀값·실행 데이터와 기존 리소스 SKU·네트워크 정책은 변경 대상에서 제외했다.

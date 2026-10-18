@@ -25,6 +25,10 @@ from sp500_candidate_engine.analytics.features import (
     Alpha158FeatureService,
     normalize_alpha158_frame,
 )
+from sp500_candidate_engine.analytics.historical_safety import (
+    HistoricalSafetyError,
+    HistoricalTrainingFence,
+)
 from sp500_candidate_engine.analytics.model_registry import (
     ModelRegistration,
     ModelRegistry,
@@ -402,6 +406,30 @@ def _segment_index(
     return labels.index[mask]
 
 
+def validate_reconstruction_data(
+    data: PreparedTrainingData, fence: HistoricalTrainingFence,
+) -> None:
+    fence.validate()
+    anchor = pd.Timestamp(fence.anchor_session)
+    for frame in (data.features, data.labels, data.momentum):
+        dates = frame.index.get_level_values("datetime")
+        if len(dates) == 0 or dates.max() > anchor:
+            raise HistoricalSafetyError("training/evaluation data exceeds historical anchor")
+    labels = data.labels.loc[data.labels["label"].notna()]
+    if labels.empty:
+        raise HistoricalSafetyError("no matured historical training labels")
+    exits = pd.to_datetime(labels["exit_date"])
+    entries = pd.to_datetime(labels["entry_date"])
+    if (
+        exits.isna().any()
+        or entries.isna().any()
+        or (exits > anchor).any()
+        or (entries > exits).any()
+        or (entries <= labels.index.get_level_values("datetime")).any()
+    ):
+        raise HistoricalSafetyError("training label has not matured at historical anchor")
+
+
 def _run_phase45_workflow(
     *,
     settings: Settings,
@@ -411,6 +439,7 @@ def _run_phase45_workflow(
     selection_config: VersionedConfig | None,
     output_root: Path,
     persist_selection: bool,
+    reconstruction: HistoricalTrainingFence | None = None,
 ) -> Phase45Summary | TrainingWorkflowSummary:
     if persist_selection != (selection_config is not None):
         raise ValueError(
@@ -419,7 +448,19 @@ def _run_phase45_workflow(
     export_manifest = json.loads(
         (export_dir / "manifest.json").read_text(encoding="utf-8")
     )
+    actual_started_at = datetime.now(UTC)
     fit_at = pd.Timestamp(export_manifest["cutoff_at"])
+    if reconstruction is not None:
+        reconstruction.validate()
+        if (
+            persist_selection
+            or model_config.payload.get("model_purpose") != "MEDIUM_20D"
+            or int(label_config.payload["horizon_sessions"]) != 20
+            or fit_at.to_pydatetime() != reconstruction.training_cutoff
+            or export_manifest["calendar_end"] != reconstruction.anchor_session.isoformat()
+        ):
+            raise HistoricalSafetyError("reconstruction training/export contract mismatch")
+        fit_at = pd.Timestamp(actual_started_at)
     export_run_id = uuid.UUID(export_manifest["export_run_id"])
     experiment_identity = {
         "export_hash": export_manifest["content_hash"],
@@ -456,6 +497,8 @@ def _run_phase45_workflow(
         momentum_lookback=int(baseline_config["momentum_lookback_sessions"]),
         horizon_sessions=horizon_sessions,
     )
+    if reconstruction is not None:
+        validate_reconstruction_data(data, reconstruction)
     joined = data.labels.join(data.features, how="inner")
     valid = joined["label"].notna() & data.features.notna().any(axis=1)
     usable_dates = tuple(
@@ -622,16 +665,28 @@ def _run_phase45_workflow(
     final_train_index = all_index[
         ~all_index.get_level_values("datetime").isin(final_valid_dates)
     ]
+    if reconstruction is not None:
+        validation_start = min(final_valid_dates)
+        final_train_index = final_train_index[
+            pd.to_datetime(data.labels.loc[final_train_index, "exit_date"])
+            < validation_start
+        ]
+        if len(final_train_index) == 0 or len(final_valid_index) == 0:
+            raise HistoricalSafetyError("purged final training/validation split is empty")
+    ridge_fit_index = final_train_index if reconstruction is not None else all_index
     ridge_final = RidgeBaseline(
         alpha=float(baseline_config["ridge_alpha"]),
         seed=int(model_payload["seed"]),
     )
+    ridge_fit_started_at = datetime.now(UTC)
     ridge_final.fit(
-        data.features.loc[all_index],
-        data.labels.loc[all_index, "label"],
+        data.features.loc[ridge_fit_index],
+        data.labels.loc[ridge_fit_index, "label"],
     )
+    ridge_fit_completed_at = datetime.now(UTC)
     ridge_path = experiment_dir / "ridge.joblib"
     ridge_final.save(ridge_path)
+    lightgbm_fit_started_at = datetime.now(UTC)
     lightgbm_final = train_qlib_lightgbm(
         features=data.features,
         labels=data.labels["label"],
@@ -639,6 +694,7 @@ def _run_phase45_workflow(
         valid_index=final_valid_index,
         parameters=lgb_parameters,
     )
+    lightgbm_fit_completed_at = datetime.now(UTC)
     lightgbm_path = experiment_dir / "lightgbm.txt"
     lightgbm_final.save(lightgbm_path)
     momentum_path = experiment_dir / "momentum.json"
@@ -654,6 +710,26 @@ def _run_phase45_workflow(
         "ridge": ridge_path,
         "lightgbm": lightgbm_path,
     }
+    actual_fit_times = {
+        "ridge": (ridge_fit_started_at, ridge_fit_completed_at),
+        "lightgbm": (lightgbm_fit_started_at, lightgbm_fit_completed_at),
+    }
+    reconstruction_spec: dict[str, object] = {}
+    if reconstruction is not None:
+        reconstruction_spec = {
+            "knowledge_mode": "HISTORICAL_RECONSTRUCTION",
+            "training_cutoff": reconstruction.training_cutoff.isoformat(),
+            "anchor_session": reconstruction.anchor_session.isoformat(),
+            "generated_at": actual_started_at.isoformat(),
+            "fit_completed_at": datetime.now(UTC).isoformat(),
+            "training_data_end": str(data.features.index.get_level_values("datetime").max()),
+            "training_label_exit_max": str(data.labels.loc[all_index, "exit_date"].max()),
+            "processor_fit_data_end": str(
+                ridge_fit_index.get_level_values("datetime").max()
+            ),
+            "processors": "Alpha158 raw; LightGBM none; Ridge train-only imputer/scaler",
+            "promotion_allowed": False,
+        }
 
     with Database(settings).connect() as connection, connection.transaction():
         export_row = connection.execute(
@@ -689,6 +765,15 @@ def _run_phase45_workflow(
                     config_hash=effective_model_hash,
                     split_spec={
                         "fit_at": fit_at.isoformat(),
+                        **reconstruction_spec,
+                        **(
+                            {
+                                "fit_at": actual_fit_times[model_name][0].isoformat(),
+                                "fit_completed_at": actual_fit_times[model_name][1].isoformat(),
+                            }
+                            if reconstruction is not None and model_name in actual_fit_times
+                            else {}
+                        ),
                         "label_horizon_sessions": horizon_sessions,
                         "folds": [
                             {
@@ -698,7 +783,10 @@ def _run_phase45_workflow(
                                 for key, value in asdict(fold).items()
                             }
                             | {
-                                "fit_at": fold.test_start.isoformat(),
+                                (
+                                    "simulated_fit_boundary"
+                                    if reconstruction is not None else "fit_at"
+                                ): fold.test_start.isoformat(),
                                 "label_observation_end": fold.valid_end.isoformat(),
                             }
                             for fold in folds
@@ -910,6 +998,7 @@ def run_training_only_workflow(
     model_config: VersionedConfig,
     label_config: VersionedConfig,
     output_root: Path,
+    reconstruction: HistoricalTrainingFence | None = None,
 ) -> TrainingWorkflowSummary:
     summary = _run_phase45_workflow(
         settings=settings,
@@ -919,6 +1008,7 @@ def run_training_only_workflow(
         selection_config=None,
         output_root=output_root,
         persist_selection=False,
+        reconstruction=reconstruction,
     )
     if not isinstance(summary, TrainingWorkflowSummary):
         raise RuntimeError("Training-only workflow attempted production selection")

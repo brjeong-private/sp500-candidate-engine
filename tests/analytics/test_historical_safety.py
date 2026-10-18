@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -122,4 +123,68 @@ def test_historical_guard_rejects_future_model_artifact() -> None:
     )
 
     with pytest.raises(HistoricalSafetyError, match="future model artifact"):
+        validate_historical_candidate_inputs(**inputs)  # type: ignore[arg-type]
+
+
+def _reconstruction_inputs() -> dict[str, object]:
+    inputs = _valid_inputs()
+    artifact = inputs["model_artifact"]
+    assert isinstance(artifact, ModelArtifactEvidence)
+    training_cutoff = artifact.fit_at
+    actual_fit_at = datetime(2026, 10, 18, tzinfo=UTC)
+    inputs["knowledge_mode"] = "HISTORICAL_RECONSTRUCTION"
+    inputs["model_artifact"] = replace(
+        artifact,
+        fit_at=actual_fit_at,
+        artifact_created_at=actual_fit_at + timedelta(hours=1),
+        reconstruction_training_cutoff=training_cutoff,
+        training_data_end=date(2026, 1, 28),
+        training_label_available_at=training_cutoff,
+        processor_fit_data_end=date(2026, 1, 2),
+    )
+    observation = inputs["observations"][0]  # type: ignore[index]
+    inputs["observations"] = (replace(observation, observed_at=actual_fit_at),)
+    return inputs
+
+
+def test_reconstruction_preserves_real_timestamps_and_allows_late_acquisition() -> None:
+    inputs = _reconstruction_inputs()
+    artifact = inputs["model_artifact"]
+    validate_historical_candidate_inputs(**inputs)  # type: ignore[arg-type]
+    assert artifact is inputs["model_artifact"]
+    assert artifact.fit_at == datetime(2026, 10, 18, tzinfo=UTC)
+
+
+def test_reconstruction_is_never_operational_replay() -> None:
+    inputs = _reconstruction_inputs()
+    inputs["knowledge_mode"] = "OPERATIONAL_REPLAY"
+    inputs["observations"] = ()
+    with pytest.raises(HistoricalSafetyError, match="not operational replay"):
+        validate_historical_candidate_inputs(**inputs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("changes", [
+    {"training_data_end": date(2026, 2, 1)},
+    {"processor_fit_data_end": date(2026, 2, 1)},
+    {"training_label_available_at": datetime(2026, 2, 1, tzinfo=UTC)},
+    {"training_data_end": None},
+    {"fit_at": datetime(2026, 1, 1, tzinfo=UTC)},
+])
+def test_reconstruction_rejects_future_or_missing_training_proof(
+    changes: dict[str, object],
+) -> None:
+    inputs = _reconstruction_inputs()
+    inputs["model_artifact"] = replace(inputs["model_artifact"], **changes)
+    with pytest.raises(HistoricalSafetyError):
+        validate_historical_candidate_inputs(**inputs)  # type: ignore[arg-type]
+
+
+def test_training_label_must_mature_at_historical_cutoff_not_actual_fit() -> None:
+    inputs = _reconstruction_inputs()
+    inputs["training_labels"] = (TrainingLabelEvidence(
+        anchor_session=date(2026, 1, 1),
+        exit_session=date(2026, 1, 30),
+        label_available_at=datetime(2026, 1, 30, tzinfo=UTC),
+    ),)
+    with pytest.raises(HistoricalSafetyError, match="not matured"):
         validate_historical_candidate_inputs(**inputs)  # type: ignore[arg-type]

@@ -37,6 +37,12 @@ Candidate Engine의 범위는 다음으로 제한한다.
 외부 LLM 분석, 리포트, 비용, 매매와 재평가는 포함하지 않는다. 주간 학습은 모델을
 평가·등록할 수 있지만 production score나 candidate selection을 만들지 않는다.
 
+과거 주말 기준의 별도 **비승격 MEDIUM_20D challenger 재구성**은
+[역사 학습 실행 계약](src/sp500_candidate_engine/analytics/HISTORICAL-TRAINING.md)을 따른다.
+기존 저장 snapshot만 명시적으로 고정하고 실제 학습·생성 시각을 보존하며, 신규 격리
+context/export와 SHADOW artifact를 생성한다. 정규 weekly API·승격·active assignment는
+호출하지 않는다. 구현·단위 검증 상태이며 실제 context 쓰기·학습·배포는 하지 않았다.
+
 ## 2. 상태 용어
 
 이 문서에서는 다음 상태를 구분한다.
