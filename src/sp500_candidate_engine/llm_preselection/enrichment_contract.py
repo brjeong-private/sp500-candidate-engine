@@ -12,6 +12,8 @@ from sp500_candidate_engine.database import _canonical_hash
 from sp500_candidate_engine.llm_preselection.asof import NEW_YORK, llm_cutoff, publication_bound
 
 ENRICHMENT_VERSION = "llm-search-evidence-v3"
+SEARCH_OMISSION_VERSION = "llm-search-omission-v1"
+SEARCH_OMISSION_GAP = "검증을 통과한 외부 검색 자료가 없어 DB 자료만으로 평가했습니다."
 _HASH = re.compile(r"[0-9a-f]{64}")
 
 
@@ -483,11 +485,21 @@ def document_from_payload(
         if (
             int(result.cik) != int(cik)
             or result.accession_no != filing["accession_no"]
+            or result.parent_accepted_at != str(filing["accepted_at"])
+            or timestamp(result.source_available_at) != effective
             or urlsplit(result.source_url).scheme != "https"
             or not _HASH.fullmatch(result.tool_response_hash)
             or not re.fullmatch(r"[0-9a-f]{64}\.json", result.artifact_key)
             or result.evidence_hash != evidence_hash(result)
             or any(label is None or not _label_allowed(label, effective) for label in labels)
+            or result.source_local_date != max(
+                label[1] for label in labels if label is not None
+            )
+            or result.source_date_precision != (
+                "TIMESTAMP"
+                if result.source_local_date == effective.astimezone(NEW_YORK).date().isoformat()
+                else "DAY"
+            )
             or knowledge_mode not in {"HISTORICAL_RECONSTRUCTION", "OPERATIONAL_REPLAY"}
             or (
                 knowledge_mode == "OPERATIONAL_REPLAY"

@@ -54,9 +54,22 @@ Fusion은 두 성공 run 이후의 별도 후보 선정 단계이며 앞으로�
 공통 수집·전처리와 고정 context의 독립 Quant Top 20·LLM Top 20은 Fusion의 필수 원천으로
 유지하며, 최종 결과는 Fusion Top 20이다. 정량 단독 완료를 정규 실행 성공으로 대체하지 않는다.
 신규 정규 타이머는 Fusion 비활성·설정 누락 시 명시적으로 실패하고 다른 경로로 진행하지 않는다.
-안전한 기본 비활성 설정·기존 Durable history·명시적 독립/수동 실행·주간 두 모델 재학습은
-유지한다. 기존 05:30 뉴욕 시각·직전 달력 날짜·비거래일 skip 규칙도 변경하지 않는다.
+안전한 기본 비활성 설정·기존 Durable history·명시적 독립/수동 실행은 유지한다.
+신규 주말 재학습은 아래 2026-10-18 승인에 따라 MEDIUM_20D만 실행한다.
+기존 05:30 뉴욕 시각·직전 달력 날짜·비거래일 skip 규칙도 변경하지 않는다.
 외부 전달은 계속 별도 승인 플래그와 전량 ACK 계약을 요구한다.
+
+2026-10-18 사용자 승인 이후 **신규 정규 주말 모델 업데이트는 MEDIUM_20D 전용**이다.
+새 Durable 입력에 목적 목록을 고정하고 SHORT_5D 학습을 자동 예약하지 않는다.
+과거 두 목적의 입력 history·run·모델 계약과 명시적 레거시 수동 기능은 보존한다.
+신규 주간 정책 `weekly-v2-20d-performance-suspended`는 다음 별도 지시까지
+Rank IC·구간 Rank IC·Top-10 순수익률·최대낙폭의 절대/상대 성능 기준을 강제하지 않는다.
+수치는 계속 계산·저장하고 실제 통과 여부와 `enforced=false`를 구분한다.
+coverage·test block 수·finite 지표·시점/입력/목적/artifact 무결성·CAS·smoke·rollback은
+유지한다. 과거 `weekly-v1` 판정이나 이미 종료한 이번 주 run을 수정·재실행·강제 승격하지 않는다.
+이 정책 변경은 코드·설정 변경이며 운영 적용에는 일치하는 Backend·학습 Job·오케스트레이터
+배포가 필요하다. 이번 주 미달 내역과 복구 절차는
+[`WEEKLY-MODEL-FOLLOW-UP-2026-W42.md`](WEEKLY-MODEL-FOLLOW-UP-2026-W42.md)에 남긴다.
 
 독립 후보 실행은 기존 execution context에서 QUANTITATIVE·LLM_PRESELECTION·FUSION
 중 한 단계만 실행한다. 수집·학습·다른 후보 분기·외부 분석을 암묵 실행하지 않는다.
@@ -228,6 +241,18 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
   전일 이전은 일자만, 당일은 페이지에서 읽은 timezone 시각이 05:30 이전일 때만 승인한다.
   날짜·당일 시각을 읽지 못하거나 미래 날짜이면 해당 출처를 거부하며 별도 원문 파일은 요구하지 않는다.
 
+### 4.3.4 2026-10-18 승인: v6 선택적 검색 보강
+
+- v6는 검색을 먼저 수행하고 Python이 승인한 발췌만 고정 DB packet에 추가한다.
+- 출처 검증을 통과한 발췌가 없으면 해당 검색 응답 전체를 평가 입력에서 제외하고,
+  DB의 비가격 자료만으로 새 평가 대화를 수행한다. 승인된 발췌가 있으면 함께 평가한다.
+- 제외는 보강 성공이 아니다. `llm_search_omission`·사유 코드·content-addressed 감사 파일과
+  후보 `EXTERNAL_NEWS_NOT_USED`를 보존한다. 근거 부족 항목은 계속 null로 유지한다.
+- v4/v5의 필수 보강 계약은 변경하지 않는다. 새 v6 정책을 명시 선택해야 하며,
+  DB manifest·cutoff 위반, 기존 artifact 누락/변조, 인증·설정 오류를 이 예외로 숨기지 않는다.
+- 영향은 외부 뉴스 부족으로 독립 DB 평가까지 중단하지 않는 것이다. 검증은 검색→승인/제외→
+  격리 평가·원천 인용·제외 감사 재생·기존 필수 정책의 실패 보존을 포함한다.
+
 ### 4.4 학습 누수
 
 - 무작위 train/validation/test split을 사용하지 않는다.
@@ -366,6 +391,16 @@ Qlib `TopkDropoutStrategy` 결과를 본 프로젝트의 일일 후보 정책과
 - 동일 idempotency key와 동일 payload는 재사용하고, 같은 key의 다른 payload는 충돌로 실패한다.
 - 로그에 secret, token, password, 원문 payload를 기록하지 않는다.
 - SKU 하향, 리소스 중지, replica 축소는 비용 절감 목적이라도 실행 전에 사용자 승인을 받는다.
+- **2026-10-18 사용자 지정:** DB SKU·용량은 사용자가 관리한다. 별도 명시적 승인 없이
+  PostgreSQL·MySQL SKU를 상향·하향하거나 변경하지 않는다.
+- 여러 날짜의 backfill은 기본적으로 bounded 병렬 실행한다(기본 2일).
+  날짜별 고정 context·cutoff·manifest와 실패 격리·성공 결과 재사용을 유지한다.
+  공유 provider quota를 날짜 수만큼 늘리지 않으며 실패한 날짜만 명시적으로 재시도한다.
+- **2026-10-18 사용자 지정:** Portal `asp-jongmok-prd`와 Candidate
+  `asp-sp500-candidate`의 승인 SKU는 **B2**다. B1으로 변경하지 않는다.
+  코드·설정·인프라 재배포는 기존 플랜의 SKU와 인스턴스 수를 보존한다.
+  배포 전후 두 플랜을 조회해 확인하고, 기본 템플릿이나 비용 최적화로 덮어쓰지 않는다.
+  다른 SKU 변경도 별도 사용자 승인 없이는 수행하지 않는다.
 - PostgreSQL, MySQL, Candidate App Service, Portal App Service, TradingAgents,
   orchestrator는 항상 실행 상태를 유지하는 운영 리소스다.
 

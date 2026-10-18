@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sp500_candidate_engine.database import _canonical_hash
 from sp500_candidate_engine.llm_preselection.asof import publication_bound
-from sp500_candidate_engine.llm_preselection.enrichment_contract import document_from_payload
+from sp500_candidate_engine.llm_preselection.enrichment_contract import (
+    SEARCH_OMISSION_GAP,
+    SEARCH_OMISSION_VERSION,
+    document_from_payload,
+)
 from sp500_candidate_engine.models import KnowledgeMode, RunSpec
 from sp500_candidate_engine.temporal import TemporalFence
 
@@ -86,6 +91,31 @@ def section_items(packet: dict[str, object], section: str) -> list[dict]:
     if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
         raise ValueError("Invalid LLM evidence section")
     return items
+
+
+def validate_search_omission(payload: dict[str, object]) -> bool:
+    if "llm_search_omission" not in payload:
+        return False
+    marker = payload["llm_search_omission"]
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != {"schema_version", "status", "reason_code", "artifact_key",
+                           "information_gap"}
+        or marker.get("schema_version") != SEARCH_OMISSION_VERSION
+        or marker.get("status") != "OMITTED"
+        or marker.get("information_gap") != SEARCH_OMISSION_GAP
+        or not isinstance(marker.get("reason_code"), str)
+        or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,99}", marker["reason_code"])
+        or not isinstance(marker.get("artifact_key"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}\.json", marker["artifact_key"])
+        or payload.get("schema_version") != "4"
+        or "llm_search_manifest_hash" in payload
+        or any(
+            item.get("search_evidence") is not None for item in section_items(payload, "filings")
+        )
+    ):
+        raise ValueError("Invalid external search omission record")
+    return True
 
 
 def validate_packet(
@@ -191,6 +221,7 @@ def validate_packet_data(
             })
     if "external_enrichment_manifest_hash" in payload:
         raise ValueError("Server-acquired enrichment manifest is no longer supported")
+    validate_search_omission(payload)
     if (external_manifest or "llm_search_manifest_hash" in payload) and (
         payload.get("schema_version") != "4" or not external_manifest or payload.get(
             "llm_search_manifest_hash"
@@ -201,6 +232,7 @@ def validate_packet_data(
 
 def validate_model_packets(
     packets: tuple[EvidencePacket, ...], *, require_enrichment: bool = False,
+    allow_omitted_enrichment: bool = False,
 ) -> None:
     identities = {
         (
@@ -213,11 +245,13 @@ def validate_model_packets(
     if len(identities) > 1:
         raise ValueError("LLM model input mixes analysis identities")
     for packet in packets:
-        if not require_enrichment and "llm_search_manifest_hash" in packet.packet:
+        omitted = validate_search_omission(packet.packet)
+        if not require_enrichment and ("llm_search_manifest_hash" in packet.packet or omitted):
             raise ValueError("External scoring requires the explicitly selected enriched policy")
         if require_enrichment and (
             packet.packet.get("schema_version") != "4"
-            or not packet.packet.get("llm_search_manifest_hash")
+            or (not packet.packet.get("llm_search_manifest_hash")
+                and not (allow_omitted_enrichment and omitted))
         ):
             raise ValueError("Search scoring requires admitted tool evidence and schema 4")
         validate_packet(

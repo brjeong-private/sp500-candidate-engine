@@ -1,5 +1,26 @@
 # Change Log
 
+- 2026-10-18 | Repository Release Preparation | 사용자 승인에 따라 저장소 전체 변경과 후속 문서를 함께 커밋·푸시하고 동일 코드의 Backend·학습 Job·오케스트레이터 배포를 준비했으며 비밀값·실행 데이터와 기존 리소스 SKU·네트워크 정책은 변경 대상에서 제외했다.
+- 2026-10-18 | Weekly 20D Only | 신규 주말 Durable 입력·자동 예약·기본 주간 접수를 MEDIUM_20D로 한정하고 기존 두 목적 history·v1 run 호환과 일일 Fusion을 보존했으며 배포하지 않았다.
+- 2026-10-18 | Temporary Performance Gate Suspension | 사용자 확인에 따라 별도 v2 정책에서 다음 지시까지 네 성능 메트릭의 절대·상대 기준만 비강제하고 실제 판정·enforced 증적·정책 알림을 기록하며 데이터·finite 지표·artifact·활성화 검사는 유지했다.
+- 2026-10-18 | W42 Promotion Follow-up | 운영의 주간 6개 승격 결정에서 미달 7항목의 정확한 값·기준·차이·run/model ID와 재검증·복구 절차를 별도 문서에 기록하고 최신 실행과 주간 전체의 미달 범위를 구분했다.
+- 2026-10-18 | Period Search Reader Production | 승인된 기간검색 근거 조회 호환 수정만 Candidate Backend에 단일 배포해 10월15·16일 각 20개 설명의 RECORDED·v2 목록 정상 반환과 기존 후보·운영 설정·두 App Service B2 보존을 확인하고 ER 문서에 반영했으며 다른 세션의 진행 중 변경·주간 오케스트레이터는 배포하지 않았다.
+- 2026-10-18 | Data Storage Guide | 매니페스트·스냅샷·실행 컨텍스트를 쉬운 비유로 설명하고 기본 수집 원본·정규화 DB·LLM 검색 증적·승인 입력·평가 결과의 저장 위치와 DB 미적재 시험·운영 기본 정책의 차이를 별도 문서로 정리했다.
+- 2026-10-18 | Parallel DB Evidence | 동일 read-only PostgreSQL snapshot의 날짜별 독립 DB worker 조회와 event loop 밖 입력 준비를 추가하고 기존 packet 순서·시점·screening·cache lineage 검증을 유지했다.
+- 2026-10-18 | Parallel Backfill and Search Retry | 다중 날짜 backfill 기본 병렬도 2·검색 동시도 3과 고정 context LLM CLI를 추가하고 수집 DB 반영의 날짜순 lineage·날짜 실패 격리·공유 quota 요청별 정산·일시적 검색 오류 재시도·안전한 실패 감사·동일 service의 완료 종목 재사용을 구현했다.
+- 2026-10-18 | User-managed DB SKU | DB SKU·용량을 사용자 관리로 고정하고 별도 명시적 승인 없는 상향·하향·변경을 금지했으며 이번 작업에서 리소스 크기와 운영 설정은 변경하지 않았다.
+- 2026-10-18 | October 15-16 Refresh Completion | 두 날짜 신규 LLM·Fusion 후보와 외부 리포트 40건의 저장 완료 후 지정된 기존 결과·리포트만 정리하고 수집·정량 결과 불변 및 immutable trigger 복원을 확인했다.
+- 2026-10-18 | Period Search Explanation API | 기존 기간검색 증적 호환 수정을 바탕으로 v2 API의 근거·출처·검증 정보 반환과 미래일·당일 시각 불명·미지원 방식 차단 및 v1 후보 계약 보존을 회귀 검증했으며 배포하지 않았다.
+- 2026-10-18 | Collection to Candidate Database ER | 후보 DB 문서에 원본 파일·정규화/관찰 연결·고정 입력·전처리·특징/라벨·모델/결과의 저장 흐름과 ER, 검색 증적 저장 위치 및 근거 기록 상태·배포 호환성을 보강했다.
+- 2026-10-18 | Search Enrichment Export | 10월15일 62종목·137개와 10월16일 65종목·142개의 실제 반영 검색 발췌·출처·검사 기록 및 미보강 사유를 성공 run 기준 날짜별 Git 제외 파일로 내보내고 실제 평가 호출 지연과 외부 리포트 진행 상태를 구분했다.
+- 2026-10-18 | Weekly Terminal Execution Gate | 같은 주의 종료된 주간 실행을 타이머가 다시 시작하지 않도록 차단해 중복 업데이트·메일을 방지하고 입력 manifest 미준비 재확인·다음 주 실행·일일 Fusion·수동 실행을 유지했으며 배포는 하지 않았다.
+- 2026-10-18 | Infrastructure SKU Preservation | Backend 배포 템플릿이 기존 App Service 플랜만 참조하도록 변경하고 SKU·인스턴스 수 덮어쓰기 방지 회귀 검증을 추가했다.
+- 2026-10-18 | Operations B2 Protection | Portal·Candidate의 승인 SKU B2 유지와 B1 변경 금지를 공통 하네스·배포 문서에 명시하고 Portal B1을 B2로 복원했으며 기존 Candidate B2는 변경하지 않았다.
+- 2026-10-18 | External Citation Projection | 같은 검증 문서·평가 항목의 서로 다른 해석은 동일 증적 확인 후 bounded 설명으로 모으고 DB·검색 출처 층을 구분하며 동일 사유 중복·충돌 증적은 계속 거부하도록 정합화했다.
+- 2026-10-18 | Period Search Fusion Witness | 기간검색 뉴스 게시일과 연결 SEC 공시 접수일을 별도 증적으로 구분해 Fusion 설명을 투영하고 기간검색 cutoff 상한·일자 정밀도·원본 공시 연결 검증과 기존 SEC 원문 검증을 유지했다.
+- 2026-10-18 | LLM Citation Repair | 실제 재처리에서 확인한 산업 점수의 인용 누락에 대해 재질의에 오류 종목·항목과 10개 인용 한도 내 점수별 근거 배분을 명시하고 기존 근거·결측·최소 지원 항목 검증을 유지했다.
+- 2026-10-18 | Optional LLM Search | 별도 v6 정책에서 검색·Python 검증을 먼저 수행하고 승인 자료만 보강하며 승인 자료가 없으면 제외 사유·감사 증적을 저장한 뒤 DB 비가격 자료의 독립 LLM 평가와 Fusion을 계속하도록 분리했다.
+- 2026-10-18 | LLM IR Publication Date | 두 날짜 재처리 중 확인한 IR 본문의 명시 게시일 누락을 보완하고 당일 시각·미래일·모호한 게시일 차단을 유지했으며 기간검색 캐시를 날짜 파서 버전으로 분리했다.
 - 2026-10-18 | Rank IC Guide | 순위 예측력과 수익률의 차이·확인된 모델 지표·승격 조건을 쉬운 예시로 설명하고 독립 재계산·동일 조건 비교·별도 학습 실험과 미사용 테스트의 개선 원칙을 별도 문서로 정리했다.
 - 2026-10-17 | VLO Period Search Report | 승인 리소스에서 기간 필터의 요청/응답 echo와 실제 검색 후보를 확인하고 원문 version proof 미노출로 자동 평가 사용 0건임을 별도 문서·Git 제외 증적으로 남겼다.
 - 2026-10-17 | Period-filtered LLM Search | 승인된 Bing Grounding 리소스·프로젝트 연결을 생성하고 freshness 날짜 범위를 실제 도구 설정에 전달하는 별도 v5 검색 정책을 추가했다.

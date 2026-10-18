@@ -74,6 +74,9 @@ class Settings:
     sec_edgar_json_api_enabled: bool
     sec_edgar_bulk_zip_enabled: bool
     sec_financial_normalization_required: bool
+    llm_db_read_workers: int = 4
+    llm_search_concurrency: int = 3
+    backfill_max_concurrency: int = 2
 
     @classmethod
     def from_env(cls, env_file: str | Path = ".env") -> Settings:
@@ -124,11 +127,21 @@ class Settings:
             sec_financial_normalization_required=_boolean(
                 "SEC_FINANCIAL_NORMALIZATION_REQUIRED", True
             ),
+            llm_db_read_workers=int(os.getenv("LLM_DB_READ_WORKERS", "4")),
+            llm_search_concurrency=int(os.getenv("LLM_SEARCH_CONCURRENCY", "3")),
+            backfill_max_concurrency=int(os.getenv("BACKFILL_MAX_CONCURRENCY", "2")),
         )
         settings.validate()
         return settings
 
     def validate(self) -> None:
+        for name, value, maximum in (
+            ("LLM_DB_READ_WORKERS", self.llm_db_read_workers, 16),
+            ("LLM_SEARCH_CONCURRENCY", self.llm_search_concurrency, 8),
+            ("BACKFILL_MAX_CONCURRENCY", self.backfill_max_concurrency, 8),
+        ):
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be between 1 and {maximum}")
         if self.azure_credential_mode not in {"default", "azure_cli"}:
             raise ValueError("AZURE_CREDENTIAL_MODE must be 'default' or 'azure_cli'")
         if not 1 <= self.max_concurrency <= 32:

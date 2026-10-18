@@ -37,6 +37,14 @@ def _date(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def _session_context(value: str) -> tuple[date, uuid.UUID]:
+    try:
+        day, context = value.split("=", 1)
+        return _date(day), uuid.UUID(context)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Expected YYYY-MM-DD=UUID") from error
+
+
 def _datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
@@ -159,6 +167,15 @@ def build_parser() -> argparse.ArgumentParser:
     rank_llm.add_argument("--date", type=_date, required=True)
     rank_llm.add_argument(
         "--execution-context-id", type=uuid.UUID, required=True
+    )
+    llm_backfill = commands.add_parser(
+        "backfill-llm-candidates",
+        help="Run pinned LLM dates concurrently; preserve successes and isolate failed dates",
+    )
+    llm_backfill.add_argument(
+        "--session-context", type=_session_context, action="append", required=True,
+        metavar="YYYY-MM-DD=UUID",
+        help="Repeat for each fixed session/context pair; concurrency defaults to 2",
     )
 
     run_backfill = commands.add_parser(
@@ -369,6 +386,22 @@ def main() -> None:
         print(json.dumps(summary.__dict__, indent=2, sort_keys=True, default=str))
         return
 
+    if args.command == "backfill-llm-candidates":
+        from sp500_candidate_engine.llm_preselection.pipeline import (
+            LlmBackfillRequest,
+            run_llm_backfill,
+        )
+
+        requests = []
+        for day, context_id in args.session_context:
+            requests.append(LlmBackfillRequest(day, context_id))
+        result = asyncio.run(run_llm_backfill(
+            settings, requests=tuple(requests), repository_root=Path(__file__).parents[2],
+        ))
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        if result["status"] != "SUCCEEDED":
+            raise SystemExit(1)
+        return
     if args.command == "run-backfill":
         result = asyncio.run(
             run_backfill_process(

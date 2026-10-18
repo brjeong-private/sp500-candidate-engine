@@ -709,7 +709,7 @@ def weekly_model_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any
                 key: run_status[key]
                 for key in (
                     "anchor_session", "challenger_model_version_id", "champion_model_version_id",
-                    "error_code",
+                    "error_code", "policy_version",
                 )
                 if run_status.get(key) is not None
             },
@@ -726,6 +726,7 @@ def weekly_model_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any
 
 def _weekly_email(
     iso_week: str, state: str, models: dict[str, dict[str, Any]],
+    model_purposes: tuple[str, ...] = MODEL_SEQUENCE,
 ) -> dict[str, str]:
     lines = [
         "프로젝트: S&P 500 Candidate Engine",
@@ -739,7 +740,7 @@ def _weekly_email(
         "TIMED_OUT": "제한 시간 초과, 승격 확정 아님",
     }
     if not models:
-        lines.append("SHORT_5D 다음 MEDIUM_20D 순서로 학습·평가를 진행합니다.")
+        lines.append(f"{' 다음 '.join(model_purposes)} 순서로 학습·평가를 진행합니다.")
     for purpose, outcome in models.items():
         outcome_state = str(outcome["state"])
         lines.append(f"{purpose}: {descriptions.get(outcome_state, outcome_state)}")
@@ -748,9 +749,15 @@ def _weekly_email(
             ("challenger_model_version_id", "신규 모델"),
             ("champion_model_version_id", "기존 모델"),
             ("stage", "단계"),
+            ("policy_version", "승격 정책"),
         ):
             if outcome.get(key) is not None:
                 lines.append(f"  {label}: {outcome[key]}")
+        if str(outcome.get("policy_version", "")).endswith("-performance-suspended"):
+            lines.append(
+                "  성능 메트릭 승격 기준 임시 중지; "
+                "데이터·활성화 무결성 검사는 유지합니다."
+            )
     return {
         "category": "weekly_training",
         "subject": f"[candidate-engine] 주말 모델 업데이트 {iso_week} {state}",
@@ -761,6 +768,12 @@ def _weekly_email(
 def weekly_parent_orchestrator(context: Any) -> Generator[Any, Any, dict[str, Any]]:
     request = context.get_input()
     iso_week = str(request["iso_week"])
+    model_purposes = tuple(request.get("model_purposes", MODEL_SEQUENCE))
+    if (
+        not model_purposes or len(set(model_purposes)) != len(model_purposes)
+        or any(purpose not in MODEL_SEQUENCE for purpose in model_purposes)
+    ):
+        raise ValueError("Invalid pinned weekly model purposes")
     eligibility = yield context.call_activity("weekly_eligibility", None)
     if not eligibility["eligible"]:
         return {
@@ -774,9 +787,10 @@ def weekly_parent_orchestrator(context: Any) -> Generator[Any, Any, dict[str, An
     email_results = []
     if notifications:
         email_results.append((yield from _send_email(
-            context, request, _weekly_email(iso_week, "STARTED", models), stage="weekly_started",
+            context, request, _weekly_email(iso_week, "STARTED", models, model_purposes),
+            stage="weekly_started",
         )))
-    for model_purpose in MODEL_SEQUENCE:
+    for model_purpose in model_purposes:
         child_result = yield context.call_sub_orchestrator(
             "weekly_model_orchestrator",
             {

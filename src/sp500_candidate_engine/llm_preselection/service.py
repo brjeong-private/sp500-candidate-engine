@@ -16,7 +16,7 @@ from sp500_candidate_engine.llm_preselection.config import (
 )
 from sp500_candidate_engine.llm_preselection.enrichment_contract import ENRICHMENT_VERSION
 from sp500_candidate_engine.llm_preselection.event_ranker import EventPreselectionRanker
-from sp500_candidate_engine.llm_preselection.evidence import EvidencePacketBuilder
+from sp500_candidate_engine.llm_preselection.evidence import EvidencePacket, EvidencePacketBuilder
 from sp500_candidate_engine.llm_preselection.external_enrichment import LlmSearchEnricher
 from sp500_candidate_engine.llm_preselection.ranker import (
     AzureOpenAIPreselectionRanker,
@@ -68,11 +68,15 @@ class LlmPreselectionService:
         *,
         ranker: AzureOpenAIPreselectionRanker | None = None,
         enricher: LlmSearchEnricher | None = None,
+        db_read_workers: int = 4,
     ) -> None:
         self.database = database
         self.config = config
         self.ranker_settings = ranker_settings
         self.enricher = enricher
+        self.db_read_workers = db_read_workers
+        if type(db_read_workers) is not int or not 1 <= db_read_workers <= 16:
+            raise ValueError("Evidence DB workers must be between 1 and 16")
         if config.enrichment is not None and enricher is None:
             raise ValueError("Verified scoring requires an external artifact verifier")
         if config.enrichment is None and enricher is not None:
@@ -147,7 +151,31 @@ class LlmPreselectionService:
         self, *, target_session: date, execution_context_id: uuid.UUID
     ) -> LlmPreselectionSummary:
         started_at = datetime.now(UTC)
+        context, builder, packets, cache_source_id = await asyncio.to_thread(
+            self._prepare_inputs, target_session=target_session,
+            execution_context_id=execution_context_id,
+        )
+        cutoff_at = context["cutoff_at"]
+        if not isinstance(cutoff_at, datetime):
+            raise TypeError("execution context cutoff_at must be datetime")
+        if self.enricher is not None:
+            packets = await self.enricher.enrich(
+                packets,
+                knowledge_mode=str(context["knowledge_mode"]),
+            )
+        return await self._rank_inputs(
+            target_session=target_session, execution_context_id=execution_context_id,
+            started_at=started_at, context=context, builder=builder, packets=packets,
+            cache_source_id=cache_source_id,
+        )
+
+    def _prepare_inputs(
+        self, *, target_session: date, execution_context_id: uuid.UUID,
+    ) -> tuple[
+        dict[str, object], EvidencePacketBuilder, tuple[EvidencePacket, ...], uuid.UUID | None
+    ]:
         with self.database.connect() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             source = SourceRepository(connection)
             context = source.read_context(execution_context_id=execution_context_id)
             builder = EvidencePacketBuilder(source, self.config)
@@ -171,6 +199,8 @@ class LlmPreselectionService:
                 packets = builder.build_all(
                     execution_context_id=execution_context_id,
                     target_session=target_session,
+                    database=self.database,
+                    max_workers=self.db_read_workers,
                 )
             if self.config.event_policy:
                 packets = tuple(
@@ -189,14 +219,17 @@ class LlmPreselectionService:
                     )
                     for packet in sorted(packets, key=lambda item: item.instrument_id.hex)
                 )
+        return context, builder, packets, cached[0] if cached is not None else None
+
+    async def _rank_inputs(
+        self, *, target_session: date, execution_context_id: uuid.UUID, started_at: datetime,
+        context: dict[str, object], builder: EvidencePacketBuilder,
+        packets: tuple[EvidencePacket, ...],
+        cache_source_id: uuid.UUID | None,
+    ) -> LlmPreselectionSummary:
         cutoff_at = context["cutoff_at"]
         if not isinstance(cutoff_at, datetime):
             raise TypeError("execution context cutoff_at must be datetime")
-        if self.enricher is not None:
-            packets = await self.enricher.enrich(
-                packets,
-                knowledge_mode=str(context["knowledge_mode"]),
-            )
         if (
             sum(packet.estimated_tokens for packet in packets)
             + (self.enricher.search_input_tokens if self.enricher else 0)
@@ -339,7 +372,9 @@ class LlmPreselectionService:
                     "external_enrichment_version": ENRICHMENT_VERSION
                     if self.config.enrichment
                     else None,
-                    "packet_cache_source_run_id": str(cached[0]) if cached is not None else None,
+                    "packet_cache_source_run_id": (
+                        str(cache_source_id) if cache_source_id is not None else None
+                    ),
                 },
                 input_hash=input_hash,
                 packets=packets,
@@ -406,9 +441,13 @@ def create_llm_preselection_service(
                 config,
                 artifact_directory=settings.raw_data_dir / "llm-search-evidence",
                 client=search_client,
+                max_concurrency=settings.llm_search_concurrency,
             ),
+            db_read_workers=settings.llm_db_read_workers,
         )
-    return LlmPreselectionService(Database(settings), config, ranker_settings)
+    return LlmPreselectionService(
+        Database(settings), config, ranker_settings, db_read_workers=settings.llm_db_read_workers
+    )
 
 
 def load_runtime_llm_config(repository_root: Path) -> LlmPreselectionConfig:

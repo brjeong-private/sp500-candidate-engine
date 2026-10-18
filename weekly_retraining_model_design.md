@@ -1,12 +1,30 @@
 # 주간 재학습 모델 설계
 
-갱신일: 2026-10-16
+갱신일: 2026-10-18
 
 ## 1. 목적과 범위
 
 이 문서는 `SHORT_5D`와 `MEDIUM_20D`의 주간 training-only 실행, 승격 gate,
 immutable model artifact, PostgreSQL active assignment와 DAILY pinning 계약을
 정의한다.
+
+### 1.1 현재 승인된 신규 실행 정책
+
+2026-10-18부터 신규 정규 주말 실행은 **MEDIUM_20D만** 예약한다.
+Backend 기본 정책은 `weekly_retraining_v2.yaml`의
+`weekly-v2-20d-performance-suspended`이며 신규 SHORT_5D 접수는 거부한다.
+기존 `weekly-v1` run과 두 목적의 과거 Durable history는 보존한다.
+
+사용자 확인에 따라 다음 별도 지시까지 Rank IC·구간 Rank IC 중앙값·Top-10 순수익률·
+최대낙폭의 절대/상대 성능 기준만 임시로 강제하지 않는다. 지표·임계값·원래 `passed`는
+계속 저장하고, 비강제 항목은 `enforced=false`로 구분한다. coverage 0.80·test block 3개,
+finite 지표, 입력·시점·artifact 검증과 CAS·smoke·rollback은 유지한다.
+이를 모델 성능 개선이나 과거 REJECT 판정의 취소로 해석하지 않는다.
+
+이번 주 6개 run의 모든 미달 지표와 기준 복구 절차는
+[후속 확인 문서](WEEKLY-MODEL-FOLLOW-UP-2026-W42.md)에 남긴다.
+이번 변경은 아직 운영 배포하지 않았다. 아래 구현 현황표는 2026-10-16 설계 당시의
+기록이며, 신규 정책의 코드 범위와 운영 상태는 이 절을 우선한다.
 
 Candidate Engine의 범위는 다음으로 제한한다.
 
@@ -122,7 +140,8 @@ workflow를 호출한다. 다음 단계는 아직 job에 연결되지 않았다.
 
 ## 5. Promotion policy
 
-정책 파일은 `config/analytics/weekly_retraining_v1.yaml`이며 version은 `1`이다.
+아래 기준은 과거 `config/analytics/weekly_retraining_v1.yaml`의 `weekly-v1`이다.
+신규 정책과 기준 강제 여부는 1.1절을 따른다. v1 파일과 과거 판정은 변경하지 않는다.
 각 gate 값은 finite number여야 한다. runtime metric이 없거나 bool/non-numeric,
 NaN 또는 Infinity이면 해당 gate는 실패한다. `test_blocks`는 정수여야 한다.
 

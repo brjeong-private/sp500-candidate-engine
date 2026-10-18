@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from threading import Event
+
+from psycopg import sql
 
 from sp500_candidate_engine.analytics.source_repository import SourceRepository
-from sp500_candidate_engine.database import _canonical_hash, _stable_uuid
+from sp500_candidate_engine.database import Database, _canonical_hash, _stable_uuid
 from sp500_candidate_engine.llm_preselection.config import LlmPreselectionConfig
 
 _NEWS_METADATA_FIELDS = (
@@ -135,7 +139,20 @@ class EvidencePacketBuilder:
         *,
         execution_context_id: uuid.UUID,
         target_session: date,
+        database: Database | None = None,
+        max_workers: int = 1,
     ) -> tuple[EvidencePacket, ...]:
+        if type(max_workers) is not int or not 1 <= max_workers <= 16:
+            raise ValueError("Evidence DB workers must be between 1 and 16")
+        if max_workers > 1 and database is None:
+            raise ValueError("Parallel evidence requires independent database connections")
+        if max_workers > 1:
+            state = self.repository.connection.execute(
+                "SELECT current_setting('transaction_isolation') AS isolation, "
+                "current_setting('transaction_read_only') AS read_only", (),
+            ).fetchall()[0]
+            if state["isolation"] != "repeatable read" or state["read_only"] != "on":
+                raise ValueError("Parallel evidence requires a repeatable-read read-only parent")
         self.repository.validate_context_manifest(
             execution_context_id=execution_context_id
         )
@@ -167,16 +184,51 @@ class EvidencePacketBuilder:
         bars_by_instrument: dict[uuid.UUID, list[dict[str, object]]] = defaultdict(list)
         for row in bar_rows:
             bars_by_instrument[uuid.UUID(str(row["instrument_id"]))].append(row)
-        packets = tuple(
-            self._build_one(
-                execution_context_id=execution_context_id,
-                target_session=target_session,
-                cutoff_at=cutoff_at,
-                member=member,
-                bars=bars_by_instrument[uuid.UUID(str(member["instrument_id"]))],
+        def build(builder: EvidencePacketBuilder, member: dict[str, object]) -> EvidencePacket:
+            return builder._build_one(
+                execution_context_id=execution_context_id, target_session=target_session,
+                cutoff_at=cutoff_at, member=member,
+                bars=bars_by_instrument.get(uuid.UUID(str(member["instrument_id"])), []),
             )
-            for member in members
-        )
+
+        if max_workers == 1 or len(members) < 2:
+            packets = tuple(build(self, member) for member in members)
+        else:
+            snapshot = self.repository.connection.execute(
+                "SELECT pg_export_snapshot() AS snapshot_id", (),
+            ).fetchall()[0]["snapshot_id"]
+            if not isinstance(snapshot, str):
+                raise ValueError("Evidence read snapshot is missing")
+            workers = min(max_workers, len(members))
+            chunks = [list(enumerate(members))[index::workers] for index in range(workers)]
+            stopped = Event()
+
+            def build_chunk(
+                chunk: list[tuple[int, dict[str, object]]],
+            ) -> list[tuple[int, EvidencePacket]]:
+                assert database is not None
+                try:
+                    with database.connect() as connection:
+                        connection.execute(
+                            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                        )
+                        connection.execute(
+                            sql.SQL("SET TRANSACTION SNAPSHOT {}").format(sql.Literal(snapshot))
+                        )
+                        builder = EvidencePacketBuilder(SourceRepository(connection), self.config)
+                        result = []
+                        for index, member in chunk:
+                            if stopped.is_set():
+                                break
+                            result.append((index, build(builder, member)))
+                        return result
+                except BaseException:
+                    stopped.set()
+                    raise
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                indexed = [item for chunk in executor.map(build_chunk, chunks) for item in chunk]
+            packets = tuple(packet for _, packet in sorted(indexed, key=lambda item: item[0]))
         from sp500_candidate_engine.llm_preselection.temporal import validate_packet
 
         for packet in packets:

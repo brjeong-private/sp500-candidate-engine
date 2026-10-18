@@ -222,6 +222,32 @@ def test_event_prompt_requires_korean_without_translating_protocol_identifiers()
     assert data[0]["evidence"][0]["evidence_link_id"] == str(packet(1).links[0].evidence_link_id)
 
 
+def test_repair_identifies_uncited_score_when_citation_budget_is_full():
+    class RepairClient(Client):
+        async def complete(self, **kwargs):
+            response = await super().complete(**kwargs)
+            if len(self.calls) == 1:
+                item = response.output["assessments"][0]
+                item["evidence"] = [
+                    evidence for evidence in item["evidence"]
+                    if evidence["criterion"] != "industry"
+                ]
+                item["evidence"] += [dict(item["evidence"][0]) for _ in range(6)]
+                assert len(item["evidence"]) == 10
+            elif len(self.calls) == 2:
+                repair = kwargs["messages"][-1]["content"]
+                assert f"instrument_id={UUID(int=1)}" in repair
+                assert "criterion=industry" in repair
+                assert "총 10개 한도" in repair
+                assert "점수를 null" in repair
+            return response
+
+    result = rank(RepairClient(supported=5))
+    assert len(result.candidates) == 20
+    assert result.attempts[0].error_code == "OUTPUT_VALIDATION_FAILED"
+    assert result.attempts[1].status == "SUCCEEDED"
+
+
 @pytest.mark.parametrize("field", ["summary", "missing_reason", "evidence_reason"])
 def test_english_natural_language_response_is_rejected_with_bounded_repair(field):
     class EnglishClient(Client):
@@ -355,8 +381,8 @@ def test_rate_limits_wait_for_both_rpm_and_tpm_without_real_sleep():
     limiter = LlmRateLimiter(RateLimits(2, 100, 10), clock=lambda: clock[0], sleep=sleep)
 
     async def run():
-        await limiter.acquire(30)
-        limiter.record_usage(50)
+        reservation = await limiter.acquire(30)
+        limiter.record_usage(50, reservation)
         await limiter.acquire(30)
         await limiter.acquire(30)
 

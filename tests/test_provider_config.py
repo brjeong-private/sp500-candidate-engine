@@ -1,6 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from sp500_candidate_engine.config import Settings
 
 
@@ -60,3 +62,26 @@ def test_provider_status_does_not_expose_keys() -> None:
 def test_expected_provider_selection_is_valid() -> None:
     settings = _settings()
     settings.validate()
+
+
+def test_parallel_defaults_do_not_change_source_identity():
+    settings = _settings()
+    assert (
+        settings.llm_db_read_workers, settings.llm_search_concurrency,
+        settings.backfill_max_concurrency,
+    ) == (4, 3, 2)
+    serial = replace(
+        settings, llm_db_read_workers=1, llm_search_concurrency=1, backfill_max_concurrency=1,
+    )
+    serial.validate()
+    assert serial.production_config_hash() == settings.production_config_hash()
+
+
+@pytest.mark.parametrize("field,maximum", [
+    ("llm_db_read_workers", 16), ("llm_search_concurrency", 8), ("backfill_max_concurrency", 8),
+])
+@pytest.mark.parametrize("value", [0, 99, True])
+def test_parallel_controls_are_bounded(field, maximum, value):
+    with pytest.raises(ValueError, match="must be between"):
+        replace(_settings(), **{field: value}).validate()
+    replace(_settings(), **{field: maximum}).validate()

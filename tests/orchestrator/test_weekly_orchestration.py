@@ -71,7 +71,13 @@ def test_weekly_parent_runs_both_models_after_short_failure():
 @pytest.mark.parametrize("email_result", [
     {"sent": True}, {"sent": False, "disabled": True}, {"sent": False, "error": "ProviderError"},
 ])
-def test_weekly_notifications_report_progress_and_results_without_blocking_models(email_result):
+@pytest.mark.parametrize(("short_state", "medium_state", "expected_state"), [
+    ("FAILED", "SUCCEEDED", "FAILED"),
+    ("REJECTED", "REJECTED", "SUCCEEDED"),
+])
+def test_weekly_notifications_report_progress_and_results_without_blocking_models(
+    email_result, short_state, medium_state, expected_state,
+):
     class Context(ParentContext):
         def get_input(self):
             return {**super().get_input(), "weekly_email_notifications": True}
@@ -93,7 +99,7 @@ def test_weekly_notifications_report_progress_and_results_without_blocking_model
                 assert event[0] == "sub"
                 purpose = event[2]["model_purpose"]
                 response = {
-                    "state": "FAILED" if purpose == "SHORT_5D" else "SUCCEEDED",
+                    "state": short_state if purpose == "SHORT_5D" else medium_state,
                     "model_purpose": purpose,
                     "weekly_run_id": f"run-{purpose}",
                     "challenger_model_version_id": f"challenger-{purpose}",
@@ -106,8 +112,8 @@ def test_weekly_notifications_report_progress_and_results_without_blocking_model
     assert [event[2]["model_purpose"] for event in events if event[0] == "sub"] == [
         "SHORT_5D", "MEDIUM_20D",
     ]
-    assert outcome["state"] == "FAILED"
-    assert outcome["models"]["MEDIUM_20D"]["state"] == "SUCCEEDED"
+    assert outcome["state"] == expected_state
+    assert outcome["models"]["MEDIUM_20D"]["state"] == medium_state
     expected_status = "SENT" if email_result.get("sent") else (
         "DISABLED" if email_result.get("disabled") else "FAILED"
     )
@@ -116,9 +122,9 @@ def test_weekly_notifications_report_progress_and_results_without_blocking_model
     assert len(emails) == 4
     assert {email["category"] for email in emails} == {"weekly_training"}
     assert emails[0]["subject"].endswith("STARTED")
-    assert emails[1]["subject"].endswith("SHORT_5D FAILED")
-    assert emails[2]["subject"].endswith("MEDIUM_20D SUCCEEDED")
-    assert emails[3]["subject"].endswith("FAILED")
+    assert emails[1]["subject"].endswith(f"SHORT_5D {short_state}")
+    assert emails[2]["subject"].endswith(f"MEDIUM_20D {medium_state}")
+    assert emails[3]["subject"].endswith(expected_state)
     assert "challenger-MEDIUM_20D" in emails[-1]["body"]
     assert "champion-MEDIUM_20D" in emails[-1]["body"]
     assert "프로젝트: S&P 500 Candidate Engine" in emails[-1]["body"]
@@ -138,8 +144,50 @@ def test_ineligible_weekly_parent_does_not_send_email():
 
 
 def test_new_weekly_input_enables_notifications_without_changing_existing_history():
-    assert function_app._weekly_parent_input("2026-W42")["weekly_email_notifications"] is True
+    request = function_app._weekly_parent_input("2026-W42")
+    assert request["weekly_email_notifications"] is True
+    assert request["model_purposes"] == ["MEDIUM_20D"]
+    assert set(request["child_instance_ids"]) == {"MEDIUM_20D"}
     assert "weekly_email_notifications" not in ParentContext().get_input()
+    assert "model_purposes" not in ParentContext().get_input()
+
+
+@pytest.mark.parametrize("model_state", ["SUCCEEDED", "REJECTED", "FAILED"])
+def test_new_weekly_parent_runs_only_medium_and_sends_three_notifications(model_state):
+    class Context(ParentContext):
+        def get_input(self):
+            return function_app._weekly_parent_input("2026-W42")
+
+    generator = workflow.weekly_parent_orchestrator(Context())
+    events = []
+    try:
+        event = next(generator)
+        while True:
+            events.append(event)
+            if event[:2] == ("activity", "weekly_eligibility"):
+                response = {"eligible": True}
+            elif event[:2] == ("activity", "send_email"):
+                response = {"sent": True}
+            elif event[:2] == ("activity", "emit_pipeline_telemetry"):
+                response = {"emitted": True}
+            else:
+                assert event[0] == "sub"
+                response = {
+                    "state": model_state, "model_purpose": "MEDIUM_20D",
+                    "policy_version": "weekly-v2-20d-performance-suspended",
+                }
+            event = generator.send(response)
+    except StopIteration as stopped:
+        outcome = stopped.value
+
+    children = [event for event in events if event[0] == "sub"]
+    assert [event[2]["model_purpose"] for event in children] == ["MEDIUM_20D"]
+    assert set(outcome["models"]) == {"MEDIUM_20D"}
+    assert outcome["state"] == ("FAILED" if model_state == "FAILED" else "SUCCEEDED")
+    emails = [event[2] for event in events if event[:2] == ("activity", "send_email")]
+    assert len(emails) == 3
+    assert all("SHORT_5D" not in email["body"] for email in emails)
+    assert "성능 메트릭 승격 기준 임시 중지" in emails[-1]["body"]
 
 
 def test_weekly_model_summary_includes_stored_versions_after_activation():
@@ -207,24 +255,99 @@ def test_hourly_weekend_gate_starts_weekly_parent(monkeypatch):
     )
 
 
-def test_hourly_weekend_gate_restarts_terminal_weekly_parent(monkeypatch):
+@pytest.mark.parametrize("runtime_status", [
+    "Completed", "Failed", "Terminated", "Canceled",
+    "Running", "Pending", "Suspended", "ContinuedAsNew",
+])
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_hourly_weekend_gate_does_not_restart_existing_weekly_parent(
+    monkeypatch, runtime_status, as_dict,
+):
     monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: "2026-W42")
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: None)
     client = TimerClient()
 
-    async def completed(_instance_id):
-        return SimpleNamespace(runtime_status="Completed")
+    async def existing(_instance_id):
+        if as_dict:
+            return {"runtimeStatus": runtime_status}
+        return SimpleNamespace(runtime_status=runtime_status)
 
-    client.get_status = completed
+    client.get_status = existing
     asyncio.run(function_app._hourly_timer(client))
 
-    assert client.started[0][0:2] == (
-        "weekly_parent_orchestrator",
-        "candidate-weekly-2026-W42",
-    )
+    assert client.started == []
 
 
-def test_weekend_daily_tick_keeps_weekly_models_but_starts_only_medium_daily(monkeypatch):
+@pytest.mark.parametrize(("runtime_status", "output", "should_start"), [
+    ("Completed", {"state": "SKIPPED", "reason": "NO_COMPLETE_MANIFEST"}, True),
+    ("Completed", {"state": "SKIPPED", "reason": "ALREADY_ACCEPTED"}, False),
+    ("Completed", {"state": "SUCCEEDED", "models": {
+        purpose: {"state": "REJECTED"} for purpose in ("SHORT_5D", "MEDIUM_20D")
+    }}, False),
+    ("Completed", {"state": "FAILED"}, False),
+    ("Completed", {"state": "TIMED_OUT"}, False),
+    ("Running", {"state": "SKIPPED", "reason": "NO_COMPLETE_MANIFEST"}, False),
+    ("Failed", {"state": "SKIPPED", "reason": "NO_COMPLETE_MANIFEST"}, False),
+])
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_weekly_timer_retries_only_when_training_inputs_were_not_ready(
+    monkeypatch, runtime_status, output, should_start, as_dict,
+):
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: "2026-W42")
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: None)
+    client = TimerClient()
+
+    async def existing(_instance_id):
+        if as_dict:
+            return {"runtime_status": runtime_status, "output": output}
+        return SimpleNamespace(runtime_status=runtime_status, output=output)
+
+    client.get_status = existing
+    asyncio.run(function_app._hourly_timer(client))
+
+    assert len(client.started) == int(should_start)
+
+
+def test_completed_week_does_not_block_next_week(monkeypatch):
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: None)
+    client = TimerClient()
+
+    async def existing(instance_id):
+        if instance_id == "candidate-weekly-2026-W42":
+            return SimpleNamespace(runtime_status="Completed")
+        return None
+
+    client.get_status = existing
+    for iso_week in ("2026-W42", "2026-W43"):
+        monkeypatch.setattr(
+            function_app, "scheduled_weekly_iso_week", lambda _now, week=iso_week: week,
+        )
+        asyncio.run(function_app._hourly_timer(client))
+
+    assert [item[1] for item in client.started] == ["candidate-weekly-2026-W43"]
+
+
+def test_completed_weekly_run_does_not_block_daily_fusion(monkeypatch):
+    monkeypatch.setenv("FUSION_ENABLED", "true")
+    monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: "2026-W42")
+    monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 16))
+    client = TimerClient()
+
+    async def existing(instance_id):
+        if instance_id == "candidate-weekly-2026-W42":
+            return SimpleNamespace(runtime_status="Completed")
+        return None
+
+    client.get_status = existing
+    asyncio.run(function_app._hourly_timer(client))
+
+    assert [(item[0], item[1]) for item in client.started] == [
+        ("daily_orchestrator", "candidate-daily-2026-10-16-medium_20d"),
+    ]
+    assert client.started[0][2]["fusion_enabled"] is True
+
+
+def test_weekend_daily_tick_starts_only_medium_weekly_and_daily(monkeypatch):
     monkeypatch.setenv("FUSION_ENABLED", "true")
     monkeypatch.setattr(function_app, "scheduled_weekly_iso_week", lambda _now: "2026-W42")
     monkeypatch.setattr(function_app, "scheduled_analysis_date", lambda _now: date(2026, 10, 16))
@@ -236,7 +359,7 @@ def test_weekend_daily_tick_keeps_weekly_models_but_starts_only_medium_daily(mon
         "weekly_parent_orchestrator",
         "daily_orchestrator",
     ]
-    assert set(client.started[0][2]["child_instance_ids"]) == {"SHORT_5D", "MEDIUM_20D"}
+    assert set(client.started[0][2]["child_instance_ids"]) == {"MEDIUM_20D"}
     assert client.started[1][2]["model_purpose"] == "MEDIUM_20D"
     assert client.started[1][2]["fusion_enabled"] is True
 

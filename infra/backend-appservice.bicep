@@ -11,8 +11,6 @@ param httpUserAgent string
 param candidateShortManifestSha256 string
 param candidateMediumManifestSha256 string
 param vnetIntegrationSubnetId string
-param appServicePlanSkuName string = 'P3v3'
-param appServicePlanSkuTier string = 'PremiumV3'
 param azureOpenAIAccountName string = ''
 param azureOpenAIEndpoint string = ''
 param azureOpenAIDeployment string = ''
@@ -24,8 +22,6 @@ param fusionEnabled bool = false
   'config/llm_preselection/policy_event_v2.yaml'
 ])
 param llmPreselectionPolicyPath string = 'config/llm_preselection/policy_v1.yaml'
-@minValue(1)
-param appServicePlanCapacity int = 1
 
 @secure()
 param apiKey string
@@ -36,18 +32,8 @@ param massiveApiKey string
 @secure()
 param alphaVantageApiKey string
 
-resource plan 'Microsoft.Web/serverfarms@2026-08-01' = {
+resource plan 'Microsoft.Web/serverfarms@2026-08-01' existing = {
   name: appServicePlanName
-  location: location
-  kind: 'linux'
-  sku: {
-    name: appServicePlanSkuName
-    tier: appServicePlanSkuTier
-    capacity: appServicePlanCapacity
-  }
-  properties: {
-    reserved: true
-  }
 }
 
 resource app 'Microsoft.Web/sites@2026-08-01' = {

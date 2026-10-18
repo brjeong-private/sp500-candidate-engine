@@ -94,6 +94,37 @@ Azure 검색은 Bing Grounding을 사용하며 별도 비용·데이터 처리 �
 
 ## 5. 운영
 
+### 병렬 조회·검색·다중 날짜 재처리
+
+- 기본 날짜 병렬도는 2, 날짜별 DB read worker는 4, 검색 동시 호출은 3이다.
+  각각 `BACKFILL_MAX_CONCURRENCY`, `LLM_DB_READ_WORKERS`, `LLM_SEARCH_CONCURRENCY`로
+  제한하며 1이면 순차 실행한다. DB 준비는 event loop 밖에서 수행한다.
+- DB parent와 worker는 `REPEATABLE READ READ ONLY`이며 parent가 export한
+  동일 snapshot을 worker별 독립 연결에 import한다. 원래 종목 순서를 복원한 뒤
+  기존 temporal 검증·screening·budget 검증을 그대로 적용한다.
+- 여러 날짜의 LLM backfill은 provider limiter를 공유한다. 요청별 token reservation으로
+  완료 순서가 달라도 해당 요청의 RPM/TPM 사용량을 정산한다.
+- 검색의 408/429/500/502/503/504·transport 오류만 기존 정책의 횟수·최대 지연 안에서
+  지수 backoff와 숫자 Retry-After를 적용해 재시도한다. 인증·설정 오류와 재시도 소진은
+  날짜 실패이며 검색 미승인에 대한 v6의 DB-only 평가로 바꾸지 않는다.
+- 실패마다 시각·상태·시도 횟수·안전한 provider code/request ID를 hash artifact로 남긴다.
+  원문 오류 본문·message·secret은 진단 artifact나 일반 로그에 넣지 않는다.
+- 같은 service의 재시도는 이미 끝난 종목을 메모리에서 재사용하되 lineage·artifact·admission을
+  재검증한다. 이 캐시는 프로세스 재시작 후 복구를 보장하지 않는다. 기존 DB에 저장된
+  ranking 입력·평가 응답 캐시는 기존 검증 조건으로 별도 재사용한다.
+- 날짜 실패는 다른 날짜를 취소하지 않는다. 동일 날짜 내 hard failure는 남은 검색을
+  취소·회수한다. 성공 날짜를 재실행하지 않고 실패 날짜의 고정 context만 다시 지정한다.
+- DB SKU·용량은 사용자 관리이며 이 병렬도 설정으로 변경하지 않는다.
+
+### 2026-10-18 승인: 선택적 보강 v6
+
+`policy_event_optional_search_v6.yaml`은 검색을 생략하지 않는다. Python이 승인한 자료만
+DB 입력에 보강하고, 승인 자료가 없으면 거부된 응답을 격리한 채 DB 자료로 평가한다.
+`llm_search_omission`과 사유·감사 artifact·`EXTERNAL_NEWS_NOT_USED`를 저장하며,
+평가 모델에는 거부된 검색 대화·발췌·URL을 전달하지 않는다. 근거 부족 항목의 null과
+최소 3개 항목 지원 조건은 유지한다. 인증·설정·DB 시점 오류·artifact 누락/변조는 실패다.
+위의 보강 필수·승인 발췌 0건 실패 규칙은 v4/v5에 그대로 적용한다.
+
 v4는 로컬 구현이며 운영 활성화·배포는 별도다. 검색 도구 지원·허용된 데이터 처리 경계·
 지속적인 artifact 저장소·원문 버전 검증 계약을 확인한 뒤 명시적으로 선택한다.
 근거: [Azure native web search](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search),

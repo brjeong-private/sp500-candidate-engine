@@ -293,15 +293,16 @@ class AzureOpenAIPreselectionRanker:
                 "llm-call-attempt",
                 f"{run_id}:{stage}:{batch_no}:{attempt_no}:{input_hash}",
             )
+            reservation = None
             try:
                 if self.rate_limiter is not None:
                     estimated = (len(json.dumps(messages)) + len(json.dumps(schema)) + 3) // 4
-                    await self.rate_limiter.acquire(estimated)
+                    reservation = await self.rate_limiter.acquire(estimated)
                 response = await self.client.complete(
                     messages=messages, schema_name=schema_name, schema=schema,
                 )
-                if self.rate_limiter is not None:
-                    self.rate_limiter.record_usage(response.total_tokens)
+                if self.rate_limiter is not None and reservation is not None:
+                    self.rate_limiter.record_usage(response.total_tokens, reservation)
                 output_hash = _canonical_hash(response.output)
                 attempts.append(
                     CallAttempt(

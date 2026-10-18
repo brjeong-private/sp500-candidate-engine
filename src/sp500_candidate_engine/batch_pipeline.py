@@ -661,7 +661,25 @@ async def _run_date_attempts(
     parent_snapshot_ids: dict[str, uuid.UUID],
     sec_result: SecBulkResult,
 ) -> None:
-    for collection_date in dates:
+    if type(settings.backfill_max_concurrency) is not int or not (
+        1 <= settings.backfill_max_concurrency <= 8
+    ):
+        raise ValueError("Backfill concurrency must be between 1 and 8")
+    semaphore = asyncio.Semaphore(settings.backfill_max_concurrency)
+    ordered_dates = sorted(dates)
+    completed = [asyncio.Event() for _ in ordered_dates]
+
+    async def one(index: int, collection_date: date) -> None:
+        async with semaphore:
+            previous = completed[index - 1] if index else None
+            try:
+                await collect(collection_date, previous)
+            finally:
+                if previous is not None:
+                    await previous.wait()
+                completed[index].set()
+
+    async def collect(collection_date: date, previous: asyncio.Event | None) -> None:
         handle = tracker.start_attempt(
             process_run_id,
             collection_date,
@@ -679,6 +697,7 @@ async def _run_date_attempts(
                 range_data=range_data,
                 parent_snapshot_ids=parent_snapshot_ids,
                 sec_result=sec_result,
+                persist_after=previous,
             )
             line = tracker.finish_attempt(
                 handle,
@@ -695,6 +714,10 @@ async def _run_date_attempts(
             )
         writer.write(line)
 
+    await asyncio.gather(*(
+        one(index, collection_date) for index, collection_date in enumerate(ordered_dates)
+    ))
+
 
 async def _collect_backfill_date(
     settings: Settings,
@@ -708,6 +731,7 @@ async def _collect_backfill_date(
     range_data: MassiveBackfillRange,
     parent_snapshot_ids: dict[str, uuid.UUID],
     sec_result: SecBulkResult,
+    persist_after: asyncio.Event | None = None,
 ) -> BackfillDateResult:
     run_spec = RunSpec(
         target_date=collection_date,
@@ -766,6 +790,9 @@ async def _collect_backfill_date(
         ]
     )
     supplement_raw = dict(zip(supplement_payloads, supplement_values, strict=True))
+    # Universe/identifier creation must retain chronological first-observation lineage.
+    if persist_after is not None:
+        await persist_after.wait()
     connection = tracker.active_connection()
     result = repository.persist_price_date(
         run_spec=run_spec,

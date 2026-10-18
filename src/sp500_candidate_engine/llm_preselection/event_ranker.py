@@ -25,11 +25,24 @@ def _korean_text(value: object) -> bool:
     return isinstance(value, str) and any("\uac00" <= char <= "\ud7a3" for char in value)
 
 
+class _CriterionScoreError(ValueError):
+    def __init__(self, instrument_id: uuid.UUID, criterion: str) -> None:
+        super().__init__("Score requires valid evidence and no missing reason")
+        self.instrument_id = instrument_id
+        self.criterion = criterion
+
+
 class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
     async def rank(
         self, *, llm_ranking_run_id: uuid.UUID, packets: tuple[EvidencePacket, ...]
     ) -> RankingResult:
-        validate_model_packets(packets, require_enrichment=self.config.enrichment is not None)
+        validate_model_packets(
+            packets, require_enrichment=self.config.enrichment is not None,
+            allow_omitted_enrichment=(
+                self.config.enrichment is not None
+                and self.config.enrichment.on_admission_failure == "OMIT_EXTERNAL"
+            ),
+        )
         assessments: list[InstrumentAssessment] = []
         attempts = []
         ordered = sorted(packets, key=lambda packet: packet.instrument_id.hex)
@@ -65,6 +78,16 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                             raise LlmRankingError(
                                 "Event assessment output is malformed", ()
                             ) from error
+                        repair_detail = (
+                            f" 오류 위치: instrument_id={error.instrument_id}, "
+                            f"criterion={error.criterion}. "
+                            "점수가 있는 모든 항목마다 criterion이 같은 인용을 최소 하나 남기세요. "
+                            "evidence 총 10개 한도 안에서 중복 인용을 줄여 "
+                            "모든 점수 항목을 포함하세요. "
+                            "해당 항목을 뒷받침하는 제공 자료가 없으면 점수를 null로 두고 "
+                            "missing_reasons에 결측 사유를 쓰세요."
+                            if isinstance(error, _CriterionScoreError) else ""
+                        )
                         messages = [
                             *self._assessment_messages(batch),
                             {"role": "user", "content": (
@@ -79,6 +102,7 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                                 "반드시 한국어로 작성하세요. "
                                 "JSON 키·criterion·enum·UUID는 스키마 그대로 유지하세요. "
                                 "근거를 만들거나 선정 조건을 억지로 충족하지 마세요."
+                                + repair_detail
                                 + (
                                     " 보강 근거는 source_layer와 search_evidence_hash를 "
                                     "검증된 검색 증거에 정확히 연결하세요. "
@@ -150,6 +174,13 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                         "발췌로 확인되지 않는 부족 정보는 information_gaps에 한국어로 남기고 "
                         "점수에 필요한 근거가 부족한 항목은 계속 null로 유지하세요."
                         if self.config.enrichment else ""
+                    )
+                    + (
+                        " llm_search_omission이 있으면 검증된 외부 자료가 없는 종목입니다. "
+                        "그 종목은 DB_PACKET만 평가하고 제외 사실을 information_gaps에 남기세요. "
+                        "검색 제외 사실 자체는 점수 근거나 자동 감점 사유가 아닙니다."
+                        if self.config.enrichment
+                        and self.config.enrichment.on_admission_failure == "OMIT_EXTERNAL" else ""
                     )
                 ),
             },
@@ -352,7 +383,7 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                     if type(score) not in {int, float} or not math.isfinite(score) \
                             or not 0 <= score <= 100 or missing[criterion] is not None \
                             or not any(item["criterion"] == criterion for item in evidence):
-                        raise ValueError("Score requires valid evidence and no missing reason")
+                        raise _CriterionScoreError(instrument_id, criterion)
                     supported.append(criterion)
             denominator = sum(self.config.rubric[key] for key in supported)
             score = None
@@ -383,7 +414,9 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
                 instrument_id, batch_no, 1, score,
                 {key: float(item) if item is not None else None for key, item in scores.items()},
                 quality, uncertainty,
-                ("EVIDENCE_BACKED",) if score is not None else ("INSUFFICIENT_EVIDENCE",),
+                (("EVIDENCE_BACKED",) if score is not None else ("INSUFFICIENT_EVIDENCE",))
+                + (("EXTERNAL_NEWS_NOT_USED",)
+                   if "llm_search_omission" in packet_by_id[instrument_id].packet else ()),
                 summary, tuple(sorted({uuid.UUID(item["evidence_link_id"])
                                        for item in normalized_evidence},
                                       key=lambda item: item.hex)),

@@ -117,12 +117,13 @@ def _parent_orchestration_input(analysis_date) -> dict[str, object]:
 def _weekly_parent_input(iso_week: str) -> dict[str, object]:
     return {
         "iso_week": iso_week,
+        "model_purposes": ["MEDIUM_20D"],
         "weekly_email_notifications": True,
         "timeout_minutes": _positive_int("ORCHESTRATOR_WEEKLY_TIMEOUT_MINUTES", 720),
         "poll_seconds": _positive_int("ORCHESTRATOR_WEEKLY_POLL_SECONDS", 60),
         "child_instance_ids": {
             model_purpose: weekly_model_instance_id(iso_week, model_purpose)
-            for model_purpose in ("SHORT_5D", "MEDIUM_20D")
+            for model_purpose in ("MEDIUM_20D",)
         },
     }
 
@@ -182,6 +183,24 @@ def _is_active_instance(status: object) -> bool:
     }
 
 
+def _should_start_weekly_instance(status: object) -> bool:
+    if status is None:
+        return True
+    if isinstance(status, dict):
+        runtime_status = status.get("runtime_status", status.get("runtimeStatus"))
+        output = status.get("output")
+    else:
+        runtime_status = getattr(status, "runtime_status", None)
+        output = getattr(status, "output", None)
+    runtime_value = getattr(runtime_status, "value", runtime_status)
+    return (
+        str(runtime_value).casefold() == "completed"
+        and isinstance(output, dict)
+        and output.get("state") == "SKIPPED"
+        and output.get("reason") == "NO_COMPLETE_MANIFEST"
+    )
+
+
 @app.function_name(name="manual_orchestration_start")
 @app.route(
     route="orchestrations/manual",
@@ -239,7 +258,7 @@ async def _hourly_timer(client: df.DurableOrchestrationClient) -> None:
     iso_week = scheduled_weekly_iso_week(now)
     if iso_week is not None:
         weekly_instance_id = weekly_parent_instance_id(iso_week)
-        if not _is_active_instance(await client.get_status(weekly_instance_id)):
+        if _should_start_weekly_instance(await client.get_status(weekly_instance_id)):
             await client.start_new(
                 "weekly_parent_orchestrator",
                 weekly_instance_id,

@@ -8,8 +8,42 @@ import pytest
 
 from backend.app.services import candidate_stages
 from sp500_candidate_engine import cli
+from sp500_candidate_engine.llm_preselection import pipeline as llm_pipeline
 
 RUN = UUID(int=1000)
+
+
+@pytest.mark.parametrize("value", ["bad", "2026-10-15=bad", "2026-13-15=" + str(RUN)])
+def test_llm_backfill_cli_rejects_malformed_pairs(value, capsys):
+    with pytest.raises(SystemExit) as error:
+        cli.build_parser().parse_args(["backfill-llm-candidates", "--session-context", value])
+    assert error.value.code == 2
+    assert "Expected YYYY-MM-DD=UUID" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("status", ["SUCCEEDED", "PARTIAL", "FAILED"])
+def test_llm_backfill_cli_reports_all_results_before_non_success_exit(
+    monkeypatch, capsys, status,
+):
+    monkeypatch.setattr(cli.Settings, "from_env", lambda _: MagicMock())
+    runner = AsyncMock(return_value={"status": status, "results": []})
+    monkeypatch.setattr(llm_pipeline, "run_llm_backfill", runner)
+    monkeypatch.setattr(sys, "argv", [
+        "candidate-engine", "backfill-llm-candidates",
+        "--session-context", f"2026-10-15={RUN}",
+        "--session-context", f"2026-10-16={UUID(int=1001)}",
+    ])
+    if status == "SUCCEEDED":
+        cli.main()
+    else:
+        with pytest.raises(SystemExit) as error:
+            cli.main()
+        assert error.value.code == 1
+    assert json.loads(capsys.readouterr().out)["status"] == status
+    assert runner.await_args.kwargs["requests"] == (
+        llm_pipeline.LlmBackfillRequest(cli._date("2026-10-15"), RUN),
+        llm_pipeline.LlmBackfillRequest(cli._date("2026-10-16"), UUID(int=1001)),
+    )
 
 
 @pytest.mark.parametrize("command", ["run-stage", "show-stage", "retry-stage"])

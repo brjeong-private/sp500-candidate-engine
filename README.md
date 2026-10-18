@@ -578,6 +578,11 @@ API 조회 기본 목적은 MEDIUM이며 해당 결과가 없다고 SHORT로 fal
 .\.venv\Scripts\python.exe -m sp500_candidate_engine.llm_preselection `
   --date 2026-10-15 --execution-context-id <context-uuid>
 
+# 고정 context의 여러 날짜 LLM만 병렬 실행: 수집·Quant·Fusion·외부 리포트 실행 없음
+candidate-engine backfill-llm-candidates `
+  --session-context "2026-10-15=<context-uuid-15>" `
+  --session-context "2026-10-16=<context-uuid-16>"
+
 # 학습·수집 없는 독립 후보 단계 실행 / 상태 / 명시적 재시도
 candidate-engine run-stage --stage QUANTITATIVE --date 2026-10-15 --execution-context-id <context-uuid> --model-purpose MEDIUM_20D --idempotency-key <unique-key>
 candidate-engine run-stage --stage LLM_PRESELECTION --date 2026-10-15 --execution-context-id <context-uuid> --idempotency-key <unique-key>
@@ -598,6 +603,17 @@ candidate-engine retry-stage --stage-run-id <failed-stage-uuid> --idempotency-ke
 ```
 
 CLI `run-daily --with-candidates`와 `run-candidates`의 기본 horizon은 레거시 5입니다.
+수집/LLM backfill의 날짜 병렬도는 `BACKFILL_MAX_CONCURRENCY=2`,
+LLM 날짜별 DB 조회는 `LLM_DB_READ_WORKERS=4`, 검색은 `LLM_SEARCH_CONCURRENCY=3`이
+기본입니다. DB worker는 별도 read-only 연결로 동일 PostgreSQL snapshot을 읽으며
+LLM backfill 날짜들은 provider RPM/TPM limiter를 공유합니다. 날짜별 DB 연결은 조회 worker
+외에 snapshot parent·중복 실행 방지 연결도 사용합니다. 모두 1로 설정하면 순차 실행합니다.
+수집 backfill은 취득·원본 파일 저장을 병렬화하되 universe/identifier의 최초 관찰 lineage를
+보존하도록 DB 반영은 날짜순으로 유지합니다.
+한 날짜의 실패는 다른 날짜를 취소하지 않습니다. LLM 명령은 날짜순이 아닌 입력 순서대로
+결과를 출력하고 하나라도 실패하면 전체 처리 후 종료 코드 1을 반환합니다. 실패한 날짜의
+동일 context만 다시 지정해 재시도하며, DB SKU는 자동 변경하지 않습니다.
+
 일일 고정 MEDIUM 추론은 위 API 계약을 사용합니다. 연구 CLI는 `--horizon-sessions 20`을
 명시하며 자동 학습 없는 운영 추론으로 오인하지 않습니다.
 노트북 실행은 [notebooks/README.md](notebooks/README.md)를 참고하세요.

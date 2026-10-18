@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.config import BackendSettings
@@ -115,3 +117,34 @@ def test_weekly_endpoints_are_protected_and_safe(monkeypatch):
             headers=headers,
         )
         assert smoke.json()["passed"] is True
+
+
+def test_default_weekly_service_rejects_short_before_accessing_database():
+    from backend.app.services.weekly_training import WeeklyTrainingService
+
+    database = MagicMock(spec=Database)
+    service = WeeklyTrainingService(database)
+    with pytest.raises(ValueError, match="not enabled"):
+        service.accept(model_purpose="SHORT_5D", idempotency_key="weekly:2026-W43:SHORT_5D")
+    database.connect.assert_not_called()
+
+
+def test_default_weekly_acceptance_pins_new_medium_policy(monkeypatch):
+    from backend.app.services.weekly_training import WeeklyTrainingService
+    from sp500_candidate_engine.analytics.promotion import DEFAULT_WEEKLY_POLICY_VERSION
+
+    repository = MagicMock()
+    repository.get_run.return_value = SimpleNamespace(
+        weekly_run_id=RUN_ID, model_purpose="MEDIUM_20D", status="PENDING",
+    )
+    monkeypatch.setattr(
+        "backend.app.services.weekly_training.WeeklyTrainingRepository",
+        lambda _connection: repository,
+    )
+    service = WeeklyTrainingService(MagicMock(spec=Database))
+    monkeypatch.setattr(service, "eligibility", FakeWeeklyService().eligibility)
+    accepted = service.accept(
+        model_purpose="MEDIUM_20D", idempotency_key="weekly:2026-W42:MEDIUM_20D",
+    )
+    assert accepted.model_purpose == "MEDIUM_20D"
+    assert repository.create_run.call_args.kwargs["policy_version"] == DEFAULT_WEEKLY_POLICY_VERSION

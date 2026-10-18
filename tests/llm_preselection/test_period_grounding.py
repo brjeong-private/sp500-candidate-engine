@@ -92,6 +92,14 @@ def test_period_policy_is_explicit_and_keeps_original_version_guard():
     assert config.enrichment.provider == "AZURE_BING_GROUNDING_PERIOD"
     assert config.windows.news_days == 30
     assert config.evidence_schema_version == "4"
+    assert config.enrichment.on_admission_failure == "FAIL_RUN"
+    optional = load_llm_preselection_config(
+        Path(__file__).parents[2] / "config" / "llm_preselection"
+        / "policy_event_optional_search_v6.yaml"
+    )
+    assert optional.enrichment.on_admission_failure == "OMIT_EXTERNAL"
+    assert optional.policy_version != config.policy_version
+    assert optional.prompt_version != config.prompt_version
 
 
 def _bing_raw(url: str, text: str) -> dict:
@@ -160,6 +168,34 @@ def test_period_news_with_python_read_previous_day_is_admitted():
     assert evidence.source_date_precision == "DAY"
 
 
+@pytest.mark.parametrize("field,value", [
+    ("parent_accepted_at", "2026-10-14T12:00:00+00:00"),
+    ("source_available_at", "2026-10-16T12:00:00+00:00"),
+    ("source_local_date", "2026-10-16"),
+    ("source_date_precision", "TIMESTAMP"),
+])
+def test_period_replay_rejects_rehashed_publication_witness_changes(field, value):
+    from dataclasses import replace
+
+    from sp500_candidate_engine.llm_preselection.enrichment_contract import (
+        document_from_payload,
+        evidence_hash,
+    )
+
+    url = "https://news.example.test/story"
+    [(_, evidence)] = _admit(
+        url, "2026-10-15 | 검증된 사업 현황을 확인했습니다.[1]",
+        {url: {"status": "ADMITTED", "label": "2026-10-15", "precision": "DAY"}},
+    )
+    changed = replace(evidence, **{field: value})
+    changed = replace(changed, evidence_hash=evidence_hash(changed))
+    with pytest.raises(ValueError, match="publication/provenance"):
+        document_from_payload(
+            changed.payload(), cik="123", filing=FILING, cutoff_at=CUTOFF,
+            knowledge_mode="HISTORICAL_RECONSTRUCTION",
+        )
+
+
 def test_period_news_without_admitted_python_date_is_rejected():
     url = "https://news.example.test/story"
     ledger = {url: {"status": "REJECTED", "reason": "SOURCE_DATE_NOT_FOUND"}}
@@ -192,3 +228,43 @@ def test_private_hosts_are_not_fetched():
     assert not public_host_allowed("x.test", ["10.0.0.5", "93.184.216.34"])
     assert public_host_allowed("x.test", ["93.184.216.34"])
 
+
+def test_ir_visible_publication_date_is_read_without_using_event_dates():
+    page = (
+        '<span class="evergreen-news-date-text">October 15, 2026</span>'
+        "<p>Results will be released October 29, 2026.</p>"
+    )
+    bound, basis = source_bound("https://ir.example.test/news/2026/story", page, CUTOFF)
+    assert bound.local_date.isoformat() == "2026-10-15"
+    assert bound.precision == "DAY"
+    assert basis == "PAGE"
+
+
+@pytest.mark.parametrize("day", ["October 17, 2026", "October 18, 2026"])
+def test_ir_visible_date_does_not_admit_untimed_current_or_future_days(day):
+    with pytest.raises(SourceDateError, match="OUTSIDE_CUTOFF_OR_UNTIMED"):
+        source_bound(
+            "https://ir.example.test/news",
+            f'<span class="evergreen-news-date-text">{day}</span>',
+            CUTOFF,
+        )
+
+
+@pytest.mark.parametrize("page", [
+    "<p>Published October 15, 2026</p>",
+    '<span class="evergreen-news-date-text">Invalid</span>',
+    '<span class="evergreen-news-date-text">October 15, 2026</span>'
+    '<span class="evergreen-news-date-text">October 16, 2026</span>',
+])
+def test_ir_date_requires_one_unambiguous_publication_marker(page):
+    with pytest.raises(SourceDateError, match="SOURCE_DATE_NOT_FOUND"):
+        source_bound("https://ir.example.test/news", page, CUTOFF)
+
+
+def test_ir_visible_date_does_not_override_existing_publication_metadata():
+    page = (
+        '<meta property="article:published_time" content="2026-10-17T05:31:00-04:00">'
+        '<span class="evergreen-news-date-text">October 15, 2026</span>'
+    )
+    with pytest.raises(SourceDateError, match="OUTSIDE_CUTOFF_OR_UNTIMED"):
+        source_bound("https://ir.example.test/news", page, CUTOFF)

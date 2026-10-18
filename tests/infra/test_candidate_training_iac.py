@@ -61,11 +61,14 @@ def test_training_job_is_manual_consumption_with_required_resources() -> None:
     assert "value: postgresUser" in template
 
 
-def test_backend_defaults_to_premium_v3_and_integrates_with_vnet() -> None:
+def test_backend_preserves_existing_plan_sku_and_integrates_with_vnet() -> None:
     template = _template("backend-appservice.bicep")
 
-    assert "param appServicePlanSkuName string = 'P3v3'" in template
-    assert "param appServicePlanCapacity int = 1" in template
+    assert "resource plan 'Microsoft.Web/serverfarms@2026-08-01' existing = {" in template
+    assert "appServicePlanSkuName" not in template
+    assert "appServicePlanSkuTier" not in template
+    assert "appServicePlanCapacity" not in template
+    assert "serverFarmId: plan.id" in template
     assert "virtualNetworkSubnetId: vnetIntegrationSubnetId" in template
     assert "vnetRouteAllEnabled: true" in template
 

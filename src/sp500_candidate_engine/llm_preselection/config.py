@@ -68,8 +68,11 @@ class ExternalEnrichmentConfig:
     max_facts: int
     reserved_characters: int
     max_tool_calls: int
+    on_admission_failure: str = "FAIL_RUN"
 
     def __post_init__(self) -> None:
+        if self.on_admission_failure not in {"FAIL_RUN", "OMIT_EXTERNAL"}:
+            raise ValueError("Invalid external admission failure policy")
         if self.provider not in {"AZURE_OPENAI_WEB_SEARCH", "AZURE_BING_GROUNDING_PERIOD"} or any(
             type(value) is not int or value <= 0 for value in (
                 self.max_documents, self.max_response_bytes, self.max_facts,
@@ -197,6 +200,7 @@ def load_llm_preselection_config(path: Path) -> LlmPreselectionConfig:
             _positive_int(external, "max_facts"),
             _positive_int(external, "reserved_characters"),
             _positive_int(external, "max_tool_calls"),
+            str(external.get("on_admission_failure", "FAIL_RUN")),
         )
         if screening is None or str(payload["evidence_schema_version"]) != "4" \
                 or enrichment.reserved_characters >= _positive_int(limits, "packet_characters"):

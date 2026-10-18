@@ -392,12 +392,18 @@ App Service platform CORS is left unconfigured; FastAPI is the single policy own
 ## Deployment
 
 [infra/backend-appservice.bicep](../infra/backend-appservice.bicep) creates or updates
-the separate Python App Service on dedicated Linux plan `asp-sp500-candidate`.
-The current template target is **P3v3, capacity 1**, and
-`vnetIntegrationSubnetId` is mandatory. Route-all VNet integration is enabled so
+the separate Python App Service on the **existing** Linux plan `asp-sp500-candidate`.
+It does not create or resize the plan. As of 2026-10-18, the user-approved SKU for
+both `asp-sp500-candidate` and Portal's `asp-jongmok-prd` is **B2**; do not change
+either to B1. Preserve each plan's SKU and instance count during deployment and
+verify them before and after. Any later SKU change needs separate user approval.
+Remove the obsolete `appServicePlanSkuName`, `appServicePlanSkuTier`, and
+`appServicePlanCapacity` overrides from old parameter files.
+`vnetIntegrationSubnetId` remains mandatory. Route-all VNet integration is configured so
 the backend can resolve and reach private PostgreSQL, Blob, and ACR endpoints.
 It does not redeploy the portal, alter its container image, or change the portal's
-existing plan. The dedicated Premium plan incurs ongoing Azure cost.
+existing plan. The existing plans incur ongoing Azure cost. These SKU rules do
+not change network settings; validate network feature compatibility separately.
 
 The resource group metadata location is West US 3, but the application explicitly
 uses **Korea Central** to match the existing plan and database.
@@ -457,8 +463,9 @@ Bootstrap is intentionally two-phase:
    supply `WEEKLY_RUN_ID` and `MODEL_PURPOSE`; the runtime must also receive the
    provisioned `PGUSER`. Only then configure the orchestrator with the resulting
    Job resource ID and grant its Job operator role.
-5. Redeploy the backend with the bootstrap `backendIntegrationSubnetId`, P3v3, and
-   capacity 1 while preserving existing App Settings and API keys.
+5. Redeploy the backend with the bootstrap `backendIntegrationSubnetId` while
+   preserving the existing plan, App Settings, and API keys. This does not
+   authorize changing the current user-approved B2 SKU.
 
 Create the least-privilege PostgreSQL identity with an Entra administrator:
 
@@ -493,7 +500,9 @@ export in ephemeral work storage before training.
   requests must become failed, not silently stay running or automatically restart.
   Inspect status before manually resubmitting.
 - Do not redeploy during active collection. The API remains separate from the
-  portal. P3v3/capacity 1 and VNet route-all are deployed; analytics runs still
+  portal. Both App Service plans must retain their user-approved B2 SKU;
+  the 2026-10-16 P3v3 deployment below is historical, not a resize instruction.
+  Analytics runs still
   require measured memory capacity and valid model/export prerequisites before
   increasing production workloads.
 - PostgreSQL must be running. Readiness reports failure when database access fails.
@@ -576,9 +585,10 @@ reuse is presented as success. Existing CLI defaults remain unchanged; the
 separate CLI training workflow is not invoked by the API.
 
 Shared B1 capacity (1.75 GB) is unsafe/unverified for this inference workload.
-The last live verification used the dedicated B3 host (7 GB); the current
-infrastructure target is P3v3/capacity 1 with VNet integration. Neither SKU is a
-measured minimum. Full retraining belongs in the separate Container Apps Job, not
+The 2026-10-11 live verification used the dedicated B3 host (7 GB); P3v3 was a later
+historical target. The current user-approved SKU is B2 (2026-10-18), and the
+deployment template preserves the existing plan instead of resizing it.
+These SKUs are not a measured minimum. Full retraining belongs in the separate Container Apps Job, not
 on App Service; its 2 CPU/4 GiB request also requires workload-specific measurement.
 
 ## Live verification (2026-10-11)

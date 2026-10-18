@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Real
 from pathlib import Path
 from types import MappingProxyType
@@ -13,6 +13,14 @@ from sp500_candidate_engine.analytics.config import (
 )
 
 MODEL_PURPOSES = frozenset({"SHORT_5D", "MEDIUM_20D"})
+DEFAULT_WEEKLY_POLICY_VERSION = "weekly-v2-20d-performance-suspended"
+WEEKLY_POLICY_FILES = {
+    "weekly-v1": "weekly_retraining_v1.yaml",
+    DEFAULT_WEEKLY_POLICY_VERSION: "weekly_retraining_v2.yaml",
+}
+PERFORMANCE_METRICS = frozenset({
+    "rank_ic_mean", "fold_rank_ic_median", "net_top_10_return", "max_drawdown_top_10",
+})
 
 
 @dataclass(frozen=True)
@@ -36,6 +44,8 @@ class PurposePromotionPolicy:
 class WeeklyRetrainingPolicy:
     version: str
     purposes: Mapping[str, PurposePromotionPolicy]
+    performance_gates_enabled: bool = True
+    suspension_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,7 @@ class GateResult:
     threshold: float | None
     incumbent: float | None = None
     reason: str | None = None
+    enforced: bool = True
 
 
 @dataclass(frozen=True)
@@ -82,10 +93,20 @@ def load_weekly_retraining_policy(path: Path) -> WeeklyRetrainingPolicy:
     config = load_versioned_config(path, required_keys=("promotion",))
     promotion = _mapping(config.payload["promotion"], name="promotion")
     purposes = _mapping(promotion.get("purposes"), name="promotion.purposes")
-    if set(purposes) != MODEL_PURPOSES:
+    if not purposes or not set(purposes) <= MODEL_PURPOSES:
         raise AnalyticsConfigError(
-            "promotion.purposes must contain exactly SHORT_5D and MEDIUM_20D"
+            "promotion.purposes must contain supported model purposes"
         )
+    performance_enabled = promotion.get("performance_gates_enabled", True)
+    if not isinstance(performance_enabled, bool):
+        raise AnalyticsConfigError("promotion.performance_gates_enabled must be boolean")
+    suspension_reason = promotion.get("suspension_reason")
+    if suspension_reason is not None and not isinstance(suspension_reason, str):
+        raise AnalyticsConfigError("promotion.suspension_reason must be text")
+    if not performance_enabled and (
+        suspension_reason is None or not suspension_reason.strip()
+    ):
+        raise AnalyticsConfigError("Suspended performance gates require a suspension_reason")
 
     parsed: dict[str, PurposePromotionPolicy] = {}
     for purpose_name, purpose_value in purposes.items():
@@ -147,7 +168,16 @@ def load_weekly_retraining_policy(path: Path) -> WeeklyRetrainingPolicy:
     return WeeklyRetrainingPolicy(
         version=config.version,
         purposes=MappingProxyType(parsed),
+        performance_gates_enabled=performance_enabled,
+        suspension_reason=suspension_reason,
     )
+
+
+def weekly_retraining_policy_path(config_root: Path, policy_version: str) -> Path:
+    filename = WEEKLY_POLICY_FILES.get(policy_version)
+    if filename is None:
+        raise AnalyticsConfigError(f"Unsupported weekly policy version: {policy_version}")
+    return config_root / filename
 
 
 def _metric(metrics: Mapping[str, object], name: str) -> float | None:
@@ -229,7 +259,18 @@ def evaluate_promotion(
             reason=None if passed else "relative_delta_not_met",
         )
 
-    decision = "PROMOTE" if results and all(item.passed for item in results.values()) else "REJECT"
+    if not policy.performance_gates_enabled:
+        results = {
+            name: replace(gate, enforced=False)
+            if name.partition(".")[2] in PERFORMANCE_METRICS
+            and gate.reason in {None, "threshold_not_met", "relative_delta_not_met", "no_incumbent"}
+            else gate
+            for name, gate in results.items()
+        }
+    decision = (
+        "PROMOTE" if results and all(item.passed or not item.enforced for item in results.values())
+        else "REJECT"
+    )
     return PromotionEvaluation(
         decision=decision,
         gate_results=MappingProxyType(results),

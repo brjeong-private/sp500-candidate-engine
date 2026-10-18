@@ -111,13 +111,14 @@ event v2·Fusion·전량 handoff가 활성화됐고 단독 stage 제어는 Candi
 
 매시 timer는 일일 gate와 독립적으로 UTC 시각을 `America/New_York`로 변환한다. 현지
 토요일·일요일 tick이면 해당 ISO week의 parent를 검토한다. 활성 parent는 재사용하며
-terminal instance는 다시 시작할 수 있다. 실제 업무 중복은 Candidate weekly
-eligibility·acceptance unique key로 차단하고 `ALREADY_ACCEPTED`는 메일 없이 skip한다.
+terminal instance는 자동 재시작하지 않는다. 예외는 입력 manifest 미준비로
+`SKIPPED/NO_COMPLETE_MANIFEST` 종료한 경우의 재확인뿐이다. Candidate weekly
+eligibility·acceptance unique key도 업무 중복을 차단하고 `ALREADY_ACCEPTED`는 메일 없이 skip한다.
 
 - parent ID: `candidate-weekly-{YYYY-Www}`
 - model child ID: `candidate-weekly-{YYYY-Www}-{MODEL_PURPOSE}`
-- 순서: `SHORT_5D` terminal 후 `MEDIUM_20D`
-- 독립성: SHORT의 실패·timeout도 MEDIUM 시작을 막지 않으며 model별 결과를 보존
+- 신규 목적: `MEDIUM_20D`만 실행하며 Durable input의 `model_purposes`에 고정
+- 과거 호환: 이 필드가 없는 기존 history는 `SHORT_5D` 후 `MEDIUM_20D` 흐름을 보존
 
 parent는 Candidate API의 weekly eligibility를 먼저 확인한 뒤 각 child가 다음 계약을
 수행한다.
@@ -139,6 +140,13 @@ Job override에 전달하는 업무 입력은 `WEEKLY_RUN_ID`, `MODEL_PURPOSE` �
 상태와 status URL만 사용한다. 모델 assignment의 실제 promotion/rollback은 Candidate
 backend 계약이고 Durable history가 active pointer를 대신하지 않는다.
 
+신규 Backend 기본 정책은 `weekly-v2-20d-performance-suspended`다. 다음 별도 지시까지
+유한한 성능 메트릭의 절대/상대 기준만 강제하지 않고 데이터·artifact·활성화 무결성은
+유지한다. 결과 메일에는 확인된 policy version과 성능 기준 임시 중지를 표시한다.
+기존 `weekly-v1` run은 원래 판정을 유지한다. 이번 정책과 terminal 재실행 차단의 운영
+적용에는 Backend·학습 Job·Function 배포가 필요하며, 2026-10-18 근거 조회 Backend
+hotfix 배포에 이 변경이 포함됐다는 뜻은 아니다.
+
 모델 종결 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`, `PARTIAL_FAILED`, `TIMED_OUT`,
 `FAILED`다. 비거래일은 `SUCCEEDED`와 `skipped=true`로 기록한다.
 신규 실행은 모델별 `STARTED`와 terminal Email을 보내며 제목은
@@ -158,8 +166,9 @@ guardian 경고 메일도 같은 설정을 따르며 일일·주간 실행과 gu
 주간 발송은 이 별도 수신처만 사용하고 공통 수신처를 합치거나 대신 사용하지 않는다.
 실제 주소는 운영 설정에만 저장하며 소스·변경 로그에는 기록하지 않는다.
 
-주간 eligibility가 통과한 신규 parent는 시작 1회, SHORT_5D·MEDIUM_20D 각각의 결과,
-최종 종합 결과를 최대 4회 보낸다. 프로젝트·ISO week·모델별 성공/기존 모델 유지/
+주간 eligibility가 통과한 신규 20D parent는 시작 1회, MEDIUM_20D 결과 1회,
+최종 종합 결과를 최대 3회 보낸다. 과거 두 목적 history는 최대 4회를 유지한다.
+프로젝트·ISO week·모델별 성공/기존 모델 유지/
 실패/timeout과 고정 실행 ID·확인된 신규/기존 모델 ID를 요약한다. 반복 polling이나
 `ALREADY_ACCEPTED` skip은 메일을 보내지 않는다. 발송 실패는 email telemetry와
 parent의 `email_status=FAILED`로 표시하며 provider 오류 응답이 다른 모델의 학습을
@@ -203,7 +212,7 @@ Invoke-RestMethod `
 
 날짜별 dual 수동 endpoint는 제공하지 않는다. 05:30 ET timer는 `MEDIUM_20D`만
 실행하며, 위 endpoint에서는 기존처럼 `SHORT_5D`와 `MEDIUM_20D`를 명시할 수 있다.
-주간 재학습은 두 모델을 계속 독립적으로 학습·평가한다.
+신규 주간 재학습은 MEDIUM_20D만 학습·평가한다.
 
 ## 외부 포털 계약
 

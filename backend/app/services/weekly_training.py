@@ -17,6 +17,11 @@ from backend.app.services.model_artifacts import (
     ModelArtifactLoadError,
     load_model_artifact,
 )
+from sp500_candidate_engine.analytics.promotion import (
+    DEFAULT_WEEKLY_POLICY_VERSION,
+    load_weekly_retraining_policy,
+    weekly_retraining_policy_path,
+)
 from sp500_candidate_engine.analytics.weekly_training import (
     WeeklyTrainingRepository,
     WeeklyTrainingRun,
@@ -24,7 +29,7 @@ from sp500_candidate_engine.analytics.weekly_training import (
 from sp500_candidate_engine.database import Database
 
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-DEFAULT_POLICY_VERSION = "weekly-v1"
+DEFAULT_POLICY_VERSION = DEFAULT_WEEKLY_POLICY_VERSION
 
 
 class WeeklyTrainingConflict(RuntimeError):
@@ -75,6 +80,11 @@ class WeeklyTrainingService:
     ) -> None:
         self.database = database
         self.policy_version = policy_version
+        self.policy = load_weekly_retraining_policy(weekly_retraining_policy_path(
+            Path(__file__).resolve().parents[3] / "config" / "analytics", policy_version,
+        ))
+        if self.policy.version != policy_version:
+            raise ValueError("Weekly policy version does not match configuration")
         self.smoke_runner = smoke_runner
 
     def eligibility(self, *, model_purpose: str | None = None) -> WeeklyEligibility:
@@ -147,6 +157,8 @@ class WeeklyTrainingService:
             )
 
     def accept(self, *, model_purpose: str, idempotency_key: str) -> WeeklyTrainingAccepted:
+        if model_purpose not in self.policy.purposes:
+            raise ValueError("Model purpose is not enabled by the weekly training policy")
         if IDEMPOTENCY_KEY_PATTERN.fullmatch(idempotency_key) is None:
             raise ValueError("Invalid Idempotency-Key")
         eligibility = self.eligibility()

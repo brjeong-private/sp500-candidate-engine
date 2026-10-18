@@ -5,7 +5,7 @@ import json
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 from fractions import Fraction
@@ -15,8 +15,11 @@ from uuid import UUID
 
 from sp500_candidate_engine.database import _canonical_hash, _stable_uuid
 from sp500_candidate_engine.fusion.policy import FusionResult
-from sp500_candidate_engine.llm_preselection.asof import publication_bound
-from sp500_candidate_engine.llm_preselection.enrichment_contract import document_from_payload
+from sp500_candidate_engine.llm_preselection.asof import NEW_YORK, llm_cutoff, publication_bound
+from sp500_candidate_engine.llm_preselection.enrichment_contract import (
+    PERIOD_ENRICHMENT_VERSION,
+    document_from_payload,
+)
 from sp500_candidate_engine.llm_preselection.evidence import EvidenceLink
 from sp500_candidate_engine.llm_preselection.summaries import SUMMARY_VERSION, citation_summary
 from sp500_candidate_engine.llm_preselection.temporal import (
@@ -25,6 +28,7 @@ from sp500_candidate_engine.llm_preselection.temporal import (
     timestamp,
     validate_packet_data,
     validate_revision_time,
+    validate_search_omission,
 )
 
 SCHEMA_VERSION = "candidate-explanation-v1"
@@ -63,7 +67,7 @@ class ExternalSourceExplanation(Snapshot):
     source_date_precision: Literal["DAY", "TIMESTAMP"]
     retrieved_at: datetime
     model_snapshot: str | None
-    verification_method: Literal["NATIVE_SEARCH_PINNED_ARCHIVE"]
+    verification_method: Literal["NATIVE_SEARCH_PINNED_ARCHIVE", "PERIOD_SEARCH_SOURCE_DATES"]
 
 
 @dataclass(frozen=True)
@@ -142,20 +146,37 @@ class CandidateExplanation(Snapshot):
         ):
             raise ValueError("Explanation summaries must be nonempty and bounded")
         if len(self.llm.evidence) > 10 or len(
-            {(item.evidence_link_id, item.criterion) for item in self.llm.evidence}
+            {(
+                item.evidence_link_id, item.criterion,
+                isinstance(item, ExternalEvidenceExplanation),
+            ) for item in self.llm.evidence}
         ) != len(self.llm.evidence):
             raise ValueError("Invalid explanation citation count or duplicate criterion")
         for evidence in self.llm.evidence:
             if isinstance(evidence, ExternalEvidenceExplanation):
                 external = evidence.external_source
                 bound = publication_bound(external.parent_accepted_at, self.cutoff_at)
+                if external.verification_method == "PERIOD_SEARCH_SOURCE_DATES":
+                    effective = llm_cutoff(self.cutoff_at)
+                    reference = effective.astimezone(NEW_YORK).date()
+                    valid_publication = (
+                        external.source_available_at == effective
+                        and external.source_local_date <= reference
+                        and external.source_date_precision == (
+                            "TIMESTAMP" if external.source_local_date == reference else "DAY"
+                        )
+                    )
+                else:
+                    valid_publication = (
+                        external.verification_method == "NATIVE_SEARCH_PINNED_ARCHIVE"
+                        and external.source_available_at == bound.upper_bound_at
+                        and external.source_local_date == bound.local_date
+                        and external.source_date_precision == bound.precision
+                    )
                 if (
                     self.schema_version != EXTERNAL_SCHEMA_VERSION
                     or external.source_available_at > self.cutoff_at
-                    or external.source_available_at
-                    != bound.upper_bound_at
-                    or external.source_local_date != bound.local_date
-                    or external.source_date_precision != bound.precision
+                    or not valid_publication
                     or external.source_url != evidence.source_url
                     or not re.fullmatch(r"[0-9a-f]{64}\.json", external.artifact_key)
                     or len(external.tool_response_hash) != 64
@@ -383,7 +404,9 @@ def _project_evidence(
     ):
         raise ValueError("Explanation packet identity/hash mismatch")
     scores, missing = row["sub_scores"], row["missing_reasons"]
-    if packet.get("schema_version") == "4" and not packet.get("llm_search_manifest_hash"):
+    if packet.get("schema_version") == "4" and not packet.get(
+        "llm_search_manifest_hash"
+    ) and not validate_search_omission(packet):
         raise ValueError("Search Fusion source is missing its admitted tool manifest")
     if not isinstance(scores, dict) or not isinstance(missing, dict):
         raise ValueError("Invalid explanation assessment")
@@ -422,6 +445,8 @@ def _project_evidence(
         knowledge_mode=str(context["knowledge_mode"]),
     )
     evidence = []
+    external_positions: dict[tuple[UUID, str], int] = {}
+    external_reasons: dict[tuple[UUID, str], list[str]] = {}
     for citation in citations:
         criterion, reason = citation["criterion"], citation["reason"]
         if (
@@ -517,9 +542,30 @@ def _project_evidence(
                     external.source_date_precision,
                     timestamp(external.retrieved_at),
                     external.model_snapshot,
-                    "NATIVE_SEARCH_PINNED_ARCHIVE",
+                    "PERIOD_SEARCH_SOURCE_DATES"
+                    if external.schema_version == PERIOD_ENRICHMENT_VERSION
+                    else "NATIVE_SEARCH_PINNED_ARCHIVE",
                 ),
             )
+            key = (projected.evidence_link_id, criterion)
+            if key in external_positions:
+                index = external_positions[key]
+                previous = evidence[index]
+                if not isinstance(previous, ExternalEvidenceExplanation) or replace(
+                    previous, summary=projected.summary
+                ) != projected:
+                    raise ValueError("Conflicting external explanation provenance")
+                if reason in external_reasons[key]:
+                    raise ValueError("Duplicate external explanation reason")
+                external_reasons[key].append(reason)
+                evidence[index] = replace(previous, summary=citation_summary(
+                    scores,
+                    [{"criterion": criterion, "reason": item} for item in external_reasons[key]],
+                    limit=rationale_limit,
+                ))
+                continue
+            external_positions[key] = len(evidence)
+            external_reasons[key] = [reason]
         evidence.append(projected)
     return scores, missing, tuple(evidence)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from collections.abc import Callable
@@ -31,6 +32,7 @@ from sp500_candidate_engine.analytics.promotion import (
     PromotionEvaluation,
     evaluate_promotion,
     load_weekly_retraining_policy,
+    weekly_retraining_policy_path,
 )
 from sp500_candidate_engine.analytics.weekly_training import (
     WeeklyRunStateConflict,
@@ -47,6 +49,7 @@ CONFIGS = {
 TRAINING_HISTORY_DAYS = 730
 AZURE_STORAGE_SCOPE = "https://storage.azure.com/.default"
 AZURE_STORAGE_API_VERSION = "2023-11-03"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -204,10 +207,18 @@ class WeeklyTrainingJob:
             raise RuntimeError("Challenger model registration is missing")
 
         policy = load_weekly_retraining_policy(
-            self.repository_root / "config" / "analytics" / "weekly_retraining_v1.yaml"
+            weekly_retraining_policy_path(
+                self.repository_root / "config" / "analytics", run.policy_version,
+            )
         )
         if policy.version != run.policy_version:
             raise RuntimeError("Weekly run policy version does not match configuration")
+        if not policy.performance_gates_enabled:
+            logger.warning(
+                "weekly_performance_gates_suspended",
+                extra={"weekly_run_id": str(run.weekly_run_id),
+                       "model_purpose": run.model_purpose, "policy_version": policy.version},
+            )
         evaluation = evaluate_promotion(
             policy=policy,
             model_purpose=run.model_purpose,
@@ -338,6 +349,11 @@ class WeeklyTrainingJob:
                 raise LookupError("Weekly training run not found")
             if run.model_purpose != model_purpose:
                 raise ValueError("Weekly run model purpose mismatch")
+            policy = load_weekly_retraining_policy(weekly_retraining_policy_path(
+                self.repository_root / "config" / "analytics", run.policy_version,
+            ))
+            if policy.version != run.policy_version or model_purpose not in policy.purposes:
+                raise ValueError("Weekly run is not enabled by its pinned policy")
             repository.transition_run(
                 weekly_run_id=weekly_run_id,
                 expected_status="PENDING",

@@ -10,6 +10,7 @@ from typing import Protocol
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+from bs4 import BeautifulSoup
 
 from sp500_candidate_engine.llm_preselection.asof import (
     NEW_YORK,
@@ -18,7 +19,7 @@ from sp500_candidate_engine.llm_preselection.asof import (
     publication_bound,
 )
 
-SOURCE_DATE_VERSION = "llm-source-page-date-v1"
+SOURCE_DATE_VERSION = "llm-source-page-date-v2"
 MAX_PAGE_BYTES = 1_000_000
 MAX_REDIRECTS = 3
 
@@ -90,6 +91,16 @@ def page_published(page: str) -> datetime | date | None:
         parsed = _parse_value(raw)
         if parsed is not None:
             return parsed
+    publication_dates = BeautifulSoup(page, "html.parser").select(
+        "span.evergreen-news-date-text"
+    )
+    if len(publication_dates) == 1:
+        try:
+            return datetime.strptime(
+                publication_dates[0].get_text(" ", strip=True), "%B %d, %Y"
+            ).date()
+        except ValueError:
+            return None
     return None
 
 

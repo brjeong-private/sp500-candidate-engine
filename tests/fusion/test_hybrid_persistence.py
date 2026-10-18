@@ -474,6 +474,92 @@ def test_explanation_routes_legacy_snapshots_and_integrity_errors(monkeypatch):
         assert client.get(url).status_code == 404
 
 
+@pytest.mark.parametrize(("source_date", "precision", "verification_method", "expected_status"), [
+    (DAY, "DAY", "PERIOD_SEARCH_SOURCE_DATES", 200),
+    (NOW.date(), "TIMESTAMP", "PERIOD_SEARCH_SOURCE_DATES", 200),
+    (NOW.date(), "DAY", "PERIOD_SEARCH_SOURCE_DATES", 500),
+    (NOW.date() + timedelta(days=1), "DAY", "PERIOD_SEARCH_SOURCE_DATES", 500),
+    (DAY, "DAY", "UNVERIFIED_SEARCH", 500),
+])
+def test_period_search_explanation_api_preserves_witness_and_rejects_invalid_dates(
+    monkeypatch, source_date, precision, verification_method, expected_status,
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.repositories.fusions import FusionReadRepository
+    from backend.app.routers.fusions import explanations_router, router
+    from sp500_candidate_engine.fusion.explanations import (
+        EXTERNAL_SCHEMA_VERSION,
+        explanation_output_hash,
+    )
+
+    database, service, _, _ = service_fixture(monkeypatch)
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    row = stored_read_row(database)
+    for candidate in row["candidates"]:
+        candidate["explanation"]["schema_version"] = EXTERNAL_SCHEMA_VERSION
+    evidence = row["candidates"][0]["explanation"]["llm"]["evidence"][0]
+    evidence["source_url"] = "https://news.example.test/company-update"
+    evidence["external_source"] = {
+        "source_layer": "LLM_SEARCH_VERIFIED",
+        "source_url": evidence["source_url"],
+        "tool_response_hash": "a" * 64,
+        "evidence_hash": "b" * 64,
+        "artifact_key": "c" * 64 + ".json",
+        "parent_accepted_at": (NOW - timedelta(days=2)).isoformat(),
+        "source_available_at": NOW.isoformat(),
+        "source_local_date": source_date.isoformat(),
+        "source_date_precision": precision,
+        "retrieved_at": (NOW + timedelta(days=1)).isoformat(),
+        "model_snapshot": None,
+        "verification_method": verification_method,
+    }
+    provenance = row["provenance"]
+    provenance["explanation_schema_version"] = EXTERNAL_SCHEMA_VERSION
+    provenance["explanation_config"]["schema_version"] = EXTERNAL_SCHEMA_VERSION
+    provenance["explanation_config_hash"] = _canonical_hash(provenance["explanation_config"])
+    provenance["explanation_output_hash"] = explanation_output_hash({
+        str(candidate["instrument_id"]): candidate["explanation"]
+        for candidate in row["candidates"]
+    })
+    monkeypatch.setattr(FusionReadRepository, "fetch", lambda *args: [copy.deepcopy(row)])
+    app = FastAPI()
+    app.state.database = database
+    app.include_router(router)
+    app.include_router(explanations_router)
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/v2/fusion-selections/{result.fusion_run_id}/explanations"
+        )
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            payload = response.json()
+            assert payload["status"] == "RECORDED"
+            assert payload["schema_version"] == EXTERNAL_SCHEMA_VERSION
+            assert len(payload["candidates"]) == 20
+            returned = payload["candidates"][0]["explanation"]["llm"]["evidence"][0]
+            assert returned["summary"] == evidence["summary"]
+            assert returned["source_url"] == evidence["source_url"]
+            witness = returned["external_source"]
+            for field in (
+                "source_layer", "source_url", "tool_response_hash", "evidence_hash",
+                "artifact_key", "source_local_date", "source_date_precision",
+                "verification_method", "parent_accepted_at", "model_snapshot",
+            ):
+                assert witness[field] == evidence["external_source"][field]
+            for field in ("source_available_at", "retrieved_at"):
+                assert datetime.fromisoformat(witness[field]) == datetime.fromisoformat(
+                    evidence["external_source"][field]
+                )
+            assert payload["candidates"][0]["explanation"]["quant"]["score"] == 0.1
+            assert payload["candidates"][0]["explanation"]["fusion"]["rrf_k"] == 10
+        legacy = client.get(f"/api/v1/fusion-selections/{result.fusion_run_id}")
+        assert legacy.status_code == 200
+        assert len(legacy.json()["candidates"]) == 20
+        assert all("explanation" not in item for item in legacy.json()["candidates"])
+
+
 def test_null_criterion_citations_remain_unscored_and_partial_metadata_is_explicit(monkeypatch):
     database, service, _, llm = service_fixture(monkeypatch)
     candidate = llm["candidates"][0]
