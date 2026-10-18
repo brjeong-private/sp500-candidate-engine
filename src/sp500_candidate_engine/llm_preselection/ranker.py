@@ -132,6 +132,18 @@ class LlmRankingError(RuntimeError):
         self.attempts = attempts
 
 
+@dataclass
+class _InputTokenBudget:
+    limit: int
+    reserved: int = 0
+
+    def reserve(self, tokens: int) -> None:
+        # No await between checking and reserving: shared by one rank's async batches.
+        if self.reserved + tokens > self.limit:
+            raise ValueError("LLM assessment total input token budget exceeded")
+        self.reserved += tokens
+
+
 class AzureOpenAIPreselectionRanker:
     def __init__(
         self,
@@ -261,6 +273,7 @@ class AzureOpenAIPreselectionRanker:
         schema: dict[str, object],
         execution_context_id: uuid.UUID | None = None,
         attempt_offset: int = 0,
+        input_token_budget: _InputTokenBudget | None = None,
     ) -> tuple[dict[str, object], str, tuple[CallAttempt, ...]]:
         request_identity: dict[str, object] = {
             "messages": messages, "schema_name": schema_name, "schema": schema,
@@ -295,8 +308,11 @@ class AzureOpenAIPreselectionRanker:
             )
             reservation = None
             try:
-                if self.rate_limiter is not None:
+                if self.rate_limiter is not None or input_token_budget is not None:
                     estimated = (len(json.dumps(messages)) + len(json.dumps(schema)) + 3) // 4
+                    if input_token_budget is not None:
+                        input_token_budget.reserve(estimated)
+                if self.rate_limiter is not None:
                     reservation = await self.rate_limiter.acquire(estimated)
                 response = await self.client.complete(
                     messages=messages, schema_name=schema_name, schema=schema,

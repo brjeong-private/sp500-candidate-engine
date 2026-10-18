@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-18 | LLM Batch Parallelism | 이벤트 평가에 기본 직렬·선택적 bounded 병렬 배치를 추가하고 공유 quota·외부 검색 포함 입력 예산·재시도·실패 감사·캐시와 결정적 집계 순서를 보존했다.
 - 2026-10-18 | Historical Sunday Admission | 기존 주말 validator·일요일 scheduler 계약으로 Oct9 anchor·신규 Oct11 09:30 UTC 지식 cutoff를 검증하고 짧은 로컬 경로의 새 UUID에서 SHADOW 모델을 완료했으며 기존 토요일 context·이전 모델·주간 run·활성 할당·실제 생성 시각은 보존했다.
 - 2026-10-18 | Historical Daily Price Curation | 미래 operational FULL은 계속 배제하되 cutoff 내의 실제 대상일 가격 snapshot을 기존 이력·근거에 명시 추가한 신규 context 3개에서 각 503개 대상일 가격·적격 universe 교집합을 검증하고 과거 context와 수집 원천은 변경하지 않았다.
 - 2026-10-18 | October 15-16 Quant Deletion Production | 사용자 요청에 따라 migration 025와 독립 정량 조회 패치만 기존 Backend 배포본에 적용하고 두 날짜의 최신 20D 결과를 논리 삭제해 날짜·명시적 ID·우회 시도 모두 0건 반환 및 Fusion 후보·선정 근거·고정 원천·다른 날짜·운영 설정 불변을 확인했다.

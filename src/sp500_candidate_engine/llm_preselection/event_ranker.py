@@ -1,24 +1,33 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import math
 import uuid
 from copy import deepcopy
 from dataclasses import replace
 from decimal import ROUND_HALF_EVEN, Decimal
 
+from sp500_candidate_engine.analytics.azure_openai import AzureOpenAIClient
+from sp500_candidate_engine.llm_preselection.config import LlmPreselectionConfig
 from sp500_candidate_engine.llm_preselection.evidence import EvidencePacket
 from sp500_candidate_engine.llm_preselection.ranker import (
     AzureOpenAIPreselectionRanker,
+    CallAttempt,
     FinalCandidate,
     InstrumentAssessment,
+    LlmRankerSettings,
     LlmRankingError,
     RankingResult,
+    _InputTokenBudget,
 )
 from sp500_candidate_engine.llm_preselection.summaries import citation_summary
 from sp500_candidate_engine.llm_preselection.temporal import (
     validate_model_packets,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _korean_text(value: object) -> bool:
@@ -33,9 +42,33 @@ class _CriterionScoreError(ValueError):
 
 
 class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
+    """Assess serially by default; opt in to 2–4 concurrent batches.
+
+    Parallel batches share the existing limiter and a per-rank estimated request
+    input budget, including retries but excluding cache hits. ``rank`` accepts
+    already consumed search input tokens to keep the combined budget bounded.
+    Failed parallel windows drain before raising, retaining completed attempts.
+    """
+
+    def __init__(
+        self,
+        settings: LlmRankerSettings,
+        config: LlmPreselectionConfig,
+        *,
+        client: AzureOpenAIClient | None = None,
+        assessment_concurrency: int = 1,
+    ) -> None:
+        if type(assessment_concurrency) is not int or not 1 <= assessment_concurrency <= 4:
+            raise ValueError("assessment_concurrency must be an integer from 1 to 4")
+        super().__init__(settings, config, client=client)
+        self.assessment_concurrency = assessment_concurrency
+
     async def rank(
-        self, *, llm_ranking_run_id: uuid.UUID, packets: tuple[EvidencePacket, ...]
+        self, *, llm_ranking_run_id: uuid.UUID, packets: tuple[EvidencePacket, ...],
+        external_input_tokens: int = 0,
     ) -> RankingResult:
+        if type(external_input_tokens) is not int or external_input_tokens < 0:
+            raise ValueError("external_input_tokens must be a nonnegative integer")
         validate_model_packets(
             packets, require_enrichment=self.config.enrichment is not None,
             allow_omitted_enrichment=(
@@ -44,73 +77,54 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
             ),
         )
         assessments: list[InstrumentAssessment] = []
-        attempts = []
+        attempts: list[CallAttempt] = []
         ordered = sorted(packets, key=lambda packet: packet.instrument_id.hex)
+        batches = [
+            ordered[start:start + self.config.batch_size]
+            for start in range(0, len(ordered), self.config.batch_size)
+        ]
         try:
-            for start in range(0, len(ordered), self.config.batch_size):
-                batch = ordered[start:start + self.config.batch_size]
-                batch_no = start // self.config.batch_size
-                messages = self._assessment_messages(batch)
-                batch_attempts = 0
-                while batch_attempts < self.config.max_attempts:
-                    output, output_hash, calls = await self._call(
-                        run_id=llm_ranking_run_id, stage="INSTRUMENT_BATCH", batch_no=batch_no,
-                        messages=messages, attempt_offset=batch_attempts,
-                        schema_name="event_assessments_search_v4" if self.config.enrichment
-                        else "event_assessments_v2", schema=self._assessment_schema(batch),
-                        execution_context_id=(
-                            uuid.UUID(str(batch[0].packet["execution_context_id"]))
-                            if "execution_context_id" in batch[0].packet else None
-                        ),
+            if self.assessment_concurrency == 1:
+                for batch_no, batch in enumerate(batches):
+                    parsed, calls = await self._assess_batch(
+                        llm_ranking_run_id, batch_no, batch,
                     )
+                    assessments.extend(parsed)
                     attempts.extend(calls)
-                    batch_attempts += len(calls)
-                    try:
-                        assessments.extend(self._parse_assessments(
-                            output=output, output_hash=output_hash, batch_no=batch_no, packets=batch
-                        ))
-                        break
-                    except (KeyError, TypeError, ValueError, OverflowError) as error:
-                        attempts[-1] = replace(
-                            attempts[-1], status="FAILED", error_code="OUTPUT_VALIDATION_FAILED"
-                        )
-                        if batch_attempts >= self.config.max_attempts:
-                            raise LlmRankingError(
-                                "Event assessment output is malformed", ()
-                            ) from error
-                        repair_detail = (
-                            f" 오류 위치: instrument_id={error.instrument_id}, "
-                            f"criterion={error.criterion}. "
-                            "점수가 있는 모든 항목마다 criterion이 같은 인용을 최소 하나 남기세요. "
-                            "evidence 총 10개 한도 안에서 중복 인용을 줄여 "
-                            "모든 점수 항목을 포함하세요. "
-                            "해당 항목을 뒷받침하는 제공 자료가 없으면 점수를 null로 두고 "
-                            "missing_reasons에 결측 사유를 쓰세요."
-                            if isinstance(error, _CriterionScoreError) else ""
-                        )
-                        messages = [
-                            *self._assessment_messages(batch),
-                            {"role": "user", "content": (
-                                "이전 응답이 의미 검증을 통과하지 못했습니다. "
-                                "배치 전체를 다시 반환하세요. "
-                                "각 종목에 제공된 evidence_link_id만 인용하고 event_revision_id, "
-                                "snapshot ID 또는 다른 기업의 근거를 사용하지 마세요. "
-                                "점수가 있는 항목에는 유효한 인용이 필요하며 "
-                                "missing_reasons는 null입니다. "
-                                "근거가 없는 항목의 점수는 null로 두고 결측 사유를 설명하세요. "
-                                "summary, 인용 reason, null이 아닌 missing_reasons는 "
-                                "반드시 한국어로 작성하세요. "
-                                "JSON 키·criterion·enum·UUID는 스키마 그대로 유지하세요. "
-                                "근거를 만들거나 선정 조건을 억지로 충족하지 마세요."
-                                + repair_detail
-                                + (
-                                    " 보강 근거는 source_layer와 search_evidence_hash를 "
-                                    "검증된 검색 증거에 정확히 연결하세요. "
-                                    "information_gaps도 한국어로 쓰세요."
-                                    if self.config.enrichment else ""
-                                )
-                            )},
-                        ]
+            else:
+                remaining = self.config.limits.total_input_tokens - external_input_tokens
+                if remaining < 0:
+                    raise LlmRankingError("External LLM input exceeds the total input budget", ())
+                budget = _InputTokenBudget(remaining)
+                for start in range(0, len(batches), self.assessment_concurrency):
+                    results = await asyncio.gather(
+                        *(
+                            self._assess_batch(
+                                llm_ranking_run_id, batch_no, batches[batch_no], budget,
+                            )
+                            for batch_no in range(
+                                start, min(start + self.assessment_concurrency, len(batches))
+                            )
+                        ),
+                        return_exceptions=True,
+                    )
+                    failure: BaseException | None = None
+                    for result in results:
+                        if isinstance(result, BaseException):
+                            if isinstance(result, LlmRankingError):
+                                attempts.extend(result.attempts)
+                            if failure is None:
+                                failure = result
+                        else:
+                            parsed, calls = result
+                            assessments.extend(parsed)
+                            attempts.extend(calls)
+                    if failure is not None:
+                        raise LlmRankingError(
+                            str(failure) if isinstance(failure, LlmRankingError)
+                            else "Event assessment batch failed",
+                            (),
+                        ) from failure
         except LlmRankingError as error:
             raise LlmRankingError(str(error), tuple([*attempts, *error.attempts])) from error
         ordered_assessments = sorted(
@@ -135,6 +149,94 @@ class EventPreselectionRanker(AzureOpenAIPreselectionRanker):
             if len(candidates) == 20:
                 break
         return RankingResult(ranked, tuple(candidates), tuple(attempts))
+
+    async def _assess_batch(
+        self, run_id: uuid.UUID, batch_no: int, batch: list[EvidencePacket],
+        input_token_budget: _InputTokenBudget | None = None,
+    ) -> tuple[list[InstrumentAssessment], tuple[CallAttempt, ...]]:
+        attempts: list[CallAttempt] = []
+        messages = self._assessment_messages(batch)
+        batch_attempts = 0
+        logger.info("Event assessment batch", extra={
+            "batch_no": batch_no, "assessed_count": 0, "status": "RUNNING",
+        })
+        try:
+            while batch_attempts < self.config.max_attempts:
+                output, output_hash, calls = await self._call(
+                    run_id=run_id, stage="INSTRUMENT_BATCH", batch_no=batch_no,
+                    messages=messages, attempt_offset=batch_attempts,
+                    schema_name="event_assessments_search_v4" if self.config.enrichment
+                    else "event_assessments_v2", schema=self._assessment_schema(batch),
+                    execution_context_id=(
+                        uuid.UUID(str(batch[0].packet["execution_context_id"]))
+                        if "execution_context_id" in batch[0].packet else None
+                    ),
+                    input_token_budget=input_token_budget,
+                )
+                attempts.extend(calls)
+                batch_attempts += len(calls)
+                try:
+                    parsed = self._parse_assessments(
+                        output=output, output_hash=output_hash, batch_no=batch_no, packets=batch
+                    )
+                    logger.info("Event assessment batch", extra={
+                        "batch_no": batch_no, "assessed_count": len(parsed), "status": "SUCCEEDED",
+                    })
+                    return parsed, tuple(attempts)
+                except (KeyError, TypeError, ValueError, OverflowError) as error:
+                    attempts[-1] = replace(
+                        attempts[-1], status="FAILED", error_code="OUTPUT_VALIDATION_FAILED"
+                    )
+                    if batch_attempts >= self.config.max_attempts:
+                        raise LlmRankingError(
+                            "Event assessment output is malformed", ()
+                        ) from error
+                    repair_detail = (
+                        f" 오류 위치: instrument_id={error.instrument_id}, "
+                        f"criterion={error.criterion}. "
+                        "점수가 있는 모든 항목마다 criterion이 같은 인용을 최소 하나 남기세요. "
+                        "evidence 총 10개 한도 안에서 중복 인용을 줄여 "
+                        "모든 점수 항목을 포함하세요. "
+                        "해당 항목을 뒷받침하는 제공 자료가 없으면 점수를 null로 두고 "
+                        "missing_reasons에 결측 사유를 쓰세요."
+                        if isinstance(error, _CriterionScoreError) else ""
+                    )
+                    messages = [
+                        *self._assessment_messages(batch),
+                        {"role": "user", "content": (
+                            "이전 응답이 의미 검증을 통과하지 못했습니다. "
+                            "배치 전체를 다시 반환하세요. "
+                            "각 종목에 제공된 evidence_link_id만 인용하고 event_revision_id, "
+                            "snapshot ID 또는 다른 기업의 근거를 사용하지 마세요. "
+                            "점수가 있는 항목에는 유효한 인용이 필요하며 "
+                            "missing_reasons는 null입니다. "
+                            "근거가 없는 항목의 점수는 null로 두고 결측 사유를 설명하세요. "
+                            "summary, 인용 reason, null이 아닌 missing_reasons는 "
+                            "반드시 한국어로 작성하세요. "
+                            "JSON 키·criterion·enum·UUID는 스키마 그대로 유지하세요. "
+                            "근거를 만들거나 선정 조건을 억지로 충족하지 마세요."
+                            + repair_detail
+                            + (
+                                " 보강 근거는 source_layer와 search_evidence_hash를 "
+                                "검증된 검색 증거에 정확히 연결하세요. "
+                                "information_gaps도 한국어로 쓰세요."
+                                if self.config.enrichment else ""
+                            )
+                        )},
+                    ]
+        except LlmRankingError as error:
+            logger.info("Event assessment batch", extra={
+                "batch_no": batch_no, "assessed_count": 0, "status": "FAILED",
+            })
+            raise LlmRankingError(str(error), tuple([*attempts, *error.attempts])) from error
+        except Exception as error:
+            if input_token_budget is None:
+                raise
+            logger.info("Event assessment batch", extra={
+                "batch_no": batch_no, "assessed_count": 0, "status": "FAILED",
+            })
+            raise LlmRankingError("Event assessment batch failed", tuple(attempts)) from error
+        raise AssertionError("unreachable")
 
     def _assessment_messages(self, packets: list[EvidencePacket]) -> list[dict[str, str]]:
         return [

@@ -322,10 +322,22 @@ class LlmPreselectionService:
             failure_code = "INSUFFICIENT_ELIGIBLE_INSTRUMENTS"
         else:
             try:
-                result = await self.ranker.rank(
-                    llm_ranking_run_id=llm_ranking_run_id,
-                    packets=packets,
-                )
+                if (
+                    isinstance(self.ranker, EventPreselectionRanker)
+                    and self.ranker.assessment_concurrency > 1
+                ):
+                    result = await self.ranker.rank(
+                        llm_ranking_run_id=llm_ranking_run_id,
+                        packets=packets,
+                        external_input_tokens=(
+                            self.enricher.search_input_tokens if self.enricher else 0
+                        ),
+                    )
+                else:
+                    result = await self.ranker.rank(
+                        llm_ranking_run_id=llm_ranking_run_id,
+                        packets=packets,
+                    )
                 attempts = result.attempts
                 if len(result.candidates) < self.config.requested_count:
                     status = "SHORTFALL"
