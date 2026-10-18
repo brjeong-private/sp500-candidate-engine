@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | Historical Sunday Admission | 기존 주말 validator·일요일 scheduler 계약으로 Oct9 anchor·신규 Oct11 09:30 UTC 지식 cutoff를 검증하고 짧은 로컬 경로의 새 UUID에서 SHADOW 모델을 완료했으며 기존 토요일 context·이전 모델·주간 run·활성 할당·실제 생성 시각은 보존했다.
+- 2026-10-18 | Historical Daily Price Curation | 미래 operational FULL은 계속 배제하되 cutoff 내의 실제 대상일 가격 snapshot을 기존 이력·근거에 명시 추가한 신규 context 3개에서 각 503개 대상일 가격·적격 universe 교집합을 검증하고 과거 context와 수집 원천은 변경하지 않았다.
 - 2026-10-18 | October 15-16 Quant Deletion Production | 사용자 요청에 따라 migration 025와 독립 정량 조회 패치만 기존 Backend 배포본에 적용하고 두 날짜의 최신 20D 결과를 논리 삭제해 날짜·명시적 ID·우회 시도 모두 0건 반환 및 Fusion 후보·선정 근거·고정 원천·다른 날짜·운영 설정 불변을 확인했다.
 - 2026-10-18 | Fusion-preserving Quant Deletion | 정량 결과의 run 단위 삭제 표시와 날짜·범위·명시적 ID 공개 조회 제외를 추가하고 Fusion의 정확한 고정 원천 내부 조회와 무결성 검증은 유지해 정량 20D 결과 삭제와 Fusion 보존을 분리했다.
 - 2026-10-18 | Quant Deletion Contract | 공통 하네스·Backend 문서·후보 DB ER에 원천 물리 삭제와 독립 결과의 논리 삭제 차이·공개 우회 차단·migration 025 테이블과 적용 조건을 기록했다.

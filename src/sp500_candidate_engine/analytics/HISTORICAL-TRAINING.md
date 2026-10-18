@@ -1,8 +1,9 @@
 # Historical MEDIUM_20D challengers (non-promoting)
 
 This is a **model-training** reconstruction seam, not an operational replay, a weekly
-promotion retry, or a candidate/portfolio runner. Implemented and unit tested; **not
-deployed or trained**. No provider collection, Azure mutation, active assignment, live
+promotion retry, or a candidate/portfolio runner. Implemented and unit tested; the
+explicit Oct9 Sunday alternative below has a verified local **SHADOW** artifact, not
+a deployment or promotion. No provider collection, Azure mutation, active assignment, live
 environment binding, weekly-v1 run, candidate, or report is changed by this implementation.
 
 ## Contract and isolation
@@ -61,6 +62,40 @@ The cutoff is an explicitly approved historical knowledge boundary, not a claim 
 training actually ran then. Use the frozen context's exact verified cutoff. A boundary
 after the preceding weekend is rejected. Holidays use the XNYS preceding session.
 The example cutoff is not automatically substituted for an existing context's timestamp.
+
+### Explicit Oct9-only Sunday alternative
+
+The versioned weekly policy does not fix training knowledge to Saturday 05:30. The existing
+weekend scheduler accepts Saturday/Sunday, and the reconstruction validator requires a
+completed explicit boundary before Monday 00:00 New York, with the preceding Friday
+data anchor unchanged. The operational weekly API still accepts only its own eligible
+operational contexts; it is **not** used for this historical alternative.
+
+The 2026-10-18 authorized alternative uses a **new** context with
+`training_cutoff=2026-10-11T09:30:00+00:00` (Sunday 05:30 New York),
+`anchor_session=2026-10-09`, and first signal `2026-10-12`. The latest required archive
+was actually available `2026-10-11T05:07:30.536548+00:00`; all 21 normalized action
+versions were observed by `2026-10-10T19:18:55.204158+00:00`. Read-only review admitted
+1,506 snapshots and 500 price sessions ending Oct9 with zero future rows or blocking
+quality issues. All original parents remain in the closed input. No new projection
+semantics, inferred old publication dates, or changed Saturday identities are needed.
+
+Actual reconstruction starts now, not on Sunday. The chosen knowledge-boundary rationale,
+new request/context IDs, reviewed members and actual start time are separately recorded
+under the ignored execution artifacts. The same unmodified training, label, processor,
+weekly-v2 integrity and artifact checks apply. This does **not** make Oct10 archives
+eligible for the Sep25 or Oct2 weekends; those earlier reconstructions remain blocked.
+
+The first attempt failed before fitting with Windows path-length error 206. Its failed
+export and audit remain intact. A fresh UUID and shorter project-local output root
+`data\output\w20` completed the unchanged workflow and retained weekly-v2 gates.
+Selected LightGBM `301785d6-8512-514a-972c-b4a734e7c3b5` remains SHADOW:
+coverage `1.0`, 16 test blocks, Rank IC `0.0060716212`. The Rank IC threshold is still
+recorded, not enforced under the approved policy. All prior model-row hashes and
+weekly/active-assignment fingerprints remained unchanged; only three new SHADOW baseline
+registrations were added. The immutable manifest and provenance passed reconstruction
+admission for Oct12–14. This is not certification of a new historical split-projection
+policy or authorization to promote the artifact.
 
 Read-only inventory on 2026-10-18 confirmed that the 2026-09-25 boundary has 490 eligible
 daily price backfill snapshots/sessions (2024-10-11 .. 2026-09-25), 490 derived split
@@ -148,7 +183,7 @@ $f = Get-Content .\data\output\historical-models\sep25-frozen.json -Raw | Conver
   --anchor-session $f.anchor_session --training-cutoff $f.training_cutoff `
   --execution-context-id $f.execution_context_id --input-manifest-id $f.input_manifest_id `
   --manifest-hash $f.manifest_hash --context-hash $f.context_hash `
-  --universe-version-id $f.universe_version_id --output-root .\data\output\historical-models\outputs
+  --universe-version-id $f.universe_version_id --output-root .\data\output\w20
 if ($LASTEXITCODE -ne 0) { throw 'Challenger reconstruction failed; do not score' }
 ```
 
@@ -184,6 +219,22 @@ environment and resource sizing. Do not alter the operational job's default entr
 live artifact bindings. These cloud prerequisites are not implemented/deployed here.
 
 ## Independent Quant20 artifact override
+
+Prediction-day context curation must include valid target prices. A rich historical
+backfill manifest alone can still stop on Friday Oct9 and omit the operational Oct12–14
+bars. Do not exclude the entire `massive_grouped_daily` family merely because a generic
+newest-context union included future members: add the exact existing eligible recent
+FULL observations with coverage ending on/before D and source availability on/before
+D+1 New York 05:30. Preserve prior history/evidence and complete parent lineage, use
+explicit deterministic precedence, and retain the existing normalized-row temporal and
+blocking-quality checks. No provider collection or fixed original context is changed.
+
+Freeze a **new** manifest/context and require `SourceRepository.read_bars(D)` to return
+rows and intersect at least 20 eligible universe instruments before marking it price-ready.
+The initial three incomplete contexts are preserved. Their corrected successors returned
+503 target-price rows and 503 eligible target-price instruments each. This validates
+price input readiness, not successful LLM, Quant or Fusion execution. Keep runtime
+artifacts/workspaces under ignored, short project-local paths on Windows.
 
 Validate the original schema-v2 manifest, sidecar and pinned checksums **before** using the
 existing `MaterializedModelArtifact` override. Example service-level admission:

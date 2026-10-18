@@ -2,6 +2,45 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## MEDIUM_20D v1 isolated Sunday challenger — 2026-10-18
+
+- 기존 Alpha158·LightGBM·20D raw-return 의미와 학습/평가 설정을 재사용한 별도
+  `HISTORICAL_RECONSTRUCTION`이다. 정규 weekly run의 재실행·소급 승격이 아니다.
+- 데이터 anchor는 `2026-10-09`, 새 지식 cutoff는 일요일
+  `2026-10-11T09:30:00+00:00`이다. 모든 학습/평가 가격과 label exit는 Oct9 이하이며,
+  실제 fit/artifact 시각은 아래와 같이 Oct18이다. 토요일 context를 수정하지 않았다.
+- Windows 긴 경로로 중단한 첫 export는 보존하고 새 UUID·짧은 로컬 경로에서 완료했다.
+  coverage·test block·finite·PIT·artifact 검증을 유지하며 현재 승인된
+  `weekly-v2-20d-performance-suspended`의 성능 기준 비강제를 명시 적용했다.
+
+```text
+export_run_id: 2ca2ad52-b23b-5f3f-bcea-0df92329225d
+model_version_id: 301785d6-8512-514a-972c-b4a734e7c3b5
+fit_at: 2026-10-18T02:45:57.566494+00:00
+fit_completed_at: 2026-10-18T02:46:02.158196+00:00
+artifact_created_at: 2026-10-18T02:46:02.604077+00:00
+label_semantics: RAW_STOCK_20D_RETURN
+score_semantics: PREDICTED_20D_RETURN
+coverage: 1.0
+test_blocks: 16
+Rank IC mean: 0.006071621217650402
+fold Rank IC median: 0.017246324342173415
+Top-10 net return at 10 bps: 0.03051508489666669
+Top-10 max drawdown: -0.13883960753131785
+manifest_sha256: 721b3f545181102bb7c0022e81bff23b24087694e83e18a354df6eaa2732af8b
+model_sha256: 4c5f8e4eb667ecf5942187a4d69282edf50f36541a021099056b94f22d5b2550
+provenance_sha256: 234108b7422b3602d17c41d80f1fb2b90e70d19d83e861b9e5ac20aefe5767e6
+promotion_status: SHADOW
+promotion_allowed: false
+```
+
+Oct12–14 신호의 명시적 artifact override admission을 검증했다. 과거 model row의
+hash·weekly run·active assignment는 모두 보존하고 새 SHADOW baseline 3개만 추가했다.
+live artifact 환경 바인딩·승격·배포·후보 실행은 이 학습에서 수행하지 않았다.
+이 실행은 새로운 split FULL projection 인증/정책을 승인한 것이 아니며 Sep25/Oct2의
+earlier-weekend 재구성은 여전히 미완료다. 실행 계약과 제한은
+[역사 학습 실행 문서](src/sp500_candidate_engine/analytics/HISTORICAL-TRAINING.md)를 따른다.
+
 ## 독립 실행·통합 후보 운영 연결 — 2026-10-17
 
 정량·이벤트 LLM·RRF Fusion과 단독 실행 API/CLI·상태·재시도를 구현·배포했다.

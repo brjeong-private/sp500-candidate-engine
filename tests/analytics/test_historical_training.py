@@ -97,6 +97,20 @@ def test_request_rejects_unsafe_or_implicit_binding(changes: dict[str, object]) 
         replace(request(), **changes).validate()
 
 
+def test_new_sunday_context_is_allowed_without_moving_friday_data_anchor() -> None:
+    sunday = replace(
+        request(), anchor_session=date(2026, 10, 9), signal_session=date(2026, 10, 12),
+        training_cutoff=datetime(2026, 10, 11, 9, 30, tzinfo=UTC),
+    )
+    sunday.validate()
+    assert sunday.anchor_session == date(2026, 10, 9)
+    assert sunday.training_cutoff.date() == date(2026, 10, 11)
+    with pytest.raises(HistoricalSafetyError, match="preceding-weekend"):
+        replace(
+            sunday, training_cutoff=datetime(2026, 10, 12, 4, tzinfo=UTC),
+        ).validate()
+
+
 @pytest.mark.parametrize(("change", "error"), [
     ({"source_available_at": CUTOFF + timedelta(seconds=1)}, "future source snapshot"),
     ({"coverage_end": date(2026, 9, 28)}, "coverage exceeds"),
