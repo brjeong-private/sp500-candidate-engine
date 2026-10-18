@@ -1,0 +1,447 @@
+{
+  "captured_at_utc": "2026-10-18T08:20:28.748817+00:00",
+  "capture_only_refresh_live_files_before_actions": true,
+  "repository": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine",
+  "session_files": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files",
+  "work_root": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018",
+  "live_commands": {
+    "oct-llm-early8": {
+      "powershell_pid": 32812,
+      "python_pid": 32272,
+      "must_not_restart": true
+    },
+    "oct-early-first-ready": {
+      "powershell_pid": 29200,
+      "must_not_restart_evaluation": true
+    }
+  },
+  "capacity_lease": {
+    "baseline": {
+      "observed_at": "2026-10-18T01:21:04.091210+00:00",
+      "app": "ca-jongmok-tradingagents",
+      "resource_group": "rg-ai-project",
+      "latest_ready_revision": "ca-jongmok-tradingagents--single1-1016",
+      "active_revision_mode": "Multiple",
+      "min_replicas": 1,
+      "max_replicas": 1,
+      "scale_rules_present": false,
+      "containers": [
+        {
+          "name": "tradingagents",
+          "image": "acrjongmok8d0218f4.azurecr.io/tradingagents:20261012-automation-72da707",
+          "worker_count": "3"
+        }
+      ]
+    },
+    "authorized_replica_multiplier": 4,
+    "worker_changes_authorized": false,
+    "phase": "RESTORED",
+    "requested_at": "2026-10-18T06:51:01.283164+00:00",
+    "requested_min": 1,
+    "requested_max": 1,
+    "requested_revision": "ca-jongmok-tradingagents--octreplay-065101",
+    "previous_active_revisions": [
+      "ca-jongmok-tradingagents--octreplay-062139"
+    ],
+    "changed_at": "2026-10-18T06:52:48.318981+00:00",
+    "latest": {
+      "observed_at": "2026-10-18T06:52:48.318981+00:00",
+      "app": "ca-jongmok-tradingagents",
+      "resource_group": "rg-ai-project",
+      "latest_ready_revision": "ca-jongmok-tradingagents--octreplay-065101",
+      "latest_revision": "ca-jongmok-tradingagents--octreplay-065101",
+      "active_revision_mode": "Multiple",
+      "min_replicas": 1,
+      "max_replicas": 1,
+      "scale_rules_present": false,
+      "containers": [
+        {
+          "name": "tradingagents",
+          "image": "acrjongmok8d0218f4.azurecr.io/tradingagents@sha256:1dd6bef531fb106479c722f7c85474e2f54cf6703da326c78ad453647f886d9c",
+          "worker_count": "3"
+        }
+      ]
+    }
+  },
+  "dates": [
+    {
+      "target_session": "2026-09-30",
+      "execution_context_id": "6b40ea01-9816-5e58-a6fa-8109b31ad247",
+      "selection_run_id": "8b76e189-5c53-536d-98b7-ccd0ead3b904",
+      "stage_run_id": "911c7392-3cb7-4820-b2b3-1f4eb2782d02",
+      "scoring_run_id": "367a20e1-5700-5d6b-b4f8-38157bfefb13",
+      "model_version_id": "861b5f38-f10c-565f-989d-7253d34c13f5",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\0d440869-44d7-4d5e-99d6-436019db85e5\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-09-30\\result.json",
+      "llm_result_at_capture": {
+        "status": "RUNNING",
+        "mode": "evaluate",
+        "target_session": "2026-09-30",
+        "execution_context_id": "6b40ea01-9816-5e58-a6fa-8109b31ad247",
+        "started_at": "2026-10-18 07:49:36.175523+00:00"
+      }
+    },
+    {
+      "target_session": "2026-10-01",
+      "execution_context_id": "ae0177e9-a4e2-52d5-aabe-2b124d1e6041",
+      "selection_run_id": "1413fa39-3f9c-56d4-95b0-dc3dcb4b9c70",
+      "stage_run_id": "51ef75c3-d107-4a41-99b7-f6a8bc23d5a3",
+      "scoring_run_id": "a49d0f62-0f3b-5615-b943-c82f98344db0",
+      "model_version_id": "861b5f38-f10c-565f-989d-7253d34c13f5",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\21186cbb-063c-4526-a604-4e69f551a830\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-01\\result.json",
+      "llm_result_at_capture": {
+        "status": "RUNNING",
+        "mode": "evaluate",
+        "target_session": "2026-10-01",
+        "execution_context_id": "ae0177e9-a4e2-52d5-aabe-2b124d1e6041",
+        "started_at": "2026-10-18 07:49:37.110321+00:00"
+      }
+    },
+    {
+      "target_session": "2026-10-02",
+      "execution_context_id": "c701ca8d-db2d-5578-9c4d-b165119b4388",
+      "selection_run_id": "47d10c39-b659-56db-9d51-b538009dbe48",
+      "stage_run_id": "a9d08813-2c0b-4df8-a94c-3513c529c71b",
+      "scoring_run_id": "d68867eb-6610-5416-973c-fb105976c1c6",
+      "model_version_id": "861b5f38-f10c-565f-989d-7253d34c13f5",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\b41e472f-5177-42ee-93b4-a737a5429fb8\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-02\\result.json",
+      "llm_result_at_capture": {
+        "status": "NOT_STARTED"
+      }
+    },
+    {
+      "target_session": "2026-10-05",
+      "execution_context_id": "16f1cd57-073c-5764-b116-aebf2836f4fc",
+      "selection_run_id": "219cf225-bf6e-5951-9afc-710918c31523",
+      "stage_run_id": "42ec15e1-4c74-4367-8a52-fc7829e0c31b",
+      "scoring_run_id": "52018ade-bef3-5134-842b-6716f1f0bc39",
+      "model_version_id": "3fc6ebf4-03ee-5624-bfab-cd259fe2accb",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\35c0ceeb-05e7-489a-b303-ca837e854eb3\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-05\\result.json",
+      "llm_result_at_capture": {
+        "status": "NOT_STARTED"
+      }
+    },
+    {
+      "target_session": "2026-10-06",
+      "execution_context_id": "51c7b08b-6ad8-59eb-b110-2babd870c881",
+      "selection_run_id": "89a3e7e4-366f-57a3-a121-e65903b5ecd9",
+      "stage_run_id": "92b487fe-a34a-4592-8eb6-b2d1b26f0116",
+      "scoring_run_id": "e725c44b-a8a9-5fb6-9d3e-87080888a656",
+      "model_version_id": "3fc6ebf4-03ee-5624-bfab-cd259fe2accb",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\5735a05b-e99c-4108-ad62-3a4ba6b2f02d\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-06\\result.json",
+      "llm_result_at_capture": {
+        "status": "NOT_STARTED"
+      }
+    },
+    {
+      "target_session": "2026-10-07",
+      "execution_context_id": "99e18263-6030-5af4-92f0-363e9087e0aa",
+      "selection_run_id": "e3135eec-9f48-5016-b6df-5a99e87463b8",
+      "stage_run_id": "de418848-4329-4d55-ae27-340051f183e1",
+      "scoring_run_id": "0b605f23-83b7-5842-8918-99abdb3a65f7",
+      "model_version_id": "3fc6ebf4-03ee-5624-bfab-cd259fe2accb",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\ba992f39-e255-443e-9e88-f7f692d73add\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-07\\result.json",
+      "llm_result_at_capture": {
+        "status": "NOT_STARTED"
+      }
+    },
+    {
+      "target_session": "2026-10-08",
+      "execution_context_id": "13b73a76-8abb-5d36-a77f-2011a9e71433",
+      "selection_run_id": "2be29cd7-ccf0-5e5c-981c-53e3c790ea75",
+      "stage_run_id": "52888999-d86e-47a5-8324-636b3d2c5602",
+      "scoring_run_id": "3fc3de33-bef3-53f8-b336-677d36dec3aa",
+      "model_version_id": "3fc6ebf4-03ee-5624-bfab-cd259fe2accb",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\eafd1ac8-93f5-4817-b1c3-31e4669bb3b4\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-08\\result.json",
+      "llm_result_at_capture": {
+        "status": "NOT_STARTED"
+      }
+    },
+    {
+      "target_session": "2026-10-09",
+      "execution_context_id": "d381ef8f-74ca-5bea-87ff-3188a8d99a7e",
+      "selection_run_id": "5adce7f5-17c2-519f-bc59-4bf11dbd0a10",
+      "stage_run_id": "0c3fa9df-c5b8-4ad1-b6fd-f60291f2ec48",
+      "scoring_run_id": "1ec4b84a-1416-531c-80d9-ac862e68263a",
+      "model_version_id": "3fc6ebf4-03ee-5624-bfab-cd259fe2accb",
+      "frozen_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\hqs\\d92dd58e-fd68-491d-b4ec-ffecdcd491c6\\frozen.json",
+      "candidate_count": 20,
+      "eligibility_policy": "historical-membership-price-research-v1",
+      "llm_result_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\llm-evaluation-early\\2026-10-09\\result.json",
+      "llm_result_at_capture": {
+        "status": "NOT_STARTED"
+      }
+    },
+    {
+      "target_session": "2026-10-12",
+      "fusion_record": {
+        "fusion_run_id": "9070a46a-9b87-4421-a132-117b4be3ce65",
+        "status": "SUCCEEDED",
+        "selected_count": 20,
+        "failure_code": null,
+        "reused": false,
+        "target_session": "2026-10-12",
+        "execution_context_id": "bba3636b-5f41-516e-87f7-97fade3ab5c5",
+        "quant_id": "f6f4b91e-c269-5e11-8c2d-6168ac918a1c",
+        "llm_id": "b417b2e6-23b7-4528-9e73-0c55e23ed289",
+        "llm_policy_hash": "f84d5d11cec57632ef55935e38a998267b09aabd7e0f74890815fbc0aa9a72bf",
+        "quantitative_policy_hash": "df8a6cc3a6942ca85c485839f4d81a087a238070f25acc5c3d30248466a9e8cd"
+      },
+      "handoff_receipt": {
+        "delivery_status": "ACKNOWLEDGED",
+        "selection_run_id": "9070a46a-9b87-4421-a132-117b4be3ce65",
+        "payload_hash": "14f9e169384499c8fd8dda278d36ea862723db1bf7f508d87e6d5d9e763403fa",
+        "candidate_count": 20
+      },
+      "ratings_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\ops\\outputs\\ratings-2026-10-12.json",
+      "verified_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\ops\\outputs\\verified-2026-10-12.json",
+      "old_cleanup_receipts": {
+        "portal": {
+          "status": "COMMITTED",
+          "stage": "portal",
+          "plan_id": "692676158703ca84861102168a16c6bf1764952283129511944d2c27ea864796",
+          "result": {
+            "rows": {
+              "job_events": 100,
+              "analysis_dispatches": 10,
+              "candidate_handoffs": 0,
+              "jobs": 10,
+              "daily_analyses": 1
+            },
+            "transaction_committed": true
+          },
+          "next_stage": "blobs"
+        },
+        "blobs": {
+          "status": "COMMITTED",
+          "stage": "blobs",
+          "plan_id": "692676158703ca84861102168a16c6bf1764952283129511944d2c27ea864796",
+          "result": {
+            "status": "VERIFIED",
+            "mode": "delete",
+            "deleted_ids": [
+              138,
+              139,
+              140,
+              141,
+              142,
+              143,
+              144,
+              145,
+              146,
+              147
+            ],
+            "missing_ids": [],
+            "old_hash": "db7975647659284241decc4326881c2cd16262b871d2f48f251dbc913369e72e",
+            "new_props_hash": "71d528442603cd8faeed11c3866a47f9c10bfac47edb9a72c644b0835ad9a13b",
+            "new_state_hash": "e7fb0fcd58405f54e102e0aaffeefd970f4b25f206ffa0eb03a4c01f27d37eca",
+            "verified_at_utc": "2026-10-18T06:56:48.526083+00:00"
+          },
+          "next_stage": "candidate"
+        },
+        "candidate": {
+          "status": "COMMITTED",
+          "stage": "candidate",
+          "plan_id": "692676158703ca84861102168a16c6bf1764952283129511944d2c27ea864796",
+          "result": {
+            "rows": {
+              "selection.candidate_reason": 20,
+              "selection.candidate": 10,
+              "selection.selection_run": 1
+            },
+            "transaction_committed": true
+          },
+          "next_stage": null
+        }
+      }
+    },
+    {
+      "target_session": "2026-10-13",
+      "fusion_record": {
+        "fusion_run_id": "50c21c34-24ff-4f0e-9f6c-1696975fd91b",
+        "status": "SUCCEEDED",
+        "selected_count": 20,
+        "failure_code": null,
+        "reused": false,
+        "target_session": "2026-10-13",
+        "execution_context_id": "140b81e2-38bd-51e4-8360-bb5fd8633d6a",
+        "quant_id": "14740a44-7f77-5dbe-b5b7-be4ec6f06d89",
+        "llm_id": "9c67d0b1-9aff-4a6c-b9c8-bdb868547342",
+        "llm_policy_hash": "f84d5d11cec57632ef55935e38a998267b09aabd7e0f74890815fbc0aa9a72bf",
+        "quantitative_policy_hash": "df8a6cc3a6942ca85c485839f4d81a087a238070f25acc5c3d30248466a9e8cd"
+      },
+      "handoff_receipt": {
+        "delivery_status": "ACKNOWLEDGED",
+        "selection_run_id": "50c21c34-24ff-4f0e-9f6c-1696975fd91b",
+        "payload_hash": "598d355ce5b33094a51e5fab8fa477acc7b7d2baf6874691a5b6319cf6e86a95",
+        "candidate_count": 20
+      },
+      "ratings_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\ops\\outputs\\ratings-2026-10-13.json",
+      "verified_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\ops\\outputs\\verified-2026-10-13.json",
+      "old_cleanup_receipts": {
+        "portal": {
+          "status": "COMMITTED",
+          "stage": "portal",
+          "plan_id": "4cbe28ab64f1784d45ebcd7157c2eedce303179fdc66eb1d0cd2e9cd00f5803e",
+          "result": {
+            "rows": {
+              "job_events": 100,
+              "analysis_dispatches": 10,
+              "candidate_handoffs": 0,
+              "jobs": 10,
+              "daily_analyses": 1
+            },
+            "transaction_committed": true
+          },
+          "next_stage": "blobs"
+        },
+        "blobs": {
+          "status": "COMMITTED",
+          "stage": "blobs",
+          "plan_id": "4cbe28ab64f1784d45ebcd7157c2eedce303179fdc66eb1d0cd2e9cd00f5803e",
+          "result": {
+            "status": "VERIFIED",
+            "mode": "delete",
+            "deleted_ids": [
+              158,
+              159,
+              160,
+              161,
+              162,
+              163,
+              164,
+              165,
+              166,
+              167
+            ],
+            "missing_ids": [],
+            "old_hash": "71adafcb4deabad9368a0234eb0728de3930c4100fba01704ada44572bd2db2e",
+            "new_props_hash": "59384def0cf5a79f625964f095ef9a0add6c2210a38b52230a8cd28d9d941901",
+            "new_state_hash": "deddbb90b0e83687f4b1161655280a56fb17f88053fd4d2b8733a2ce4d629a8e",
+            "verified_at_utc": "2026-10-18T07:01:51.462921+00:00"
+          },
+          "next_stage": "candidate"
+        },
+        "candidate": {
+          "status": "COMMITTED",
+          "stage": "candidate",
+          "plan_id": "4cbe28ab64f1784d45ebcd7157c2eedce303179fdc66eb1d0cd2e9cd00f5803e",
+          "result": {
+            "rows": {
+              "selection.candidate_reason": 20,
+              "selection.candidate": 10,
+              "selection.selection_run": 1
+            },
+            "transaction_committed": true
+          },
+          "next_stage": null
+        }
+      }
+    },
+    {
+      "target_session": "2026-10-14",
+      "fusion_record": {
+        "fusion_run_id": "52800c74-701f-4cee-9010-773ce99b7ef0",
+        "status": "SUCCEEDED",
+        "selected_count": 20,
+        "failure_code": null,
+        "reused": false,
+        "target_session": "2026-10-14",
+        "execution_context_id": "db0d18ec-e5a1-5d8d-b340-843d36092d67",
+        "quant_id": "0ffc987d-5a41-5fd5-bbac-24d7a59f843b",
+        "llm_id": "638fe22b-1abf-4951-bdac-71bded97bca7",
+        "llm_policy_hash": "f84d5d11cec57632ef55935e38a998267b09aabd7e0f74890815fbc0aa9a72bf",
+        "quantitative_policy_hash": "df8a6cc3a6942ca85c485839f4d81a087a238070f25acc5c3d30248466a9e8cd"
+      },
+      "handoff_receipt": {
+        "delivery_status": "ACKNOWLEDGED",
+        "selection_run_id": "52800c74-701f-4cee-9010-773ce99b7ef0",
+        "payload_hash": "ff8eeb87bb8704473c75828c291c577c15ca7066650421461704b01c8dce7b98",
+        "candidate_count": 20
+      },
+      "ratings_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\ops\\outputs\\ratings-2026-10-14.json",
+      "verified_path": "C:\\Users\\Boram Jeong\\.copilot\\session-state\\2c02baae-4ee1-4fb3-aaaf-016ea6591301\\files\\october-replay-20261018\\ops\\outputs\\verified-2026-10-14.json",
+      "old_cleanup_receipts": {
+        "portal": {
+          "status": "COMMITTED",
+          "stage": "portal",
+          "plan_id": "5dda99777f53bfec8535759634f567c255b9413cb71ce0f5c0b29eb90707d74e",
+          "result": {
+            "rows": {
+              "job_events": 100,
+              "analysis_dispatches": 10,
+              "candidate_handoffs": 0,
+              "jobs": 10,
+              "daily_analyses": 1
+            },
+            "transaction_committed": true
+          },
+          "next_stage": "blobs"
+        },
+        "blobs": {
+          "status": "COMMITTED",
+          "stage": "blobs",
+          "plan_id": "5dda99777f53bfec8535759634f567c255b9413cb71ce0f5c0b29eb90707d74e",
+          "result": {
+            "status": "VERIFIED",
+            "mode": "delete",
+            "deleted_ids": [
+              438,
+              439,
+              440,
+              441,
+              442,
+              443,
+              444,
+              445,
+              446,
+              447
+            ],
+            "missing_ids": [],
+            "old_hash": "1b4b5c5e9a2784dadd807b659f73f04b4297b41e017b2cea393a546823871722",
+            "new_props_hash": "8c26d437bfccd400261b396acdcc50163ff9beed1852e14f570a14cd6e287b3b",
+            "new_state_hash": "4f7b4a60efde9ee66879c090d59e34fb6802fc6b3dd9a4a6cb36fc248ed02bce",
+            "verified_at_utc": "2026-10-18T07:13:34.533361+00:00"
+          },
+          "next_stage": "candidate"
+        },
+        "candidate": {
+          "status": "COMMITTED",
+          "stage": "candidate",
+          "plan_id": "5dda99777f53bfec8535759634f567c255b9413cb71ce0f5c0b29eb90707d74e",
+          "result": {
+            "rows": {
+              "selection.candidate_reason": 20,
+              "selection.candidate": 10,
+              "selection.selection_run": 1
+            },
+            "transaction_committed": true
+          },
+          "next_stage": null
+        }
+      }
+    }
+  ],
+  "source_delivery_path": "C:\\Users\\Boram Jeong\\repo\\sp500-candidate-engine\\data\\output\\historical-models\\execution-20261018\\delivery-ridge-research-final.json",
+  "source_delivery_sha256": "6783d4500b97ee26cbee1cc6136e9ed7b5e7fba9cf0688dd3af0ed3bd39b594f"
+}
