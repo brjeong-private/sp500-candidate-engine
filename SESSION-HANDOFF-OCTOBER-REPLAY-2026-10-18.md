@@ -4,6 +4,10 @@
 **후속 후보 범위 작업은 2026-10-18 21:58 KST에 완료했다. 최신 결과는 §14를 따른다.**
 아래 초기 프로세스·중간 상태·원래 보고서/손익 지시를 현재의 재실행 지시로 사용하지 않는다.
 
+**추가 손익 요청:** 이후 사용자가 보고서 손익 계산을 다시 요청하고 **"218개로 진행"**을
+명시 승인했다. 이 별도 부분 입력 계산의 완료 내역은 §15에 있으며, §14의 후보 완료나
+원래 220개 검증 필수 계약을 소급 변경하지 않는다.
+
 **병행 승인(2026-10-18 20:24 KST):** 새 App Service 대신 실제 모델 사용량을 확인하고
 명시적 backfill의 모델별 날짜 분담·quota 분리를 구현한다. `gpt-6-astra`와 `gpt-6.1-sol`은
 각 100만 TPM 배포이며 신규 실행은 기존 v6의 배포별 25만 TPM·60 RPM을 사용한다.
@@ -512,3 +516,39 @@ Portal/Blob 추가 정리나 포트폴리오·손익 계산을 수행하지 않�
 `final-candidate-database-verification.json`, `final-artifact-registry-verification.json`,
 `final-operations-verification.json`은 최종 DB·artifact·리소스 상태를 기록한다.
 최초 JSON snapshot은 당시의 역사적 증적이므로 덮어쓰지 않았다.
+
+## 15. 후속 승인: 218/220개 보고서 기반 잠정 가상 손익
+
+보고서 상태를 새로 조회해 218개 완료와 PSKY 실패 2개(9/30 job616·10/1 job625)를
+확인했다. 사용자 승인 `"218개로 진행"`에 따라 실패 2건은 **등급 추정 없이 신호 없음**으로
+제외했다. 나머지 218개는 private worker에서 실제 저장 본문·기준일·명시적 최종 등급·
+SHA-256·ETag·생성 시각을 확인하고, 전체 220개 job 상태와 후보 identity가 검증 전후
+변하지 않았음을 다시 확인했다. 새 보고서를 생성하거나 실패 보고서를 재실행하지 않았다.
+
+- 결과 분류는 `PARTIAL_REPORT_COVERAGE_OBSERVATIONAL_PAPER_RESULT`다.
+  완전한 220개 보고서 성과나 strict PIT PASS로 표시하지 않는다.
+- 초기 USD500·신규 USD100·소수점 수량·최대10종목·다음 거래일 시가 체결·10/16 종가
+  평가 규칙을 유지했다. 비용 제외와 편도0.1% 비용 민감도는 별도 자기금융 계산이다.
+- 원래 strict 220개 assembler와 금융 계산 규칙은 변경하지 않았다. 부분 입력 조립과
+  보고서 검증은 저장소 밖 세션 도구에서 수행하고 결과 artifact만 별도로 내보냈다.
+- CTVA는 10/6 이후 기존 비조정 시세가 없지만 네 번의 신호가 모두 Underweight이고
+  초기 보유가 없어 실제 체결·보유가 없다. 해당 가격을 보완하지 않았으며 실제 체결과
+  보유 평가에 필요한 가격은 모두 강제 검증했다. 추가 기본 수집은 하지 않았다.
+- 보고서 실제 생성일은 10/18로 유지했다. 과거 다음 거래일 09:00 NY에 판단을 얻었다는
+  가정의 관찰형 계산이며 수정 기사·현재 vendor snapshot·모델 memory의 미래 정보
+  혼입 위험과 20거래일 만기 미평가를 명시했다. 실제 운용 성과로 해석하지 않는다.
+
+상세 한국어 결과와 전체 정밀도 JSON·거래/거절/일별 NAV/보유 CSV·후보 모델/run/context
+계보·원문 hash 증적은 다음 **기존 gitignore 대상** 경로에 저장했다.
+
+```text
+data\output\paper-portfolio-20261018-218\PORTFOLIO-RESULTS-218-KO-FINAL.md
+data\output\paper-portfolio-20261018-218\portfolio-results-218.json
+data\output\paper-portfolio-20261018-218\output-manifest-final.json
+data\output\paper-portfolio-20261018-218\calculation-code\
+```
+
+독립적인 거래 재구성과 일별 평가 합계·낙폭 계산을 USD `1e-40` 오차 한도에서 대조했고,
+원래 계산기·스키마·입력 사본으로 네트워크 없는 재계산의 두 시나리오와 payload hash가
+정확히 일치했다. 모든 내보낸 파일도 SHA-256으로 대조했다. 보고서 원문 자체는
+로컬/Git에 내보내지 않았고, API·DB·worker 용량·B2·DB SKU는 변경하지 않았다.

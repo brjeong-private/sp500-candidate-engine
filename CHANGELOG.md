@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-18 | Approved Partial Paper Evaluation | 사용자 승인 218/220개 보고서의 본문·등급·hash를 읽기 전용으로 검증해 누락 2건을 신호 없음으로 분리하고 기존 금액·체결 규칙의 비용 제외/편도0.1% 가상 손익·상세 한국어 보고서·원장·출처/모델 계보·오프라인 재현 증적을 gitignore 대상에 저장했으며 원래220개 gate·원천·리소스 설정은 변경하지 않았다.
 - 2026-10-18 | October Candidate Replay Completion | 11거래일의 Quant·LLM·Fusion 각220개와 정상 분석일자 전량 ACK를 완료하고 백업된 기존 Quant13run·130후보·260사유만 추가 정리했으며 원래 scoring16개·주차 모델·두 registry와 보고서 결과 제외 범위를 보존했다.
 - 2026-10-18 | Final Worker Capacity Restore | 모든 후보 작업 후 전역 큐의 안정적 0건을 확인해 임시3replica를 한 번만1replica·worker3으로 원복하고 실제 Healthy1개·기존 image/Multiple mode·양쪽 B2 유지·DB SKU 미변경을 기록했다.
 - 2026-10-18 | Model-specific Backfill Routing | 명시적 LLM backfill에 날짜·부분 재시도에 안정적인 모델 분담과 모델별 공유 quota를 추가하고 전역 환경 변경·날짜 내 모델 혼합·정규 실행 변경 없이 배정 deployment/context를 기록하도록 했다.
