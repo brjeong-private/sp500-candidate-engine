@@ -3,6 +3,11 @@
 작성: 2026-10-18 17:20 KST 전후. **작업 완료 보고서가 아니라 실행 중 작업의 인계 문서**다.
 수치는 작성 시점 기준이다. 행동 전에 실제 프로세스·결과 파일·DB 상태를 다시 확인한다.
 
+**후속 승인(2026-10-18 17:53 KST):** 이번 재처리에서는 중간 큐가 비어도 증량한
+TradingAgents 용량을 유지한다. 모든 날짜의 보고서 생성·검증·기존 결과 교체와
+최종 손익 계산이 끝난 뒤 큐를 확인하고 한 번만 원복한다. 아래 최초 인계의
+`RESTORED` 상태는 작성 당시 snapshot이며 현재 용량은 lease와 실리소스로 확인한다.
+
 ## 0. 가장 먼저 — 실행 중 평가를 중복 시작하지 말 것
 
 1. [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를 먼저 읽는다.
@@ -282,13 +287,14 @@ exact20·hash·identity·ACK·idempotency를 검증하고 report_context는 보�
 old Quant report를 먼저 삭제할 필요 없다. **new20검증 → old삭제** 순서를 유지한다.
 같은Fusionrun의 재전송은 receipt/jobs를 재사용해 중복 생성하지 않는다.
 
-batch마다 queue drain watcher를 켜고 idle이면 곧 원복한다.
-LLM/source 대기로 큐가 비었는데3replica를 계속 두지 않는다.
+후속 사용자 승인에 따라 batch 사이 또는 LLM/source 대기로 큐가 비어도
+3replica를 유지한다. 전체 보고서·검증·교체·손익 계산이 끝난 뒤에만 아래
+최종 queue drain 확인과 원복을 한 번 실행한다. 중간 idle을 원복 조건으로 쓰지 않는다.
 
 ```powershell
 & $p "$s\oct_report_queue_watch.py" wait --interval 60 --idle-seconds 120 `
   --timeout 21600 --output "$w\queue-watch-<BATCH>.json"
-# drain 알림 뒤 최신queue 확인:
+# 전체 작업 완료 및 최종 drain 뒤 최신queue 확인:
 & $c "$s\oct_replay_capacity.py" restore --no-running-jobs-confirmed `
   --state "$w\capacity-lease.json"
 ```
@@ -415,6 +421,8 @@ Portalstrict추가 `7a58963`,`487e479`,`4d9bc47`은 `a3b6c1e`로롤백했다.
 10. **queueidle,min1/max1,worker3,기존날짜filterimage,양쪽AppServiceB2**를실리소스로확인한다.
 11. 관련CHANGELOG/report를owned변경만commit한다. **Git push금지**.
 12. 모두검증하기전task complete하지 않는다. 미완료는미완료로명시한다.
+13. 후속 17:53 KST 지시가 우선한다. 중간 큐 공백에는 증량을 유지하고
+    전체 작업 완료 후에만 한 번 원복한다.
 
 새 대화의 시작 지시:
 
