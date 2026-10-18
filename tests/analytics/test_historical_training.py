@@ -464,3 +464,44 @@ def test_core_reuses_fit_and_evaluation_with_real_time_and_train_only_processors
         assert split["training_cutoff"] == CUTOFF.isoformat()
         assert split["promotion_allowed"] is False
         assert all("fit_at" not in fold for fold in split["folds"])
+
+
+def test_historical_delta_cannot_hide_a_late_raw_split_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    req = request()
+    parent_id = uuid.uuid4()
+    parent = ManifestSnapshot(
+        parent_id, "massive_splits_backfill", "FULL", "SINGLE", 0, None,
+        date(2024, 10, 11), date(2025, 10, 8),
+    )
+    child = ManifestSnapshot(
+        uuid.uuid4(), "massive_splits_backfill_derived", "DELTA", "DELTA", 0,
+        parent_id, req.anchor_session, req.anchor_session,
+    )
+    connection = MagicMock()
+    connection.execute.return_value.fetchall.return_value = [
+        {
+            "source_snapshot_id": member.source_snapshot_id,
+            "dataset_code": member.dataset_code, "snapshot_kind": member.snapshot_kind,
+            "parent_snapshot_id": member.parent_snapshot_id,
+            "coverage_start": member.coverage_start, "coverage_end": member.coverage_end,
+            "source_available_at": datetime(2026, 10, 10, tzinfo=UTC)
+            if member is parent else CUTOFF,
+        }
+        for member in (parent, child)
+    ]
+    database = MagicMock()
+    database.connect.return_value.__enter__.return_value = connection
+    audit = MagicMock()
+    monkeypatch.setattr(context_module, "_validate_sources", audit)
+    with pytest.raises(HistoricalSafetyError, match="cutoff mismatch"):
+        context_module.freeze_training_context(
+            database=database, reconstruction_id=req.reconstruction_id,
+            signal_session=req.signal_session, anchor_session=req.anchor_session,
+            training_cutoff=req.training_cutoff, universe_version_id=req.universe_version_id,
+            members=(parent, child),
+        )
+    assert len(connection.execute.call_args_list) == 1
+    assert "SELECT" in connection.execute.call_args.args[0]
+    audit.assert_not_called()

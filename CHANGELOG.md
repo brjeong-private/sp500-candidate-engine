@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-18 | Historical Source Lineage Gate | 승인된 재구성의 read-only 재귀 검토에서 과거 derived split의 raw 부모가 cutoff 이후임을 확인해 세 anchor 학습 전 중단하고, 부모 유형 설명·늦은 부모 차단 회귀 검증과 generic daily freeze의 미래 입력 전체 rollback 경계를 보강했으며 안전 검사는 완화하지 않았다.
 - 2026-10-18 | Historical Model Reconstruction | 기존 snapshot의 명시적 rich manifest 고정·격리 context/export·실제 생성 시각·학습 라벨 성숙 및 processor train-only 검증을 재사용 학습 CLI에 추가하고 MEDIUM_20D SHADOW artifact와 해시 결합 증적만 생성하며 정규 승격·활성 모델·과거 weekly-v1 run은 변경하지 않는다.
 - 2026-10-18 | Historical Training Runbook | 9월30일~10월14일 신호의 직전 주말 anchor·입력 고정/학습 명령·독립 Quant artifact override 검증·운영 Job 기본 실행 금지와 미실행/미배포 전제를 모델 전용 문서에 기록했다.
 - 2026-10-18 | Full Application Release | main의 7f12171 전체 코드를 Backend·immutable 학습 이미지·Function에 배포해 20D 전용 주간 정책·성능 기준 임시 비강제·종료 실행 재시작 차단을 반영하고 기존 후보·근거·운영 설정·B2·private 네트워크를 보존했으며 실제 재학습·승격은 실행하지 않았다.

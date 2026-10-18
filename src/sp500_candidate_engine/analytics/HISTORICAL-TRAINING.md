@@ -66,11 +66,25 @@ Read-only inventory on 2026-10-18 confirmed that the 2026-09-25 boundary has 490
 daily price backfill snapshots/sessions (2024-10-11 .. 2026-09-25), 490 derived split
 snapshots, 490 universe-backfill snapshots and 146 distinct historical universe versions
 through 2026-09-21. Price source availability and universe announcement/effective-date
-violations were zero in those bounded checks. Derived split snapshots are DELTA with
-parents: include their existing eligible price parents. This is **not** a completed
-full-manifest readiness certificate. Small operational seven-snapshot contexts are not
+violations were zero in those bounded checks. This was **not** a completed full-manifest
+readiness certificate. Subsequent recursive review found that derived split DELTAs point
+to raw `massive_splits_backfill` parents, **not price parents**. Five/five/two required
+parents exceed the Sep25/Oct2/Oct9 historical boundaries, respectively. For example parent
+`a654c9c3-733c-5355-a274-b847848bd881` records availability
+`2026-10-10T19:18:55.204158+00:00`, after even the Oct9 training cutoff.
+The historical builds therefore **stopped before freezing or fitting**, as required by
+the strict source/parent contract. Do not drop parents, backdate metadata or treat late raw
+container acquisition as independently verified historical publication.
+Small operational seven-snapshot contexts are not
 substitutes for the historical training input. Historical anchors before October 8 need
 an explicitly assembled rich manifest; do not select the newest context.
+
+The existing generic daily freezer's newest-context selection is also not a safe substitute
+for an explicit reviewed plan: a guarded Oct12 attempt selected 15 future-availability and
+13 future-coverage snapshots. Its outer transaction rolled back completely (zero resulting
+manifest/context rows). Explicit daily plans must retain complete lineage and their own
+D+1 New York 05:30 cutoff; do not label them as weekly training contexts. No model,
+weekly-run or active-assignment fingerprints changed during this authorized preflight.
 
 Before execution, review the exact snapshot list, parent closure, source availability,
 blocking quality issues, universe uniqueness, historical membership/GICS limitations,
@@ -113,10 +127,10 @@ $id = [guid]::NewGuid().ToString()
 # Set this to the reviewed latest universe UUID in this manifest.
 $universe = '<approved universe UUID>'
 & $py -m sp500_candidate_engine.analytics.historical_training_context `
-  --members-file .\data\historical-models\sep25-reviewed-members.json `
+  --members-file .\data\output\historical-models\sep25-reviewed-members.json `
   --reconstruction-id $id --signal-session 2026-09-30 --anchor-session 2026-09-25 `
   --training-cutoff '2026-09-26T09:30:00+00:00' --universe-version-id $universe |
-  Set-Content .\data\historical-models\sep25-frozen.json
+  Set-Content .\data\output\historical-models\sep25-frozen.json
 if ($LASTEXITCODE -ne 0) { throw 'Input freeze failed; do not train' }
 ```
 
@@ -128,13 +142,13 @@ context and its exact hashes directly to the training seam.
 ## Reconstruct once per anchor (future authorized execution only)
 
 ```powershell
-$f = Get-Content .\data\historical-models\sep25-frozen.json -Raw | ConvertFrom-Json
+$f = Get-Content .\data\output\historical-models\sep25-frozen.json -Raw | ConvertFrom-Json
 & $py -m sp500_candidate_engine.analytics.historical_training `
   --reconstruction-id $f.reconstruction_id --signal-session $f.signal_session `
   --anchor-session $f.anchor_session --training-cutoff $f.training_cutoff `
   --execution-context-id $f.execution_context_id --input-manifest-id $f.input_manifest_id `
   --manifest-hash $f.manifest_hash --context-hash $f.context_hash `
-  --universe-version-id $f.universe_version_id --output-root .\data\historical-models\outputs
+  --universe-version-id $f.universe_version_id --output-root .\data\output\historical-models\outputs
 if ($LASTEXITCODE -ne 0) { throw 'Challenger reconstruction failed; do not score' }
 ```
 
@@ -188,7 +202,7 @@ validate_reconstructed_artifact(
     signal_session=date(2026, 9, 30),
     knowledge_mode="HISTORICAL_RECONSTRUCTION",
 )
-artifact_override = ModelArtifactLoader(Path(r"data\historical-models\cache")).load(
+artifact_override = ModelArtifactLoader(Path(r"data\output\historical-models\cache")).load(
     ArtifactBinding("MEDIUM_20D", manifest_path.resolve().as_uri(), approved_manifest_sha256)
 )
 ```
