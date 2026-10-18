@@ -420,6 +420,9 @@ Qlib `TopkDropoutStrategy` 결과를 본 프로젝트의 일일 후보 정책과
 - 여러 날짜의 backfill은 기본적으로 bounded 병렬 실행한다(기본 2일).
   날짜별 고정 context·cutoff·manifest와 실패 격리·성공 결과 재사용을 유지한다.
   공유 provider quota를 날짜 수만큼 늘리지 않으며 실패한 날짜만 명시적으로 재시도한다.
+  명시적 LLM backfill의 서로 다른 모델 배포는 실제 할당 quota와 다른 소비자의 사용량을
+  확인한 뒤 배포별 limiter를 사용할 수 있다. 같은 배포의 날짜·검색·평가는 공유하고,
+  날짜별 모델 배정은 부분 재시도에도 고정하며 정규 일일·진행 중 실행을 바꾸지 않는다.
 - **2026-10-18 사용자 지정:** Portal `asp-jongmok-prd`와 Candidate
   `asp-sp500-candidate`의 승인 SKU는 **B2**다. B1으로 변경하지 않는다.
   코드·설정·인프라 재배포는 기존 플랜의 SKU와 인스턴스 수를 보존한다.

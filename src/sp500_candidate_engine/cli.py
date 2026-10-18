@@ -177,6 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="YYYY-MM-DD=UUID",
         help="Repeat for each fixed session/context pair; concurrency defaults to 2",
     )
+    llm_backfill.add_argument(
+        "--model-deployment", action="append", default=[],
+        help="Opt-in date-based model routing; repeat for independent deployment quota pools",
+    )
 
     run_backfill = commands.add_parser(
         "run-backfill",
@@ -397,6 +401,7 @@ def main() -> None:
             requests.append(LlmBackfillRequest(day, context_id))
         result = asyncio.run(run_llm_backfill(
             settings, requests=tuple(requests), repository_root=Path(__file__).parents[2],
+            deployments=tuple(args.model_deployment),
         ))
         print(json.dumps(result, indent=2, sort_keys=True, default=str))
         if result["status"] != "SUCCEEDED":

@@ -104,6 +104,13 @@ Azure 검색은 Bing Grounding을 사용하며 별도 비용·데이터 처리 �
   기존 temporal 검증·screening·budget 검증을 그대로 적용한다.
 - 여러 날짜의 LLM backfill은 provider limiter를 공유한다. 요청별 token reservation으로
   완료 순서가 달라도 해당 요청의 RPM/TPM 사용량을 정산한다.
+- 명시적 `--model-deployment` backfill만 날짜별 배포를 분담할 수 있다. 같은 배포의
+  검색·평가·여러 날짜는 하나의 limiter를 공유하고 서로 다른 배포의 할당 quota만
+  분리한다. 실제 배포별 한도와 다른 소비자의 사용량을 확인하며 날짜 수만큼 한도를
+  복제하지 않는다. 각 배포의 기본 상한은 선택한 versioned 정책을 유지한다.
+- 날짜별 배포는 달력 ordinal과 순서가 고정된 배포 목록으로 결정한다. 실패일만 재시도해도
+  모델이 바뀌지 않으며 배정 배포·context·routing version을 결과에 남긴다.
+  전역 환경·정규 일일 기본값·진행 중 평가의 모델을 바꾸거나 오류 시 다른 모델로 대체하지 않는다.
 - 검색의 408/429/500/502/503/504·transport 오류만 기존 정책의 횟수·최대 지연 안에서
   지수 backoff와 숫자 Retry-After를 적용해 재시도한다. 인증·설정 오류와 재시도 소진은
   날짜 실패이며 검색 미승인에 대한 v6의 DB-only 평가로 바꾸지 않는다.

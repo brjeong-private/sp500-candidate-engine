@@ -414,6 +414,7 @@ def create_llm_preselection_service(
     settings: Settings,
     *,
     repository_root: Path,
+    deployment: str | None = None,
 ) -> LlmPreselectionService:
     config = load_runtime_llm_config(repository_root)
     from sp500_candidate_engine.fusion.config import fusion_enabled
@@ -421,6 +422,8 @@ def create_llm_preselection_service(
     if fusion_enabled() and not config.event_policy:
         raise ValueError("Fusion requires an explicitly selected event LLM policy")
     ranker_settings = LlmRankerSettings.from_env()
+    if deployment is not None:
+        ranker_settings = replace(ranker_settings, deployment=deployment)
     if config.enrichment:
         from sp500_candidate_engine.analytics.azure_openai import (
             AzureOpenAIClient,

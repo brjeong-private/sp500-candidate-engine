@@ -1,5 +1,7 @@
 # Change Log
 
+- 2026-10-18 | Model-specific Backfill Routing | 명시적 LLM backfill에 날짜·부분 재시도에 안정적인 모델 분담과 모델별 공유 quota를 추가하고 전역 환경 변경·날짜 내 모델 혼합·정규 실행 변경 없이 배정 deployment/context를 기록하도록 했다.
+- 2026-10-18 | LLM Runtime Headroom | Azure의 두 배포별 100만 TPM과 최근 사용량을 확인하고 신규 backfill은 기존 v6의 모델별 25만 TPM을 사용하도록 안내했으며 진행 중 평가·Azure 배포·B2·DB SKU는 변경하지 않았다.
 - 2026-10-18 | Interrupted Replay Recovery | 이전 세션 abort 뒤 종료된 LLM 프로세스·해제된 lock·미저장 5일을 확인해 성공일 제외·고정 입력/검색 증적/공유 한도 재사용으로 현재 세션에 인계하고 기존 진행 표식 보존과 결과 JSON 원자적 교체를 적용했다.
 - 2026-10-18 | Candidate-only Replay Continuation | 후속 사용자 지시에 따라 남은 후보 LLM·Fusion·정상 분석일자 전량 전달까지만 재개하고 보고서 본문·등급·결과 정리·손익 계산은 제외하며 중간 증량 유지와 최종 전역 큐 완료 후 단일 원복을 보존했다.
 - 2026-10-18 | Replay Capacity Lifecycle | 후속 사용자 지시에 따라 이번 10월 재처리의 중간 큐 공백에는 증량한 worker 용량을 유지하고 전체 보고서·검증·교체·손익 계산 완료 후 한 번만 원복하도록 실행 제어와 인계를 변경했다.

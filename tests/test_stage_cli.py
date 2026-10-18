@@ -44,6 +44,21 @@ def test_llm_backfill_cli_reports_all_results_before_non_success_exit(
         llm_pipeline.LlmBackfillRequest(cli._date("2026-10-15"), RUN),
         llm_pipeline.LlmBackfillRequest(cli._date("2026-10-16"), UUID(int=1001)),
     )
+    assert runner.await_args.kwargs["deployments"] == ()
+
+
+def test_llm_backfill_cli_passes_explicit_model_deployments(monkeypatch, capsys):
+    monkeypatch.setattr(cli.Settings, "from_env", lambda _: MagicMock())
+    runner = AsyncMock(return_value={"status": "SUCCEEDED", "results": []})
+    monkeypatch.setattr(llm_pipeline, "run_llm_backfill", runner)
+    monkeypatch.setattr(sys, "argv", [
+        "candidate-engine", "backfill-llm-candidates",
+        "--session-context", f"2026-10-15={RUN}",
+        "--model-deployment", "gpt-6.1-sol", "--model-deployment", "gpt-6-astra",
+    ])
+    cli.main()
+    assert json.loads(capsys.readouterr().out)["status"] == "SUCCEEDED"
+    assert runner.await_args.kwargs["deployments"] == ("gpt-6.1-sol", "gpt-6-astra")
 
 
 @pytest.mark.parametrize("command", ["run-stage", "show-stage", "retry-stage"])

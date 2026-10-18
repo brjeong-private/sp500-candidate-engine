@@ -583,6 +583,12 @@ candidate-engine backfill-llm-candidates `
   --session-context "2026-10-15=<context-uuid-15>" `
   --session-context "2026-10-16=<context-uuid-16>"
 
+# 선택적 모델 분담: 날짜마다 한 모델로 고정하며 같은 모델의 quota는 공유
+candidate-engine backfill-llm-candidates `
+  --session-context "2026-10-15=<context-uuid-15>" `
+  --session-context "2026-10-16=<context-uuid-16>" `
+  --model-deployment gpt-6.1-sol --model-deployment gpt-6-astra
+
 # 학습·수집 없는 독립 후보 단계 실행 / 상태 / 명시적 재시도
 candidate-engine run-stage --stage QUANTITATIVE --date 2026-10-15 --execution-context-id <context-uuid> --model-purpose MEDIUM_20D --idempotency-key <unique-key>
 candidate-engine run-stage --stage LLM_PRESELECTION --date 2026-10-15 --execution-context-id <context-uuid> --idempotency-key <unique-key>
@@ -606,7 +612,15 @@ CLI `run-daily --with-candidates`와 `run-candidates`의 기본 horizon은 레�
 수집/LLM backfill의 날짜 병렬도는 `BACKFILL_MAX_CONCURRENCY=2`,
 LLM 날짜별 DB 조회는 `LLM_DB_READ_WORKERS=4`, 검색은 `LLM_SEARCH_CONCURRENCY=3`이
 기본입니다. DB worker는 별도 read-only 연결로 동일 PostgreSQL snapshot을 읽으며
-LLM backfill 날짜들은 provider RPM/TPM limiter를 공유합니다. 날짜별 DB 연결은 조회 worker
+LLM backfill 날짜들은 provider RPM/TPM limiter를 공유합니다. 명시적인
+`--model-deployment` 목록을 주면 날짜의 달력 ordinal로 모델을 결정하고 모델별 limiter를
+분리합니다. 같은 목록·순서를 유지하면 입력 순서나 실패일 재시도 부분집합이 달라도
+해당 날짜의 모델은 바뀌지 않습니다. 응답과 summary에는 실제 배정 deployment·context를
+기록하며 날짜 한 개의 검색·평가를 서로 다른 모델로 섞지 않습니다.
+각 모델은 선택한 versioned 정책의 기존 RPM/TPM 한도를 사용합니다(v6는 60 RPM·250,000 TPM).
+실제 모델별 Azure 한도와 다른 소비자의 사용량을 확인해야 하며, 모델 추가가 Azure quota를
+자동 증량하지 않습니다. 이 옵션은 명시적 LLM backfill 전용이며 정규 일일 설정·실행 중
+평가·App Service/DB SKU를 바꾸지 않습니다. 날짜별 DB 연결은 조회 worker
 외에 snapshot parent·중복 실행 방지 연결도 사용합니다. 모두 1로 설정하면 순차 실행합니다.
 수집 backfill은 취득·원본 파일 저장을 병렬화하되 universe/identifier의 최초 관찰 lineage를
 보존하도록 DB 반영은 날짜순으로 유지합니다.
