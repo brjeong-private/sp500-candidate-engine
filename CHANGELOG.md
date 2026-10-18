@@ -1,5 +1,6 @@
 # Change Log
 
+- 2026-10-18 | Fusion DB Citation Projection | 동일 DB 원천·평가 항목의 서로 다른 근거 문장을 외부 검색과 같은 결정적 단일 설명으로 결합하고 원래 LLM 증거·점수·서로 다른 계층 분리·완전 중복 및 provenance 충돌 차단을 유지했다.
 - 2026-10-18 | Research Fusion Identity | 고정 HRECON 연구 context의 승인 적격성 감사 표식과 실제 유니버스 ID를 구분해 Fusion 입력 호환을 복구하고 누락·다른 유니버스·미승인 정책·정규 운영 혼입 차단 및 기존 실패 기록을 보존했다.
 - 2026-10-18 | Session Handoff | 10월 재처리의 원지시·확정 정책·코드/배포 변경·실완료/교체 내역·진행 중 프로세스·재개 명령·남은 손익 보고 작업을 별도 인계 문서와 11일 snapshot에 보존했다.
 - 2026-10-18 | Historical Research Quant Execution | 기존 관측만으로 8개 과거일 연구 context와 실제 Ridge Quant 후보 각20개를 검증했으며 Oct8·Oct9의 누락된 qualified 대상/워밍업 snapshot만 새 고정 입력에 추가하고 실패 기록·원본21개 action·공식 상태·수락 registry·live 모델과 weekly/active 상태를 보존했다.

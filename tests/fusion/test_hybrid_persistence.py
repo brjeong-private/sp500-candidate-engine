@@ -485,6 +485,27 @@ def test_invalid_explanation_fails_closed_without_losing_upstream(monkeypatch, c
     assert quant == before_quant
 
 
+def test_distinct_db_reasons_for_one_criterion_preserve_both_in_one_projection(monkeypatch):
+    database, service, quant, llm = service_fixture(monkeypatch)
+    candidate = llm["candidates"][0]
+    first = candidate["criterion_evidence"][0]
+    second = {**first, "reason": "A separate provided operating detail supports earnings"}
+    candidate["criterion_evidence"].append(second)
+    before = copy.deepcopy(candidate)
+    result = service.run(context_id=CONTEXT, target_session=DAY, quant_id=QUANT, llm_id=LLM)
+    assert result.status == "SUCCEEDED" and result.selected_count == 20
+    stored = next(
+        row["candidate"]["explanation"]
+        for row in database.connection.tables["selection.fusion_candidate"]
+        if str(row["candidate"]["instrument_id"]) == str(candidate["instrument_id"])
+    )
+    evidence = stored["llm"]["evidence"]
+    assert len(evidence) == 3
+    merged = next(item for item in evidence if item["criterion"] == first["criterion"])
+    assert first["reason"] in merged["summary"] and second["reason"] in merged["summary"]
+    assert candidate == before
+
+
 def test_explanation_routes_legacy_snapshots_and_integrity_errors(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

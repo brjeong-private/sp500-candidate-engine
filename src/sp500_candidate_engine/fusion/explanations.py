@@ -445,8 +445,8 @@ def _project_evidence(
         knowledge_mode=str(context["knowledge_mode"]),
     )
     evidence = []
-    external_positions: dict[tuple[UUID, str], int] = {}
-    external_reasons: dict[tuple[UUID, str], list[str]] = {}
+    citation_positions: dict[tuple[UUID, str, bool], int] = {}
+    citation_reasons: dict[tuple[UUID, str, bool], list[str]] = {}
     for citation in citations:
         criterion, reason = citation["criterion"], citation["reason"]
         if (
@@ -547,25 +547,24 @@ def _project_evidence(
                     else "NATIVE_SEARCH_PINNED_ARCHIVE",
                 ),
             )
-            key = (projected.evidence_link_id, criterion)
-            if key in external_positions:
-                index = external_positions[key]
-                previous = evidence[index]
-                if not isinstance(previous, ExternalEvidenceExplanation) or replace(
-                    previous, summary=projected.summary
-                ) != projected:
-                    raise ValueError("Conflicting external explanation provenance")
-                if reason in external_reasons[key]:
-                    raise ValueError("Duplicate external explanation reason")
-                external_reasons[key].append(reason)
-                evidence[index] = replace(previous, summary=citation_summary(
-                    scores,
-                    [{"criterion": criterion, "reason": item} for item in external_reasons[key]],
-                    limit=rationale_limit,
-                ))
-                continue
-            external_positions[key] = len(evidence)
-            external_reasons[key] = [reason]
+        key = (projected.evidence_link_id, criterion, external is not None)
+        if key in citation_positions:
+            index = citation_positions[key]
+            previous = evidence[index]
+            layer = "external" if external else "DB"
+            if replace(previous, summary=projected.summary) != projected:
+                raise ValueError(f"Conflicting {layer} explanation provenance")
+            if reason in citation_reasons[key]:
+                raise ValueError(f"Duplicate {layer} explanation reason")
+            citation_reasons[key].append(reason)
+            evidence[index] = replace(previous, summary=citation_summary(
+                scores,
+                [{"criterion": criterion, "reason": item} for item in citation_reasons[key]],
+                limit=rationale_limit,
+            ))
+            continue
+        citation_positions[key] = len(evidence)
+        citation_reasons[key] = [reason]
         evidence.append(projected)
     return scores, missing, tuple(evidence)
 
