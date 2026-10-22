@@ -424,6 +424,7 @@ class CandidateStageService:
                 existing = FusionRepository(connection).find_quantitative(
                     context_id=payload.execution_context_id, target_session=payload.target_session,
                     policy_version=quant_policy.version, policy_hash=quant_policy.config_hash,
+                    universe_version_id=uuid.UUID(str(context["universe_version_id"])),
                 )
             if existing is not None and str(existing["model_version_id"]) == str(
                 materialized.manifest.model_version_id

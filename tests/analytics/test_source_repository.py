@@ -1,5 +1,6 @@
+import sqlite3
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -122,6 +123,137 @@ class _Connection:
         self.sql.append(sql)
         self.params.append(params)
         return _Cursor(self.result_sets.pop(0))
+
+
+class _UniverseConnection:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+        self.sql: list[str] = []
+
+    def execute(self, sql: str, params: tuple[object, ...]) -> _Cursor:
+        self.sql.append(sql)
+        values = tuple(
+            value.isoformat() if isinstance(value, (date, datetime)) else str(value)
+            for value in params
+        )
+        rows = self.connection.execute(sql.replace("%s", "?"), values).fetchall()
+        return _Cursor([dict(row) for row in rows])
+
+
+@pytest.mark.parametrize(
+    ("field", "offset", "mode", "in_manifest", "expected"),
+    [
+        ("effective_at", 108, "HISTORICAL_RECONSTRUCTION", True, "old"),
+        ("effective_at", 1, "HISTORICAL_RECONSTRUCTION", True, "old"),
+        ("effective_at", 0, "HISTORICAL_RECONSTRUCTION", True, "new"),
+        ("effective_at", -1, "HISTORICAL_RECONSTRUCTION", True, "new"),
+        ("announced_at", 1, "HISTORICAL_RECONSTRUCTION", True, "old"),
+        ("source_available_at", 1, "HISTORICAL_RECONSTRUCTION", True, "old"),
+        ("as_of_date", 1, "HISTORICAL_RECONSTRUCTION", True, "old"),
+        ("fetched_at", 1, "OPERATIONAL_REPLAY", True, "old"),
+        ("fetched_at", 0, "OPERATIONAL_REPLAY", True, "new"),
+        ("fetched_at", 1, "HISTORICAL_RECONSTRUCTION", True, "new"),
+        ("effective_at", 0, "HISTORICAL_RECONSTRUCTION", False, "old"),
+    ],
+)
+def test_universe_version_and_member_queries_share_temporal_selection(
+    monkeypatch, field, offset, mode, in_manifest, expected,
+):
+    monkeypatch.setattr(
+        "sp500_candidate_engine.analytics.research_eligibility.read_research_members",
+        lambda *args, **kwargs: None,
+    )
+    cutoff = datetime(2026, 10, 22, 9, 30, tzinfo=UTC)
+    target = date(2026, 10, 21)
+    context_id = uuid.uuid4()
+    with sqlite3.connect(":memory:") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            ATTACH DATABASE ':memory:' AS ops;
+            ATTACH DATABASE ':memory:' AS ref;
+            CREATE TABLE ops.execution_context (
+                execution_context_id TEXT, input_manifest_id TEXT,
+                cutoff_at TEXT, knowledge_mode TEXT
+            );
+            CREATE TABLE ops.input_manifest_member (
+                input_manifest_id TEXT, source_snapshot_id TEXT, precedence INTEGER
+            );
+            CREATE TABLE ops.source_snapshot (
+                source_snapshot_id TEXT, source_available_at TEXT, fetched_at TEXT
+            );
+            CREATE TABLE ref.universe_version (
+                universe_version_id TEXT, source_snapshot_id TEXT, as_of_date TEXT,
+                announced_at TEXT, effective_at TEXT
+            );
+            CREATE TABLE ref.universe_member (
+                universe_version_id TEXT, instrument_id TEXT, symbol TEXT,
+                security_name TEXT, sector TEXT, sub_industry TEXT
+            );
+            CREATE TABLE ref.instrument (instrument_id TEXT, issuer_id TEXT);
+            CREATE TABLE ref.instrument_state (
+                instrument_id TEXT, source_snapshot_id TEXT, revision_no INTEGER,
+                valid_from TEXT, valid_to TEXT, source_available_at TEXT, observed_at TEXT,
+                primary_exchange TEXT, status TEXT, instrument_state_id TEXT
+            );
+        """)
+        connection.execute(
+            "INSERT INTO ops.execution_context VALUES (?, 'manifest', ?, ?)",
+            (str(context_id), cutoff.isoformat(), mode),
+        )
+        connection.execute("INSERT INTO ref.instrument VALUES ('instrument', 'issuer')")
+        for version in ("old", "new"):
+            values = {
+                "as_of_date": target.isoformat(),
+                "announced_at": (cutoff - timedelta(days=1)).isoformat(),
+                "effective_at": (
+                    cutoff - timedelta(days=7) if version == "old" else cutoff
+                ).isoformat(),
+                "source_available_at": (cutoff - timedelta(days=1)).isoformat(),
+                "fetched_at": cutoff.isoformat(),
+            }
+            if version == "new":
+                values[field] = (
+                    (target + timedelta(days=offset)).isoformat()
+                    if field == "as_of_date" else
+                    (cutoff + timedelta(seconds=offset)).isoformat()
+                )
+            if version == "old" or in_manifest:
+                connection.execute(
+                    "INSERT INTO ops.input_manifest_member VALUES ('manifest', ?, 0)", (version,),
+                )
+            connection.execute(
+                "INSERT INTO ops.source_snapshot VALUES (?, ?, ?)",
+                (version, values["source_available_at"], values["fetched_at"]),
+            )
+            connection.execute(
+                "INSERT INTO ref.universe_version VALUES (?, ?, ?, ?, ?)",
+                (version, version, values["as_of_date"],
+                 values["announced_at"], values["effective_at"]),
+            )
+            connection.execute(
+                "INSERT INTO ref.universe_member VALUES (?, 'instrument', 'TEST', "
+                "'Test Company', 'Sector', 'Industry')", (version,),
+            )
+        connection.execute(
+            "INSERT INTO ref.instrument_state VALUES "
+            "('instrument', 'old', 1, '2026-01-01', NULL, ?, ?, 'XNYS', 'ACTIVE', 'state')",
+            ((cutoff - timedelta(days=1)).isoformat(), cutoff.isoformat()),
+        )
+        adapter = _UniverseConnection(connection)
+        repository = SourceRepository(adapter)
+        version = repository.read_universe_version(
+            execution_context_id=context_id, target_session=target,
+        )
+        members = repository.read_universe_members(
+            execution_context_id=context_id, target_session=target,
+        )
+        assert version is not None
+        assert version["universe_version_id"] == expected
+        assert len(members) == 1
+        assert members[0]["universe_version_id"] == expected
+        assert adapter.sql[0].split("SELECT * FROM eligible_versions")[0] == (
+            adapter.sql[1].split(", current_state AS")[0]
+        )
 
 
 def test_read_bars_is_manifest_and_cutoff_constrained() -> None:

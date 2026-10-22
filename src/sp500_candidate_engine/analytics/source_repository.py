@@ -6,6 +6,35 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import LiteralString, Protocol
 
+_ELIGIBLE_UNIVERSE_VERSIONS: LiteralString = """
+    WITH eligible_versions AS (
+        SELECT
+            uv.universe_version_id, uv.source_snapshot_id,
+            uv.as_of_date, uv.announced_at, uv.effective_at,
+            ss.source_available_at,
+            row_number() OVER (
+                ORDER BY uv.effective_at DESC, uv.as_of_date DESC,
+                    uv.universe_version_id DESC
+            ) AS selected_version
+        FROM ops.execution_context ec
+        JOIN ops.input_manifest_member imm
+          ON imm.input_manifest_id = ec.input_manifest_id
+        JOIN ops.source_snapshot ss
+          ON ss.source_snapshot_id = imm.source_snapshot_id
+        JOIN ref.universe_version uv
+          ON uv.source_snapshot_id = imm.source_snapshot_id
+        WHERE ec.execution_context_id = %s
+          AND uv.as_of_date <= %s
+          AND uv.announced_at <= ec.cutoff_at
+          AND uv.effective_at <= ec.cutoff_at
+          AND ss.source_available_at <= ec.cutoff_at
+          AND (
+              ec.knowledge_mode <> 'OPERATIONAL_REPLAY'
+              OR ss.fetched_at <= ec.cutoff_at
+          )
+    )
+"""
+
 
 class ManifestLineageError(ValueError):
     """Raised when a manifest has an incomplete or ambiguous snapshot chain."""
@@ -221,6 +250,19 @@ class SourceRepository:
             raise ValueError("Verified external evidence requires an issuer CIK")
         return rows[0]["cik"].zfill(10)
 
+    def read_universe_version(
+        self,
+        *,
+        execution_context_id: uuid.UUID,
+        target_session: date,
+    ) -> dict[str, object] | None:
+        rows = self.connection.execute(
+            _ELIGIBLE_UNIVERSE_VERSIONS
+            + "SELECT * FROM eligible_versions WHERE selected_version = 1",
+            (execution_context_id, target_session),
+        ).fetchall()
+        return rows[0] if rows else None
+
     def read_universe_members(
         self,
         *,
@@ -235,33 +277,8 @@ class SourceRepository:
         if research is not None:
             return research
         return self.connection.execute(
-            """
-            WITH eligible_versions AS (
-                SELECT
-                    uv.universe_version_id, uv.source_snapshot_id,
-                    uv.as_of_date, uv.announced_at, uv.effective_at,
-                    ss.source_available_at,
-                    row_number() OVER (
-                        ORDER BY uv.effective_at DESC, uv.as_of_date DESC,
-                            uv.universe_version_id DESC
-                    ) AS selected_version
-                FROM ops.execution_context ec
-                JOIN ops.input_manifest_member imm
-                  ON imm.input_manifest_id = ec.input_manifest_id
-                JOIN ops.source_snapshot ss
-                  ON ss.source_snapshot_id = imm.source_snapshot_id
-                JOIN ref.universe_version uv
-                  ON uv.source_snapshot_id = imm.source_snapshot_id
-                WHERE ec.execution_context_id = %s
-                  AND uv.as_of_date <= %s
-                  AND uv.announced_at <= ec.cutoff_at
-                  AND uv.effective_at <= ec.cutoff_at
-                  AND ss.source_available_at <= ec.cutoff_at
-                  AND (
-                      ec.knowledge_mode <> 'OPERATIONAL_REPLAY'
-                      OR ss.fetched_at <= ec.cutoff_at
-                  )
-            ), current_state AS (
+            _ELIGIBLE_UNIVERSE_VERSIONS
+            + """, current_state AS (
                 SELECT
                     state.*,
                     row_number() OVER (

@@ -322,7 +322,8 @@ def test_quant_only_uses_pinned_artifact_and_frozen_context(monkeypatch, tmp_pat
 
     artifact = SimpleNamespace(manifest=SimpleNamespace(model_version_id=UUID(int=2400)))
     monkeypatch.setattr(ModelArtifactLoader, "load", lambda *args: artifact)
-    monkeypatch.setattr(FusionRepository, "find_quantitative", lambda *args, **kwargs: None)
+    find = MagicMock(return_value=None)
+    monkeypatch.setattr(FusionRepository, "find_quantitative", find)
     inference = MagicMock(return_value=SimpleNamespace(
         selection_run_id=UUID(int=2401), scoring_run_id=UUID(int=2402),
         model_version_id=UUID(int=2400), candidate_count=20,
@@ -344,6 +345,7 @@ def test_quant_only_uses_pinned_artifact_and_frozen_context(monkeypatch, tmp_pat
         date(2026, 10, 15)
     )
     assert "process_run_id" not in inference.call_args.kwargs
+    assert find.call_args.kwargs["universe_version_id"] == UUID(int=2500)
 
 
 def test_quant_contract_does_not_reselect_active_assignment_on_retry(monkeypatch):

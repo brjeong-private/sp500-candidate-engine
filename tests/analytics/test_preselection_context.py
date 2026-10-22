@@ -40,8 +40,10 @@ def test_preselection_manifest_preparation_retains_non_price_evidence():
             assert "(%s::boolean OR ss.dataset_code = ANY(%s::text[]))" in sql
             assert params[7] is True
             result.fetchall.return_value = snapshots
-        elif "SELECT uv.universe_version_id" in sql:
-            result.fetchone.return_value = {"universe_version_id": universe_id}
+        elif "WITH eligible_versions" in sql:
+            assert "uv.effective_at <= ec.cutoff_at" in sql
+            assert params[1] == target
+            result.fetchall.return_value = [{"universe_version_id": universe_id}]
         elif "WITH evidence_dependencies" in sql:
             assert "ref.instrument_state" in sql
             assert "fundamental.fact_observation" in sql
@@ -86,3 +88,25 @@ def test_qlib_export_rejects_prepared_context_with_different_cutoff(monkeypatch,
             decision_cutoff=datetime(2026, 10, 16, 9, 30, tzinfo=UTC),
             input_context=prepared,
         )
+
+
+@pytest.mark.parametrize("selected_universe", [None, {"universe_version_id": uuid.UUID(int=2)}])
+def test_qlib_export_rejects_prepared_context_with_wrong_universe(
+    monkeypatch, tmp_path, selected_universe,
+):
+    cutoff = datetime(2026, 10, 22, 9, 30, tzinfo=UTC)
+    prepared = HistoricalInputContext(uuid.uuid4(), uuid.UUID(int=1), cutoff)
+    monkeypatch.setattr(SourceRepository, "read_context", lambda *a, **k: {"cutoff_at": cutoff})
+    monkeypatch.setattr(SourceRepository, "validate_context_manifest", lambda *a, **k: None)
+    selector = MagicMock(return_value=selected_universe)
+    monkeypatch.setattr(SourceRepository, "read_universe_version", selector)
+
+    with pytest.raises(ValueError, match="universe mismatch"):
+        HistoricalQlibExportService(MagicMock()).export(
+            start_date=date(2026, 10, 21), end_date=date(2026, 10, 21),
+            output_root=tmp_path, qlib_version="test", decision_cutoff=cutoff,
+            input_context=prepared,
+        )
+    selector.assert_called_once_with(
+        execution_context_id=prepared.execution_context_id, target_session=date(2026, 10, 21),
+    )

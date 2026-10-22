@@ -148,6 +148,13 @@ class HistoricalQlibExportService:
                 context_id = input_context.execution_context_id
                 universe_version_id = input_context.universe_version_id
                 cutoff_at = input_context.cutoff_at
+                universe = source.read_universe_version(
+                    execution_context_id=context_id, target_session=end_date,
+                )
+                if universe is None or str(universe["universe_version_id"]) != str(
+                    universe_version_id
+                ):
+                    raise ValueError("Prepared input context universe mismatch")
             calendar = build_exchange_calendar(
                 exchange_mic="XNYS",
                 start_date=start_date,
@@ -508,19 +515,9 @@ class HistoricalQlibExportService:
                 context_hash,
             ),
         )
-        universe = connection.execute(
-            """
-            SELECT uv.universe_version_id
-            FROM ref.universe_version uv
-            JOIN ops.source_snapshot ss
-              ON ss.source_snapshot_id = uv.source_snapshot_id
-            WHERE ss.source_snapshot_id = ANY(%s::uuid[])
-              AND uv.as_of_date <= %s
-            ORDER BY uv.as_of_date DESC, uv.created_at DESC
-            LIMIT 1
-            """,
-            ([row[0] for row in member_rows], end_date),
-        ).fetchone()
+        universe = SourceRepository(connection).read_universe_version(
+            execution_context_id=context_id, target_session=end_date,
+        )
         if universe is None:
             raise RuntimeError("No universe version exists in the export manifest")
         return (

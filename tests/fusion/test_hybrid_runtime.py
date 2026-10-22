@@ -30,7 +30,7 @@ def test_backend_runs_fusion_from_pinned_sibling_runs_and_reuses_quant(
     database = MagicMock()
     service = PipelineExecutionService(database, MagicMock(), workspace_dir=tmp_path)
     service.candidate_history_start = MagicMock(return_value=date(2026, 7, 1))
-    context = SimpleNamespace(execution_context_id=CONTEXT)
+    context = SimpleNamespace(execution_context_id=CONTEXT, universe_version_id=UUID(int=2503))
     monkeypatch.setattr(
         HistoricalQlibExportService, "prepare_preselection_context",
         MagicMock(return_value=context),
@@ -64,6 +64,7 @@ def test_backend_runs_fusion_from_pinned_sibling_runs_and_reuses_quant(
         "context_id": CONTEXT, "target_session": DAY, "quant_id": QUANT, "llm_id": LLM,
     }
     assert find.call_args.kwargs["policy_hash"]
+    assert find.call_args.kwargs["universe_version_id"] == context.universe_version_id
 
 
 def test_legacy_llm_policy_is_not_silently_used_for_fusion(monkeypatch, tmp_path):

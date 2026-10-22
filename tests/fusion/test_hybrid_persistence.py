@@ -28,6 +28,20 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTEXT, QUANT, LLM, UNIVERSE = (UUID(int=index) for index in range(1001, 1005))
 
 
+def test_quant_reuse_requires_the_selected_universe():
+    from unittest.mock import MagicMock
+
+    connection = MagicMock()
+    connection.execute.return_value.fetchone.return_value = None
+    assert FusionRepository(connection).find_quantitative(
+        context_id=CONTEXT, target_session=DAY, policy_version="quant-v1",
+        policy_hash="a" * 64, universe_version_id=UNIVERSE,
+    ) is None
+    sql, params = connection.execute.call_args.args
+    assert "scoring.universe_version_id = %s" in sql
+    assert params == (CONTEXT, DAY, "quant-v1", "a" * 64, UNIVERSE)
+
+
 class Cursor:
     def __init__(self, row):
         self.row = row

@@ -559,6 +559,7 @@ class PipelineExecutionService:
                     existing = FusionRepository(connection).find_quantitative(
                         context_id=input_context.execution_context_id, target_session=target_date,
                         policy_version=quant_policy.version, policy_hash=quant_policy.config_hash,
+                        universe_version_id=input_context.universe_version_id,
                     )
                 if existing is not None:
                     return SimpleNamespace(**existing, promotion_gate_passed=False)

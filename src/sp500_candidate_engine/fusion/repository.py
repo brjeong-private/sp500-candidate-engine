@@ -287,7 +287,7 @@ class FusionRepository:
 
     def find_quantitative(
         self, *, context_id: uuid.UUID, target_session: date, policy_version: str,
-        policy_hash: str,
+        policy_hash: str, universe_version_id: uuid.UUID,
     ) -> dict[str, object] | None:
         return self.connection.execute(
             """
@@ -299,6 +299,7 @@ class FusionRepository:
             JOIN analytics.model_version model USING (model_version_id)
             WHERE scoring.execution_context_id = %s AND run.price_session_date = %s
               AND run.policy_version = %s AND run.policy_hash = %s
+              AND scoring.universe_version_id = %s
               AND model.model_purpose = 'MEDIUM_20D'
               AND run.status = 'SUCCEEDED' AND scoring.status = 'SUCCEEDED'
               AND run.requested_count = 20 AND run.selected_count = 20
@@ -306,7 +307,7 @@ class FusionRepository:
                    WHERE candidate.selection_run_id = run.selection_run_id) = 20
             ORDER BY run.generated_at DESC, run.selection_run_id DESC LIMIT 1
             """,
-            (context_id, target_session, policy_version, policy_hash),
+            (context_id, target_session, policy_version, policy_hash, universe_version_id),
         ).fetchone()
 
 
