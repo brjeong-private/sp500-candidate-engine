@@ -3,6 +3,8 @@
 - 2026-10-22 | Universe Cutoff Consistency | 정량 historical export와 LLM의 manifest 내 유니버스 선택 SQL을 공통화해 공개·적용·원천 가용 시각 및 운영 재현 수집 cutoff와 버전 정렬을 일치시키고 준비된 context의 잘못된 버전 사용을 차단했다.
 - 2026-10-22 | Quant Result Reuse Fence | 정규 일일 및 독립 정량 실행의 성공 결과 재사용에 고정 context에서 선택한 유니버스 버전 일치를 필수로 추가해 기존 잘못된 버전 결과의 재사용을 차단했다.
 - 2026-10-22 | Approved B2 Plan Restore | 배포 전 두 App Service 플랜의 B1 상태를 발견해 사용자 명시적 승인 후 Candidate와 Portal을 B2·1인스턴스로 복원했으며 DB 사양은 변경하지 않았다.
+- 2026-10-22 | Universe Cutoff Production Release | 최초 패치의 미배포 연구 모듈 의존으로 독립 실행 수락이 실패해 운영 원본에 cutoff·재사용 수정만 적용한 5파일 최소 패치로 재배포했고 실제 source hash·준비 상태·기존 결과·설정 보존과 독립 정량 실행 수락을 확인했다.
+- 2026-10-22 | October 21 Daily Recovery | 오늘 정규 실행의 고정 context·cutoff·모델 및 기존 수집·LLM20·실패 기록을 보존하고 올바른 유니버스로 새 Quant20·Fusion20을 생성했으며 원천 버전·설명20개 일치와 외부 전량 ACK를 확인했다.
 - 2026-10-21 | Latest Daily Evidence Cutoff | 최신 거래일 정규 실행과 해당 실패 복구의 자료 상한을 대상일 다음 날 뉴욕05:30으로 명시하고 명시적 과거 backfill 제외·기존 manifest/cutoff·LLM 당일 공개 시각 검증·성공 Quant 및 실패 기록 보존을 확인했다.
 - 2026-10-21 | October 20 Daily Recovery | 기존 고정 입력·v2 정책·성공 Quant와 실패 기록을 보존하고 로컬 복구 호출 timeout만 연장해 LLM Top20과 새 Fusion Top20을 생성했으며 외부 분석 20개 전달 ACK를 확인했다.
 - 2026-10-21 | October 20 External Report Completion | 복구한 Fusion20의 외부 분석20건이 모두 완료됐으며 저장 보고서의 종목·기준일·명시적 최종 등급·실제 분석 본문·hash를 확인하고 일반 날짜 필터 기반의 과거시점 미인증 한계와 시각 증적을 별도 보존했다.
