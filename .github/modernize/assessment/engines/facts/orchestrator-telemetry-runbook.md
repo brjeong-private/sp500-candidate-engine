@@ -1,6 +1,6 @@
 # Orchestrator telemetry KQL runbook
 
-Updated: 2026-10-16
+Updated: 2026-10-23
 
 The Function App writes one JSON object per pipeline trace. The emitter allowlists only
 correlation and lifecycle fields; secrets, raw payloads, report bodies, resource IDs, and
@@ -12,8 +12,10 @@ the Application Insights Logs experience (`traces`). Replace the time range as n
 Run the common projection and the selected query in the same query tab. These queries
 are read-only; deployment validation in the target workspace is still required.
 
-The weekly retraining flow is implemented and covered by focused local tests, but the
-weekly changes have not been deployed. The code allowlist accepts `iso_week`,
+The weekly retraining flow is implemented and covered by focused tests. The October 18
+Backend, training-image and Function rollout applied MEDIUM-only new weekly inputs and
+weekly v2 performance-threshold suspension; this is not proof of a new automatic promotion.
+The code allowlist accepts `iso_week`,
 `weekly_run_id`, and `job_execution_name`; it still rejects secrets, ARM resource IDs,
 raw API payloads, and exception messages. Weekly lifecycle emission from the Durable
 workflow, allowlist output, and collection in the target workspace remain validation
@@ -62,9 +64,9 @@ PipelineTelemetry
 ```
 
 Expected correlation IDs are `candidate-weekly-YYYY-Www` for the parent and
-`candidate-weekly-YYYY-Www-{MODEL_PURPOSE}` for children. SHORT and MEDIUM run
-sequentially but have independent outcomes, so alerting must not infer that a SHORT
-failure means MEDIUM was not attempted.
+`candidate-weekly-YYYY-Www-MEDIUM_20D` for new children. Historical two-purpose histories
+retain their sequential but independent SHORT/MEDIUM outcomes. New-run alerting must not
+require a SHORT child that is intentionally no longer scheduled.
 
 ## Weekly timeouts and incumbent retention
 

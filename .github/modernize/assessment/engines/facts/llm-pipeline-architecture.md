@@ -2,7 +2,7 @@
 
 기준: [공통 하네스](../../../../../PROJECT-HARNESS.md).
 고정 evidence로 후속 분석 후보를 선정하며 검증되지 않은 외부 지식·임의 웹 검색·투자 의견은 금지한다.
-v2는 DB-only, 명시 선택하는 v4는 native LLM 검색·시점 gate·격리 평가를 사용한다.
+정규 v2는 DB-only이며 v4/v5/v6 검색 보강은 별도 정책·시점 gate·격리 평가를 사용한다.
 [LLM 전용 하네스](../../../../../src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md)를
 실행·프롬프트·cache·인용·미래 정보 차단의 필수 계약으로 적용한다.
 [전체 아키텍처](./architecture-diagram.md)에서 수집·정량·통합·외부 소비자 경계를 다룬다.
@@ -14,9 +14,25 @@ v2는 DB-only, 명시 선택하는 v4는 native LLM 검색·시점 gate·격리 
 같은 rubric·Top20·RRF를 유지하지만 승인된 새 사실이 점수/선정을 바꿀 수 있으므로
 구 정책의 성공 결과를 새 정책의 결과로 재사용하지 않는다.
 
-운영은 event v2·독립 stage가 활성화된 상태다. 한국어 event prompt, native 검색 v4,
-검색 witness와 신규 근거 API는 로컬 변경이며 이 문서 갱신만으로 배포되지 않는다.
-v4 정책 파일·구현은 이번 문서 커밋에 포함하지 않는다.
+2026-10-23 운영 source hash·설정과 10월22일 성공 lineage를 대조했다.
+운영은 `policy_event_v2.yaml`의 `daily-llm-event-preselection:2`이며
+**한국어 `llm-event-preselection-v3-ko`·evidence schema 2·근거/v2 조회 API는 이미 배포**됐다.
+평가는 `gpt-6.1-sol`·API `2024-10-21`·관리 ID 인증이며
+`Cognitive Services OpenAI User` 권한을 사용한다. API key 부재를 인증 실패로 판단하지 않는다.
+호출 timeout180초·배치당 transport/semantic repair 공통3회는 그대로다.
+복구 과정에서 운영 timeout을 늘리거나 정규 정책을 검색 정책으로 바꾸지 않았다.
+
+| 정책 | prompt / schema | 취득·실패 계약 | 활성 범위 |
+|---|---|---|---|
+| event v2 | `llm-event-preselection-v3-ko` / 2 | 고정 DB packet만 평가 | 정규 운영 |
+| search v4 | `llm-event-preselection-v8-ko-ny` / 4 | native Responses `web_search`, 원문-version gate 미충족 시 실패 | 별도 명시 선택 |
+| period v5 | `llm-event-preselection-v9-ko-period-ny` / 4 | Foundry Bing `freshness`; 고정 원문 증명 부재를 검색 성공과 혼동하지 않음 | 별도 검증 경로 |
+| optional v6 | `llm-event-preselection-v10-ko-optional-period` / 4 | `AZURE_BING_GROUNDING_PERIOD`, 검증된 외부자료만 추가, 거부는 감사 가능한 `OMIT_EXTERNAL` | 승인된 과거 연구 재처리, 정규 v2 교체 아님 |
+
+v6 원본은 [policy_event_optional_search_v6.yaml](../../../../../config/llm_preselection/policy_event_optional_search_v6.yaml)이다.
+최대2문서·2tool call·8facts·예약8,192문자를 제한한다. omission 여부·이유를 보존하고
+DB packet/결측 검증은 유지한다. 검색 실패를 보강 성공으로 표시하는 silent fallback이 아니다.
+v4/v5의 필수 보강 실패 계약을 v6 정책 선택 없이 완화하지 않는다.
 
 ## 2. 아키텍처
 
@@ -55,6 +71,12 @@ Qlib export·Alpha158·LightGBM artifact·Quant 성공을 필요로 하지 않�
 - v1 전체 universe·가격 context·2단계 재정렬은 보존하고 v2로 위장하지 않는다.
 - 결과는 llm_ranking_run_id·selection_run_id·후보 수·failure code를 반환한다.
   `/api/v1/llm-preselections` 조회 의미는 유지한다.
+- 최신 거래일 D의 정규 실행·해당 복구 cutoff는 D+1 달력일 NY 05:30이며
+  재시도는 원래 context/cutoff를 유지한다. 명시적 역사 backfill은 원래 versioned 계약을 유지한다.
+  `llm-cutoff-v2-ny-day`는 공개/원문 버전의 NY 날짜를 판정하고 당일은 timezone-aware
+  시각이 05:30 **미만**이어야 한다. 더 이른 명시 cutoff도 지킨다.
+- Quant와 같은 manifest-bound selector로 eligible universe를 고른다. 공개·적용·원천
+  가용 시각과 replay의 fetched cutoff를 모두 검사하므로 as-of 날짜만 보고 최신 명단을 고르지 않는다.
 
 ## 4. event v2 파라미터·설계 방법
 
@@ -88,6 +110,20 @@ Decimal 소수4자리 ROUND_HALF_EVEN 결과를 저장·정렬에 같이 사용�
 v4는 승인된 검색 발췌를 인용해 평가할 수 있지만 모델 기억으로 지원을 늘리지 않는다.
 null 항목의 한계를 설명한 유효 인용은 남기되 coverage·분모·점수에 포함하지 않는다.
 최종 정렬은 `score DESC, instrument_id ASC`이며 v2는 60개 pool 재정렬을 하지 않는다.
+
+### Fusion 설명 투영과 LLM 평가의 분리
+
+`fusion.explanations._project_evidence`는 `(evidence_link_id, criterion, is_external)`로
+유효 인용을 그룹화한다. 같은 DB 근거/항목의 **서로 다른 이유**는 결정적 한 요약으로
+결합한다. DB/외부 layer는 섞지 않고 완전 중복 이유·provenance 충돌은 여전히 실패한다.
+투영 요약은 최대600문자이므로 임의 길이 설명의 무조건적 무손실 보존을 보장하지 않으며,
+원래 assessment/이유는 immutable source에 그대로 남는다. 점수·순위·RRF는 바꾸지 않고
+추가 LLM 호출도 없다.
+
+10월22일 정규 LLM은20개 성공했다. 실패 지점은 PG의 중복 DB 근거를 거부한 Fusion
+설명 검증이며 10월23일 단일 함수 패치 후 기존 Quant/LLM으로 Fusion만 복구했다.
+원래 DAILY 부분 실패와 실패 Fusion을 보존했고 새 Fusion 후보/설명20개·ACK20을 확인했다.
+이는 외부 LLY 분석의 `OperationalError`나 보고서 완료 상태를 설명하는 증거는 아니다.
 
 초기 가중치·window를 최적값으로 가정하지 않는다. 같은 session·universe·cutoff·
 label·비용으로 비교하고 coverage·CONTROL 선정·SHORTFALL·token 사용도 평가한다.
@@ -167,12 +203,12 @@ Python이 인용 URL·페이지에서 읽은 게시일/시각으로 승인한다
 
 ## 9. v4 검색 정책·인용·저장 계약
 
-로컬 설정: `config/llm_preselection/policy_event_search_v4.yaml`.
+명시 선택 설정: `config/llm_preselection/policy_event_search_v4.yaml`.
 
 | 항목 | 계약 |
 |---|---|
 | 정책 | `daily-llm-search-preselection:4`, 기존 v2와 별도 |
-| prompt/schema | `llm-event-preselection-v7-ko-search` / evidence schema 4 |
+| prompt/schema | `llm-event-preselection-v8-ko-ny` / evidence schema 4 |
 | 검색 | Azure `/openai/v1/responses`, native `web_search`, store=false |
 | 예산 | 종목당 tool call 최대2·원문 버전 최대2·응답1 MiB·출력4,096tokens |
 | projection | 최대8개·각600자 이하 인용 문단; uncited/refusal 문단 제외 |
@@ -192,7 +228,8 @@ tool 응답 hash를 원문 hash나 의미적 사실성 보증으로 표현하지
 기존 LLM packet/assessment/call JSONB를 이용하며 새 정규화 수집 테이블·DDL은 없다.
 새 source layer/hash는 항목별 근거에 보존하고 information_gaps는 원본 structured response에 남긴다.
 Fusion은 v4의 검색 manifest를 재검증하고 `candidate-explanation-v3`에서
-검색 증거·모델 metadata witness를 반환하는 로컬 계약이다. 기존 v1/handoff와 설명 v1은 유지한다.
+검색 증거·모델 metadata witness를 반환한다. 조회 호환과 정규 일일 검색 활성화는 다르다.
+기존 v1/handoff와 설명 v1은 유지한다.
 
 선정 근거는 기존 `analytics.llm_instrument_assessment`의 rationale·uncertainty·criterion
 인용에 저장된다. 최종 Fusion snapshot은 별도다. 과거 snapshot 부재가 LLM 원본 근거
@@ -210,6 +247,6 @@ Fusion은 v4의 검색 manifest를 재검증하고 `candidate-explanation-v3`에
 - 한국어 prompt는 모델 기억·현재 웹·미래 사건/실적 결과를 이용한 보강을 금지한다.
   일정/계획과 실제 결과, 원천 사실과 해석을 분리하고 부족하면 null을 유지한다.
 - 명시적 v4 정책 선택과 지속적인 artifact 저장소·권한·공개 시점 검증 없이 운영을 켜지 않는다.
-  기존 운영 배포와 이번 로컬 구현/단건 실호출 증거를 구분한다.
+  코드·조회 배포와 과거 연구/단건 실행, 정규 일일 정책 활성화를 구분한다.
 - 새 점수를 이전 점수와 비교할 때 입력 예산/잘림도 달라질 수 있으므로
   차이를 외부 보강만의 인과 효과나 성능 개선으로 단정하지 않는다.

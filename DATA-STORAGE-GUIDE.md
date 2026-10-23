@@ -372,6 +372,10 @@ VLO처럼 **DB 미적재 단건 검증**을 요청한 실행은 위의 정상 DB
 | `LLM_PRESELECTION_POLICY_PATH` | `config/llm_preselection/policy_event_v2.yaml` |
 
 즉 **확인 시점 앱 기본 정책은 DB-only v2**다.
+10월23일 재확인에서도 같은 기본 정책·한국어 event prompt를 유지했다.
+Fusion v2 설명/회사명 조회와 동일 근거·항목·layer의 서로 다른 이유를 결합하는
+서버 투영은 운영 배포됐다. 결합 요약은 bounded이며 전체 원래 이유는 immutable
+assessment에 남는다. 기존 결과 JSONB를 조회 때 덮어쓰거나 추가 LLM 호출하지 않는다.
 검색 보강 코드·설정 파일이 저장소에 있다고 모든 운영 실행에서 사용됐다는 뜻은 아니다.
 v4/v5/v6를 선택한 경로와 개별 run의 저장 내용은 별도로 확인해야 한다.
 이 문서는 특정 과거 run의 DB 행이나 raw 파일의 현재 존재 여부를 전수 점검한 보고서는 아니다.

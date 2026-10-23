@@ -24,6 +24,15 @@ focused test는 코드로 구현·검증됐다. 2026-10-17 주간 전용 이메�
 배포 식별자와 비학습 smoke 결과는
 [주간 후속 확인 문서](../WEEKLY-MODEL-FOLLOW-UP-2026-W42.md#51-운영-배포-증적)에 기록했다.
 
+2026-10-23 운영 대조에서 정규 모델/정책은 MEDIUM LightGBM v1·DB-only event v2이며
+연구 Ridge/검색 v6 교체나 신규 champion 승격은 없었다. 최신 D의 실행·복구는 D+1 달력일
+NY05:30의 원래 context/cutoff를 유지한다. Quant/LLM 공통 universe selector와
+정량 성공 cache fence, DB 근거 설명 결합 패치는 Backend에 배포됐다.
+22일 성공 수집·Quant20·LLM20을 재사용한 별도 Fusion
+`a98a70fe-1d1c-427a-af92-d0562d2bbc2b`의 후보/설명20개와 전량 ACK를 확인했다.
+최초 DAILY의 `PARTIAL_SUCCESS`·실패 Fusion은 보존하며 ACK를 외부 보고서 완료로
+취급하지 않는다. 이 독립 복구가 Durable history나 최초 process 상태를 덮어쓰지는 않는다.
+
 ## Azure 구성
 
 ```mermaid

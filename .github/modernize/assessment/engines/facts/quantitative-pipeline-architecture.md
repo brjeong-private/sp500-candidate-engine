@@ -5,15 +5,35 @@
 전체 연결은 [전체 아키텍처](./architecture-diagram.md), 다른 분기는
 [LLM](./llm-pipeline-architecture.md)과 [Fusion](./fusion-pipeline-architecture.md)을 따른다.
 
-## 1. 현행 점검과 구현 목표
+## 1. 현행 구현·운영 — 2026-10-23
 
 기존 Backend의 `run_candidate_inference`는 고정 artifact 추론을 수행한다.
 반면 레거시 `train-model`, `score-date`, `select-date`, `run-candidates` CLI는
 동일 학습 workflow로 연결돼 추론 전용 실행과 혼동하기 쉽다.
-기존 CLI 의미를 바꾸지 않고 독립 stage 실행을 추가한다.
+기존 CLI 의미를 바꾸지 않고 독립 stage 실행을 추가해 운영 배포했다.
 
-구현 순서는 현행 점검 → 이 설계 문서 확정 → 구현·검증 → 배포다.
-설계 목표와 실제 배포 검증은 문서 마지막의 검증·배포 기록으로 구분한다.
+정규 serving은 LightGBM MEDIUM_20D v1
+`74c367e9-bd84-58ab-b933-19a36dae35c4`(SHADOW)이며 RAW Alpha158 158차원을 쓴다.
+manifest SHA-256은 `09f163099a3f5d63b018a2c136962624d4990dbc604c2d3ba962e9ef4f1ba5b1`,
+registry artifact hash는 `834826154ed3083601fd590191edb69efc316aee1b1d5b52e57507810f58205e`다.
+두 hash는 같은 대상을 뜻하지 않는다. purpose별 assignment가 없으면 provision된
+`models/medium_20d/manifest.json`과 설정 hash를 pin한다. 일일 추론은 재학습하지 않는다.
+과거 연구의 Ridge schema-v3나 10월18일 SHADOW challenger를 정규 모델 교체로 간주하지 않는다.
+
+### 공유 유니버스·cutoff·성공 cache fence
+
+10월22일 운영에 `analytics.source_repository`의 공통 eligible-universe selector와
+성공 Quant 재사용 fence를 배포했다. Quant historical export와 LLM은 같은 manifest에서
+`as_of_date <= D`, announced/effective/source-available 시각 `<= cutoff`를 요구한다.
+`OPERATIONAL_REPLAY`는 fetched 시각도 cutoff 이내여야 한다. 통과 버전은
+effective 시각 DESC → as-of 날짜 DESC → UUID DESC로 선택한다.
+준비된 export/context의 universe 불일치는 거부하고 기존 성공 결과도 **선택된 universe
+version이 일치할 때만** 재사용한다. 오래된 성공 결과를 지우거나 잘못 재사용하지 않는다.
+
+최신 D 정규 실행·해당 복구는 D+1 달력일 NY 05:30(DST 반영)을 고정한다.
+이 해석 추가는 명시적 역사 backfill의 기존 versioned cutoff 계약을 변경하지 않는다.
+공개·원문 revision이 cutoff 이전인 자료를 늦게 취득하는 것은 reconstruction 모드의
+계약 안에서만 허용하며 미래 공개 자료나 운영 재현의 늦은 취득을 허용하지 않는다.
 
 ## 2. 아키텍처
 

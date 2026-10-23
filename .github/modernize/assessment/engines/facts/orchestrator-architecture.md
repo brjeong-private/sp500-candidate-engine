@@ -1,6 +1,6 @@
 # Durable Functions 오케스트레이터 아키텍처
 
-갱신일: 2026-10-17
+갱신일: 2026-10-23
 
 이 문서는 Candidate Engine의 일일 실행과 외부 분석 시스템 전달을 조정하는
 `orchestrator/`의 기준 설계다. 오케스트레이터는 수집·전처리·모델 점수·후보 선정
@@ -12,6 +12,9 @@ client, New York 주말 gate, deterministic weekly parent/model, Container Apps 
 start/status와 독립 model 결과는 구현됐다. 2026-10-17 주간 전용 이메일을 포함한
 오케스트레이터를 배포했으며 주간 메일만 활성화했다. 실제 새 학습·승격을 실행하거나
 주간 Job·promotion·KQL 전체 E2E를 완료했다는 뜻은 아니다.
+10월18일에는 Backend·학습 image·Function에 신규 MEDIUM-only 주간 정책과 정규
+일일 Fusion gate를 배포했다. 10월22일 cutoff/cache fence와 23일 설명 패치는 Backend의
+최소 변경이며 이 문서 갱신으로 추가 운영 설정을 변경하지 않는다.
 
 ## 책임과 경계
 
@@ -110,7 +113,7 @@ sequenceDiagram
         opt New notification input and weekly email enabled
             W->>A: STARTED summary
         end
-        W->>M: SHORT_5D child
+        W->>M: MEDIUM_20D child (new weekly input)
         M->>C: POST weekly run with Idempotency-Key
         M->>J: Start with WEEKLY_RUN_ID and MODEL_PURPOSE
         loop Until Job terminal or timeout
@@ -124,11 +127,6 @@ sequenceDiagram
         opt PROMOTED
             M->>C: POST activation-smoke
         end
-        M-->>W: SHORT independent result
-        opt New notification input and weekly email enabled
-            W->>A: SHORT result and model IDs
-        end
-        W->>M: MEDIUM_20D child even if SHORT failed
         M-->>W: MEDIUM independent result
         opt New notification input and weekly email enabled
             W->>A: MEDIUM result and model IDs
@@ -138,12 +136,15 @@ sequenceDiagram
     end
 ```
 
-ID는 `candidate-weekly-{YYYY-Www}`와
-`candidate-weekly-{YYYY-Www}-{SHORT_5D|MEDIUM_20D}`로 결정적이다. 주말의 첫 hourly
+신규 ID는 `candidate-weekly-{YYYY-Www}`와
+`candidate-weekly-{YYYY-Www}-MEDIUM_20D`로 결정적이다. 주말의 첫 hourly
 tick이 parent를 만들며 활성 parent가 없으면 terminal instance도 다시 시작할 수 있다.
-업무 중복은 Candidate weekly eligibility·acceptance unique key로 차단한다. 두 모델은 계산 자원
-때문에 순차 실행하지만 성공 조건은 독립적이다. SHORT 실패·timeout은 MEDIUM을
-차단하지 않는다.
+업무 중복은 Candidate weekly eligibility·acceptance unique key로 차단한다.
+10월18일 배포부터 신규 입력은 MEDIUM만 고정하고 SHORT를 예약하지 않는다.
+과거 두 목적 Durable history는 종전 순서·SHORT 실패와 독립적인 MEDIUM 실행을 replay한다.
+정책 `weekly-v2-20d-performance-suspended`는 성능 지표를 저장하되 threshold만
+비강제하며 coverage≥0.80·test blocks≥3·finite·PIT/artifact·CAS·smoke·rollback은 유지한다.
+이 정책 배포는 실제 새 모델의 학습·승격 완료 증거가 아니다.
 
 Job/promotion 제한 시간에는 child가 `TIMED_OUT`으로 끝나며 orchestrator가 assignment를
 변경하지 않는다. active assignment는 Candidate PostgreSQL이 소유하므로 기존 incumbent가
@@ -160,7 +161,8 @@ Job/promotion 제한 시간에는 child가 `TIMED_OUT`으로 끝나며 orchestra
 주간 발송은 별도의 비어 있지 않은 수신처가 필수이며 공통 수신처를 합치거나 fallback하지 않는다.
 실제 주소는 운영 App Settings에만 둔다. 신규 parent 입력의
 `weekly_email_notifications=true`일 때만 알림 activity를 추가해 기존 Durable history를 보존한다.
-적격 실행에서 시작·SHORT 결과·MEDIUM 결과·최종 요약을 최대 4회 보내며 polling마다 보내지 않는다.
+신규 적격 실행에서 시작·MEDIUM 결과·최종 요약을 보내며 polling마다 보내지 않는다.
+과거 두 목적 history의 시작·SHORT·MEDIUM·최종 최대4회 계약은 보존한다.
 업데이트 승격·기존 모델 유지·실패·timeout을 구분하고 확인된 실행·모델 ID만 포함한다.
 발송 실패는 `email_status=FAILED`와 telemetry에 남기되 다른 모델 실행이나 업무 결과를
 메일 성공으로 바꾸지 않는다. 메일 활성화는 새 학습·승격이나 메일 수신 완료의 증거가 아니다.
@@ -243,7 +245,8 @@ Candidate의 `PARTIAL_SUCCESS`는 terminal 상태지만 성공으로 간주하�
 동일 정책/hash를 검증한 최종 20개 전량을 별도 `fusion-top20-v1` envelope·ACK로 전달한다.
 외부 분석 완료를 기다리지 않으며 수신 실패로 성공 Fusion 결과를 덮어쓰지 않는다.
 기능 플래그·재시도·ACK 필드는 [오케스트레이터 가이드](../../../../../orchestrator/README.md)를 따른다.
-운영 수신처 검증·migration·배포·활성화는 별도 승인 작업이다.
+운영은 승인된 Fusion·전량 전달 ON이며 코드 기본 OFF와 구분한다.
+다른 환경의 수신처 검증·migration·활성화는 별도 승인 작업이다.
 terminal 상태는 `SUCCEEDED`, `SKIPPED_EXISTING`,
 `PARTIAL_FAILED`, `TIMED_OUT`, `FAILED`다.
 
@@ -293,7 +296,7 @@ unique key가 소유하며 Durable state 자체를 업무 acceptance 원장으�
 
 모든 외부 URL은 credential·query·fragment가 없는 HTTPS base URL이어야 한다. HTTP
 redirect를 따르지 않고 JSON object만 허용하며 응답은 최대 2 MiB로 제한한다. Candidate
-후보는 다음을 모두 만족해야 한다. 기본 MEDIUM은 저장 경계에서 멈추며,
+후보는 다음을 모두 만족해야 한다. 코드 기본 OFF의 수동/호환 MEDIUM은 저장 경계에서 멈추며,
 Fusion 전달은 별도 플래그·수신처 전량 identity/hash ACK·멱등성 확인을 요구한다.
 
 - `price_session_date`가 대상일과 일치
@@ -307,7 +310,8 @@ Fusion 전달은 별도 플래그·수신처 전량 identity/hash ACK·멱등성
 
 Candidate API의 기본 조회 모델과 정기 일일 실행 모델은 `MEDIUM_20D`다.
 인증된 단일 모델 endpoint와 Candidate API의 명시적 모델 선택은 `SHORT_5D`와
-`MEDIUM_20D` 모두 유지한다. 두 모델 주간 재학습도 유지하며 모델 간 자동 fallback은 없다.
+`MEDIUM_20D` 모두 유지한다. 새 주간은 MEDIUM만이며 과거 두 목적 history와
+명시적 레거시 기능은 보존한다. 모델 간 자동 fallback은 없다.
 
 ## Azure 배포 토폴로지
 
@@ -356,7 +360,7 @@ private 연결 실패 시 fail closed한다. Durable Task Scheduler는 사용하
 |---|---|
 | `orchestrator/function_app.py` | hourly daily/weekly gate, 15분 guardian, parent/child와 activity 등록 |
 | `orchestrator/scheduler.py` | DST-aware 05:30·New York 주말 gate와 deterministic ID |
-| `orchestrator/workflow.py` | 일일 MEDIUM 단독·주간 SHORT 후 MEDIUM·legacy dual·replay-safe child |
+| `orchestrator/workflow.py` | 일일 MEDIUM 단독·신규 주간 MEDIUM 전용·과거 두 목적 history·legacy dual·replay-safe child |
 | `orchestrator/clients.py` | Candidate·weekly·Portal·Job ARM·ACS 외부 계약과 검증 |
 | `orchestrator/guardian.py` | 15분 readiness·제한 복구와 실패 알림 |
 | `orchestrator/telemetry.py` | allowlist 구조화 trace |

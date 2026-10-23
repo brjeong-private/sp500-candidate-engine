@@ -1,6 +1,6 @@
 # 일 1회 후보 선정 수집 파이프라인
 
-갱신일: 2026-10-16
+갱신일: 2026-10-23
 
 ## 목표와 범위
 
@@ -19,9 +19,9 @@
 | 항목 | 설계 |
 |---|---|
 | scheduler | 매일 05:30 America/New_York |
-| 처리 세션 | 직전 완료한 미국 거래 세션 |
+| 처리 세션 | gate 직전 달력 날짜; XNYS 비거래일이면 skip |
 | 거래일 | 전체 수집 후 core gate와 후보 단계 실행 |
-| 주말·휴장일 | SEC·earnings·news·reference refresh, 새 market candidate run은 생성하지 않음 |
+| 주말·휴장일 | 정규 Durable는 skip; CLI의 별도 reference refresh 설계와 구분 |
 | 목표 완료 | grouped endpoint 사용 시 06:00 ET 이내, per-ticker fallback 시 약 07:30 ET |
 
 05:30 ET를 선택한 근거:
@@ -38,7 +38,7 @@ Durable Functions다. Azure Functions timer는 UTC 매시 30분 깨어나
 `America/New_York` 05:30 게이트를 통과할 때만 직전 달력 날짜의
 `candidate-daily-YYYY-MM-DD-medium_20d` 단일 실행을 시작한다.
 정기 일일 실행은 `MEDIUM_20D`만 사용하며 기존 `SHORT_5D`와 명시적 API 모델 선택,
-기존 dual orchestration 및 두 모델 주간 재학습은 유지한다. Candidate `exchange-sessions`
+기존 dual orchestration·과거 두 목적 주간 history는 유지하되 신규 주말은 MEDIUM만 학습한다. Candidate `exchange-sessions`
 조회에서 XNYS 거래일이 아니면 Candidate 파이프라인을 시작하지 않는다. 따라서 위
 표의 주말·휴장일 reference refresh는 수집 CLI의 설계 동작이며 현재 외부 Durable
 trigger가 자동 호출하는 경로는 아니다.
@@ -50,6 +50,19 @@ Candidate API는 canonical 요청 hash를 함께 영속화하므로 같은 key·
 기존 run을 반환하고, 같은 key의 다른 payload는 충돌로 실패한다. 모델별 instance ID와 API
 key가 각 계층에서 중복을 독립 차단한다. 별도 resource guardian은 15분마다 readiness와
 승인된 제한 복구를 수행하지만 파이프라인을 시작하거나 재실행하지 않는다.
+
+### 수집·선정 실패의 분리와 cutoff
+
+최신 D 정규 실행의 입력 상한은 D+1 달력일 NY 05:30(DST 반영)이며 실패 복구는
+원래 context·manifest·cutoff를 보존한다. 명시적 역사 backfill의 기존 계약은 변경하지 않는다.
+Quant export와 LLM은 같은 manifest의 universe를 공개·적용·원천 가용 시각까지
+검사해 선택하고 운영 replay에서는 fetched 시각도 제한한다. 단순 최신 명단이나
+as-of 날짜만으로 선택하지 않으며 기존 Quant 성공 cache에도 universe 일치를 요구한다.
+
+10월22일 데이터의 23일 정규 실행은 수집503bars·누락0, Quant20·LLM20 성공 후
+Fusion 설명 검증에서 실패했다. 이를 수집 실패나 모델 추론 실패로 기록하지 않는다.
+설명 투영 패치 후 같은 성공 원천으로 별도 Fusion20·설명20·ACK20을 확인했으며
+최초 `PARTIAL_SUCCESS`·실패 Fusion은 보존한다. 외부 보고서 완료는 별도 시스템의 결과다.
 
 ## 공급자 하네스
 
@@ -208,7 +221,8 @@ Qlib export·모델 검증 실패가 LLM 실행을 차단하지 않으며 형제
 Candidate API 기본 조회와 정기 Durable 실행은 `MEDIUM_20D`다. SHORT_5D의
 5~10개 레거시 정책·명시적 API 선택·dual 호환은 유지하며 목적 간 fallback은 없다.
 최종 외부 전달은 기존 5~10개에서 **20개**로 변경한다. 두 Top 20의 RRF·전달 어댑터는
-기본 비활성으로 구현됐다. 기본 MEDIUM은 `parallel_preselection`에서 제출 없이 종료한다.
+기본 비활성으로 구현됐다. OFF인 수동/호환 MEDIUM은 `parallel_preselection`에서 제출 없이 종료한다.
+정규 운영은 Fusion·전량 전달 ON이며 신규 timer는 Fusion OFF를 허용하지 않는다.
 Fusion 활성 시 같은 context의 성공 원천 run을 고정해 병합하며 부족하면 SHORTFALL이다.
 실제 수신처 검증과 별도 전달 플래그가 충족될 때만 최종 20개 전량 envelope·ACK를 사용한다.
 Portal의 MySQL 분석 상태·결과와

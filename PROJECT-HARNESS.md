@@ -174,7 +174,7 @@ Candidate Engine의 사업 범위를 위 네 단계 밖으로 확장하지 않�
 - 과거일의 정보 경계는 그 실행의 고정 `cutoff_at`이다. `price_session_date` 자정이나
   재실행한 현재 시각으로 바꾸지 않는다. D 세션을 D+1 cutoff에 처리하는 기존 규칙을 유지한다.
 - LLM 입력 생성·screening lineage·캐시 입력 재사용·모델 호출 전·Fusion 근거 저장에
-  동일한 `llm-cutoff-v1` 검증을 적용한다. 위반 데이터를 제거하고 성공으로 계속하지 않는다.
+  동일한 `llm-cutoff-v2-ny-day` 검증을 적용한다. 위반 데이터를 제거하고 성공으로 계속하지 않는다.
 - 모든 사용 자료의 `source_available_at <= cutoff_at`을 강제한다. 기사 공개·공시 접수
   시각과 보고 대상 기간도 검증하며, 실제 제공 packet과 원천 link가 양방향으로 연결돼야 한다.
   cutoff 후 공개된 뉴스·실적·공시 정정본은 과거일 입력이나 설명 근거로 사용할 수 없다.
@@ -391,6 +391,11 @@ LLM score는 예상 수익률·확률·confidence로 표현하지 않는다.
 최종 instrument·issuer·원천 목록 순위·RRF·position·품질·선정/제외 사유를 보존한다.
 run·candidate·필수 audit는 단일 transaction으로 저장하고 입력 불일치와 중복은 fail closed한다.
 원천 두 결과·Fusion 결과·외부 전달 상태를 구분하며 전달 실패로 성공 후보를 덮어쓰지 않는다.
+설명 투영은 동일 `(evidence_link_id, criterion, is_external)`의 서로 다른 유효 이유를
+서버의 결정적 bounded 요약 하나로 결합할 수 있다. 원래 assessment/이유는 보존하며
+점수·RRF·순위를 바꾸거나 추가 LLM 호출을 하지 않는다. 완전히 같은 이유의 반복·
+provenance 충돌·시점 검증 실패를 결합으로 숨기지 않고 DB/외부 layer는 구분한다.
+조회 시 legacy 설명을 새로 만들지 않는다. 전량 ACK는 외부 후보 접수이며 외부 보고서 완료가 아니다.
 사용자가 Fusion 보존과 독립 정량 결과 삭제를 함께 요청하면
 `selection.quant_result_deletion`에 run 단위 삭제 표시를 남긴다. 정량 공개 조회는 날짜·범위·
 명시적 run ID 모두 해당 결과를 제외하며, 삭제 표시의 우회 옵션을 API에 노출하지 않는다.

@@ -1,10 +1,10 @@
 # 프로젝트 전체 아키텍처
 
-갱신일: 2026-10-17
+갱신일: 2026-10-23
 
 ## 독립 후보 파이프라인 구조 (2026-10-17)
 
-독립 API/CLI·상태·retry와 PostgreSQL migration 024는 운영 배포됐다.
+독립 API/CLI·상태·retry와 PostgreSQL migration 025까지 운영 배포됐다.
 모델·rubric·RRF k=10을 유지하며 공통 입력 이후 Quant·LLM을 독립 실행한다.
 상세 설계는 [정량](./quantitative-pipeline-architecture.md),
 [LLM](./llm-pipeline-architecture.md), [Fusion](./fusion-pipeline-architecture.md)으로 나눈다.
@@ -34,6 +34,9 @@ flowchart LR
 ```
 
 - 일일 입력 수집·병렬 분기·Fusion·외부 전달은 기존 자동 계약을 유지한다.
+- 현재 Quant·LLM 병렬성은 Backend 프로세스 안의 논리적 실행과 독립 stage API/CLI다.
+  수집·Quant·LLM·Fusion을 각각 Container Apps Job으로 물리 분리하는 구조는 제안이며
+  아직 운영 구현이 아니다. 실제 주간 학습용 Job의 존재로 일일 분리가 완료됐다고 표현하지 않는다.
 - 독립 stage는 기존 context를 명시해 한 단계만 실행한다. 수집·학습·다른 branch·외부 전달을
   암묵적으로 실행하지 않는다. Fusion은 두 실제 source selection ID를 필수로 받는다.
 - 새 ops.candidate_stage_run은 실행 제어이며 immutable 사업 결과 run을 대체하지 않는다.
@@ -63,7 +66,7 @@ Fusion 비활성 MEDIUM은 `parallel_preselection`에서 외부 제출 없이 �
 신규 정책과 조회 계약의 운영 활성화는 별도 승인·배포 작업이다.
 SHORT_5D 레거시 5~10개 실행 기능은 유지한다.
 
-2026-10-17 확인된 운영은 PostgreSQL024·독립 stage API/CLI까지 배포됐고
+2026-10-23 확인된 운영은 PostgreSQL025·독립 stage API/CLI까지 배포됐고
 event v2·Fusion k=10·전량 handoff가 승인 활성화돼 있다. 코드 기본 OFF와 구분한다.
 세 독립 stage의 고정 성공20개 재사용·인증·멱등성을 검증했으며 추가 LLM 호출은0건이다.
 실행·재시도는 [오케스트레이터 가이드](../../../../../orchestrator/README.md),
@@ -74,14 +77,29 @@ event v2·Fusion k=10·전량 handoff가 승인 활성화돼 있다. 코드 기�
 | 기능 | 현재 상태 |
 |---|---|
 | 독립 Quant·LLM·Fusion stage, event v2·RRF k=10·전량 handoff | 운영 활성, 코드·설정 예제의 기본값은 OFF |
-| native LLM 검색 v4·한국어 prompt·검색 증거 witness | 로컬 변경, 기존 운영 v2를 자동 교체하지 않음 |
-| Fusion 근거 snapshot·v2 설명/결과 통합 API | 로컬 변경, 운영 v2 경로는 아직 미노출 |
+| event v2 한국어 prompt·관리 ID 평가 | 운영 `llm-event-preselection-v3-ko`·`gpt-6.1-sol`·API `2024-10-21`, timeout180초 |
+| v4 strict 검색·v5 기간 검색·v6 선택적 기간 검색 | 별도 명시 선택 경로; v6 과거 연구 실행과 정규 운영 v2 활성화를 구분 |
+| Fusion 근거 snapshot·v2 설명/결과 통합 API·회사명 | 운영 배포, legacy snapshot 부재는 `NOT_RECORDED` |
+| 정규 정량 serving model | LightGBM MEDIUM v1 `74c367e9-bd84-58ab-b933-19a36dae35c4`, SHADOW; 연구용 Ridge 승격 아님 |
+| 신규 주말 모델 업데이트 | MEDIUM_20D만·weekly v2, 성능 임계값 유예와 데이터/무결성 gate 유지 |
+| 유니버스 cutoff·정량 cache fence | 10월22일 배포, 같은 manifest의 eligible version과 성공 결과 재사용 일치 |
+| DB·외부 인용 설명 결합 | 10월23일 운영 단일 함수 패치; 추가 LLM 호출·점수 변경 없음 |
 | 주간 모델 업데이트 이메일 | 오케스트레이터 배포·주간 전용 활성, 승인된 단일 수신처 사용 |
 | 일일 파이프라인·resource guardian 이메일 | 비활성, 실행·관측 기능은 유지 |
 
 일일 병렬 분기는 성공한 형제 결과를 보존한다. 둘 다 성공하면 `SUCCEEDED`, 한쪽만
 성공하면 `PARTIAL_SUCCESS`, 둘 다 실패하면 `FAILED`다. 부분 성공을 Fusion 입력이나
 외부 전달 성공으로 취급하지 않으며 Fusion은 고정된 성공 Top 20 두 개를 요구한다.
+
+현재 serving artifact는 purpose별 assignment가 있으면 이를 고정하고, 없으면 설정된
+manifest/hash를 명시적으로 고정한다. assignment 부재가 모델 부재는 아니다.
+10월23일 결과 lineage는 RAW Alpha158 158차원·20D 개별 종목 가격수익률을 예측하는
+위 LightGBM을 확인한다. schema-v3 Ridge·주말 challenger는 별도 연구/SHADOW이며
+모델 weight가 교체됐거나 새 CHAMPION이 승격됐다는 의미가 아니다.
+
+최신 거래일 D의 cutoff는 D+1 달력일 NY 05:30이며 복구도 원래 context/cutoff를 쓴다.
+이는 명시적 과거 backfill의 기존 계약을 바꾸지 않는다. Quant와 LLM은 manifest 안에서
+공개·적용·원천 가용 시각을 모두 통과한 동일 universe version을 선택한다.
 
 LLM v2는 manifest-fenced DB packet만 평가한다. 별도 v4는 공개 회사 metadata로
 native `web_search`를 호출하고 전체 출처·공개 시점·고정 원문 버전을 검증한다.
@@ -91,7 +109,11 @@ native `web_search`를 호출하고 전체 출처·공개 시점·고정 원문 
 
 정량 원본 근거와 LLM rationale·criterion 인용은 DB에 존재하지만, 과거 Fusion 결과에는
 통합 snapshot이 없을 수 있다. 조회 시 새 분석으로 꾸미거나 원본 근거 부재로 단정하지 않는다.
-최소 DDL 변경 방향과 실제 관계는 [후보 테이블·ER 문서](../../../../../SELECTION-DATABASE-ER.md)에 정리한다.
+실제 관계는 [후보 테이블·ER 문서](../../../../../SELECTION-DATABASE-ER.md)에 정리한다.
+설명 변환은 동일 `(evidence_link_id, criterion, is_external)`의 서로 다른 이유를
+bounded 요약으로 결합하되 원본 assessment는 유지한다. 점수·RRF·선정은 다시 계산하지 않는다.
+10월22일 DAILY의 부분 실패 기록과 별도 복구 Fusion의 후보/설명20개·ACK20은 공존한다.
+ACK는 외부 접수이며 외부 보고서20개 완료를 의미하지 않는다.
 2026-10-17 SHORT 후보·근거·연결 리포트 정리는 모델·점수·일정 제거와 별개다.
 
 오케스트레이터의 replay·멱등성·상태 전이·보안·배포 상세는
@@ -101,7 +123,8 @@ native `web_search`를 호출하고 전체 출처·공개 시점·고정 원문 
 
 - 05:30 ET timer는 날짜별 MEDIUM_20D 단일 실행을 시작하고, 별도 resource guardian은 15분마다
   readiness와 승인된 제한 복구를 수행한다.
-- 거래일에는 직전 완료 세션을 처리하고, 비거래일에는 reference·event refresh만 수행한다.
+- gate는 직전 달력 날짜를 대상일로 삼고 비거래일이면 skip한다. 이 timer가 비거래일
+  reference·event refresh나 직전 거래일 후보 재생성을 암묵 실행하지 않는다.
 - 시장 데이터는 Massive Stocks Basic을 사용한다.
 - Massive 호출은 전체 collector가 공유하는 단일 limiter에서 분당 5회로 제한한다.
 - SEC EDGAR와 Alpha Vantage는 Massive와 quota가 독립이므로 병렬 실행한다.
@@ -109,7 +132,7 @@ native `web_search`를 호출하고 전체 출처·공개 시점·고정 원문 
 - SEC는 JSON API와 nightly bulk ZIP을 사용하고, 재무 fact는 정규화 후에만 분석 입력으로 사용한다.
 - 현재 Wikipedia·Yahoo 경로는 prototype 이력 재현용으로만 남기며 신규 운영 경로에서는 Massive·SEC·Alpha Vantage를 사용한다.
 - Candidate API의 기본 조회와 정기 일일 실행 모델은 `MEDIUM_20D`다.
-  `SHORT_5D`·명시적 API 모델 선택·기존 dual 흐름과 두 모델 주간 재학습은 유지하며
+  `SHORT_5D`·명시적 API 모델 선택·기존 dual/주간 history는 유지하되 새 주간은 MEDIUM만이며
   모델 간 자동 fallback은 없다.
 - 운영 스케줄은 Python Durable Functions가 담당한다. Candidate Engine은 포털이나
   TradingAgents의 분석 결과를 저장하지 않는다.
@@ -168,7 +191,7 @@ flowchart LR
         CandidateState["Private Storage · Key Vault · App Insights · ACS Email"]
         Durable --> Daily
         CandidateState --> Durable
-        Weekly["Weekly training-only<br/>SHORT and MEDIUM · promotion gate"] --> Artifact
+        Weekly["New weekly MEDIUM_20D only<br/>integrity gates · performance suspended"] --> Artifact
     end
 
     subgraph External["EXTERNAL · jongmok-toronbang and TradingAgents"]
@@ -263,8 +286,8 @@ flowchart LR
     Handoff --> Email
     Email --> DailyTerminal["Daily terminal"]
     Guardian["15분 guardian"] --> Ready["readiness·제한 복구"]
-    Weekly["뉴욕 주말 gate"] --> Training["SHORT 후 MEDIUM · 독립 결과"]
-    Training --> WeeklyMail["주간 전용 ACS Email ON<br/>시작·모델별·최종 최대 4회"]
+    Weekly["뉴욕 주말 gate"] --> Training["신규 MEDIUM_20D만 · weekly v2"]
+    Training --> WeeklyMail["주간 전용 ACS Email ON<br/>시작·MEDIUM·최종"]
 ```
 
 오케스트레이터는 control plane이며 Candidate PostgreSQL이나 Portal MySQL에 직접
@@ -581,7 +604,7 @@ flowchart LR
 - 공식 calendar·halt collector
 - dataset checkpoint 실제 전진 로직
 - staging COPY·set-based merge 최적화
-- 양의 Rank IC를 충족하는 champion 승격
-- MEDIUM_20D 단일 정기 실행의 다음 05:30 ET E2E와 KQL 확인
+- 성능 기준을 충족하는 새 champion 및 실제 자동 승격 E2E 증명
+- 다음 정규 실행의 terminal·전량 ACK 확인(과거 성공·복구를 다음 실행 보장으로 취급하지 않음)
 
 후보 저장이 이 저장소의 마지막 단계다. 후보 이후 분석, agent 실행, report, 비용과 재평가는 별도 프로젝트에서 관리한다.

@@ -4,6 +4,8 @@
 Fusion은 새 예측 모델이 아니라 MEDIUM 정량·LLM 후보의 선정 방식이다.
 개별 분기와 전체 연결은 [전체 아키텍처](./architecture-diagram.md)를 따른다.
 
+갱신일: 2026-10-23
+
 ## 1. 현행 독립 실행 구조
 
 FusionService·저장·read API·전달 계약과 독립 실행 수락·상태·retry API/CLI는 운영 배포됐다.
@@ -110,6 +112,40 @@ terminal 보호를 실행해 검증했다. 새 모델 호출·외부 제출 비�
 운영 오류 조회는 [Telemetry·KQL 런북](orchestrator-telemetry-runbook.md)을 따른다.
 
 ## 9. 선정 근거·검색 확장의 배포 경계
+
+### 9.1 동일 근거 설명 결합 — 2026-10-23 운영 패치
+
+설명 builder `_project_evidence`는 `(evidence_link_id, criterion, is_external)`를
+key로 DB·검색 인용을 각각 그룹화한다. 같은 근거와 평가항목의 **서로 다른 유효 이유**는
+서버가 결정적으로 하나의 이유에 결합한다. 원래 assessment·인용·점수·RRF·rank는
+수정하지 않으며 LLM에게 다시 합치라고 요청하거나 추가 호출하지 않는다.
+이전 외부 검색 인용 전용 결합을 DB_PACKET에도 일관되게 적용한 수정이다.
+
+완전히 같은 이유의 반복·같은 key의 provenance 충돌은 여전히 실패한다.
+600문자 bounded 요약이므로 임의 길이의 두 이유를 항상 원문 그대로 반환한다고 보장하지
+않는다. 전체 원문은 pinned assessment에 남는다. DB/검색 source layer를 섞거나
+시점·evidence hash·원문 revision gate·최종 인용 수/중복 검증을 완화하지 않는다.
+
+### 9.2 10월22일 결과와 복구 계보
+
+| 항목 | 실제 결과 / UUID |
+|---|---|
+| 정규 process | `c7a20b67-09a9-4060-852f-384185175c73`, 수집 성공 후 `PARTIAL_SUCCESS` |
+| 고정 context / cutoff | `acbf5ed6-5c3c-56ae-aa5f-8f32185869b9` / `2026-10-23T09:30:00Z`(NY05:30) |
+| Quant20 / LLM20 | `72e5deb5-f25d-54fb-88b8-293540d5f531` / `ecdc489e-4b63-40d3-b904-c3f89265eb2b`, 모두 성공·재사용 |
+| 원래 실패 Fusion | `55fbca42-73a3-4bbd-a769-2da695fcf05f`, `FUSION_EXPLANATION_VALIDATION_FAILED` |
+| 별도 복구 stage / Fusion | `71a4fadf-b1f2-4d75-a062-7894fca9353a` / `a98a70fe-1d1c-427a-af92-d0562d2bbc2b` |
+| 확인 | 새 후보20·설명20·전량 ACK20, 최초 process/실패/성공 원천 보존 |
+
+PG는 인용6개 중 evidence/criterion/layer 고유 조합이5개였다. `business`의 동일 DB
+근거에 두 **서로 다른** 이유가 있어 최종 설명 검증에 거부됐으며 인용10개 초과 문제가 아니다.
+운영 baseline의 함수 하나만 패치한 배포
+`1e61ecc3-921d-4b25-98fa-7a0c63f72cbd` 후 두 PG 이유가 결합 설명에 원문 그대로
+포함됨을 확인했다. 실제 패치54회귀·전체 source hash·설정·기존 결과 보존도 확인했다.
+이 결과를 LLM 재평가·모델 교체·원래 DAILY 성공으로 바꿔쓰기라고 해석하지 않는다.
+ACK는 외부 접수만 의미하며 외부 LLY 보고서 실패 등 분석 상태를 성공으로 덮지 않는다.
+
+### 9.3 저장·조회·검색 활성 경계
 
 Quant 이유와 LLM rationale·criterion 인용은 원천 테이블에 저장된다.
 통합 설명은 기존 `fusion_candidate.candidate` JSONB와 `fusion_run.provenance`를

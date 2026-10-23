@@ -1,5 +1,10 @@
 # Change Log
 
+- 2026-10-23 | Model Documentation Reconciliation | 모델 아키텍처·주간 설계·모델 이력·Rank IC 가이드에 실제 운영 LightGBM identity와 연구 Ridge/challenger 분리·신규20D 전용 주간 정책·성능 기준 유예 및 남은 manifest fence/자동 승격 검증 한계를 반영했다.
+- 2026-10-23 | LLM and Fusion Documentation | LLM·Fusion 상세 설계와 하네스·Backend 가이드에 운영 한국어 v2·관리 ID·180초/공유3회·선택적 검색 v6의 연구 범위·서버 설명 결합·22일 복구 계보와 ACK/외부 보고서 경계를 정합화했다.
+- 2026-10-23 | Project Architecture Documentation | 메인 README·전체/데이터/수집/정량/오케스트레이터 아키텍처·구현 지시서·저장 가이드·KQL 문서에 공유 cutoff/cache fence·배포 상태·코드 기본값/운영 활성화·논리 병렬/별도 Job 제안을 구분해 반영했다.
+- 2026-10-23 | Fusion DB Citation Production Fix | 일반 DB의 동일 근거·평가항목에 연결된 서로 다른 설명을 하나로 결합하는 기존 검증 구현을 운영 원본의 해당 함수에만 배포하고 실제 운영 패치 회귀54건·전체 source hash·B2 및 설정·기존 결과 보존을 확인했다.
+- 2026-10-23 | October 22 Fusion Recovery | 22일의 성공 수집·Quant20·LLM20 및 고정 cutoff·context를 재사용해 새 Fusion20과 설명20개를 생성하고 PG의 중복 근거를 두 원문 설명을 보존한 한 항목으로 결합했으며 원래 실패 기록 유지와 외부20개 전량 ACK를 확인했다.
 - 2026-10-22 | Universe Cutoff Consistency | 정량 historical export와 LLM의 manifest 내 유니버스 선택 SQL을 공통화해 공개·적용·원천 가용 시각 및 운영 재현 수집 cutoff와 버전 정렬을 일치시키고 준비된 context의 잘못된 버전 사용을 차단했다.
 - 2026-10-22 | Quant Result Reuse Fence | 정규 일일 및 독립 정량 실행의 성공 결과 재사용에 고정 context에서 선택한 유니버스 버전 일치를 필수로 추가해 기존 잘못된 버전 결과의 재사용을 차단했다.
 - 2026-10-22 | Approved B2 Plan Restore | 배포 전 두 App Service 플랜의 B1 상태를 발견해 사용자 명시적 승인 후 Candidate와 Portal을 B2·1인스턴스로 복원했으며 DB 사양은 변경하지 않았다.

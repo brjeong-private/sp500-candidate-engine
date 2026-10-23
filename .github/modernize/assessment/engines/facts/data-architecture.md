@@ -11,19 +11,32 @@
 
 후보 선정 엔진의 쓰기 책임은 `selection` 스키마까지다. 후보 이후 분석·agent 실행·report·비용·재평가는 별도 프로젝트의 책임이며 이 데이터 모델에 포함하지 않는다. 공통 불변식은 루트 `PROJECT-HARNESS.md`를 따른다.
 
-## 현재 운영·근거 저장 경계 — 2026-10-17
+## 현재 운영·근거 저장 경계 — 2026-10-23
 
-- 운영 PostgreSQL은 migration 024까지 적용됐으며 독립 Quant·LLM·Fusion stage와
+- 운영 PostgreSQL은 migration 025까지 적용됐으며 독립 Quant·LLM·Fusion stage와
   event v2·RRF k=10·전량 handoff가 활성화돼 있다. 아래 날짜별 적재량은 당시 기록이다.
 - 정량 선정 이유는 `selection.candidate_reason`, LLM rationale·uncertainty·항목별 인용은
   `analytics.llm_instrument_assessment`에 저장한다. 실제 입력은 고정 evidence packet으로 추적한다.
 - 통합 설명은 새 테이블 대신 기존 `selection.fusion_candidate.candidate` JSONB의
-  `explanation`과 `selection.fusion_run.provenance`를 확장하는 로컬 계약이다.
-  과거 snapshot 부재·원본 근거 존재·운영 API 미노출을 서로 구분한다.
-- 신규 v2 설명/결과 통합 API와 native 검색 v4는 아직 운영 배포가 아니다.
+  `explanation`과 `selection.fusion_run.provenance`에 저장하는 운영 계약이다.
+  과거 snapshot 부재와 원본 근거 존재를 구분하며 legacy 조회는 `NOT_RECORDED`다.
+- v2 설명/결과 통합 API·한국어 event prompt는 운영 배포됐다.
+  정규 LLM은 DB-only v2이며 native 검색 v4·기간 검색 v5·선택적 v6는 별도 정책이다.
   조회 때 LLM 호출·원천 재검색·과거 immutable 결과 수정을 수행하지 않는다.
 - 2026-10-17 SHORT_5D 후보·근거와 연결 외부 리포트를 정리했으며 모델·일일 점수·원천·
   다른 목적의 후보는 보존했다. 외부 리포트 DB를 이 저장소의 데이터 모델에 추가하지 않는다.
+- 9월30일~10월14일의 MEDIUM 정량11run·220후보는 migration025
+  `selection.quant_result_deletion`으로 논리 삭제했다. 공개 정량 API는 제외하지만
+  Fusion은 `include_deleted=True`로 pinned 원천을 내부 검증한다.
+  후보·600개 reason·scoring·모델·LLM은 물리 보존한다.
+- 회사명은 pinned Quant scoring의 역사적 universe member에서 조회 투영한다.
+  저장 Fusion JSONB·payload hash·설명·handoff allowlist를 변경하지 않는다.
+- Quant export와 LLM은 manifest의 동일 eligible-universe selector를 사용한다.
+  공개/적용/원천 가용 시각·운영 재현 fetched cutoff를 검사하며 성공 Quant cache도
+  선택된 universe version 일치를 요구한다.
+- 동일 근거/항목/layer의 설명 결합은 새 JSONB snapshot 생성 전 서버 투영이다.
+  원래 LLM assessment는 유지하고 완전 중복·provenance 충돌은 거부한다.
+  22일 실패 run과 별도 복구 성공 run을 함께 보존하며 과거 결과를 UPDATE하지 않는다.
 
 실제 후보 관련 PK/FK·테이블 설명·4개 ER 다이어그램은
 [후보 데이터베이스 구조](../../../../../SELECTION-DATABASE-ER.md)를 따른다.
@@ -48,7 +61,8 @@ LLM의 공개/원문 버전일 판정에만 `America/New_York` 날짜 규칙을 
 
 기존 DB 수집 원천의 범위를 늘리는 대신 별도 v4 정책에서 **LLM native 검색 도구로
 취득하고, 과거 원문 버전 gate를 통과한 발췌만 격리된 평가 모델에 제공**한다.
-기존 v2·정량 모델·과거 run·RRF 산식은 유지한다. 이 변경은 로컬 구현이며 운영 배포가 아니다.
+기존 v2·정량 모델·과거 run·RRF 산식은 유지한다. 검색 코드/조회 호환과
+정규 운영의 정책 활성화는 다르며 현재 일일 설정은 DB-only v2다.
 이전에 시도한 서버 SEC 추가 다운로드·HTML 파싱 방식은 제거했다.
 
 | 계층 | 현재 전달/보강 데이터 | 물리적 보존·identity |
@@ -57,6 +71,11 @@ LLM의 공개/원문 버전일 판정에만 `America/New_York` 날짜 규칙을 
 | LLM 검색 보강 | Azure Responses의 web_search가 취득한 과거 공시의 인용 문단 | 전체 tool 응답·consulted sources·관찰 시각·model snapshot·tool/evidence hash·독립 manifest |
 | LLM 생성 | 한국어 항목 평가, 사실 간 관계 해석, 인용 이유, 부족 정보 | 기존 assessment·call response JSONB; 원천 사실로 승격하지 않음 |
 | 미승인/미확보 | 원문 revision이 불명확한 일반 뉴스·현재 페이지·미래 출처·본문 미확보 | 격리·실패; 모델 기억이나 DB-only 성공으로 대체 금지 |
+
+명시적 `daily-llm-optional-period-search:6`만 `OMIT_EXTERNAL`을 허용한다.
+검증 거부를 omission 사유/상태로 남기고 외부 정보 없이 원래 DB packet·null 검증을 수행한다.
+이는 v4/v5의 필수 보강 계약을 조용히 완화하거나 외부 취득 성공으로 기록하는 경로가 아니다.
+승인된 과거 연구 실행에서 사용했으나 신규 DB 원천 테이블·정규 정책 변경은 없다.
 
 ### DB 원천 확장과 모델 입력 증적의 구분
 

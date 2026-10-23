@@ -4,7 +4,7 @@
 대상: 기존 저장소를 분석하고 후보 선정 엔진을 구현할 개발 에이전트  
 상태: 합의된 방향을 구현 가능한 작업으로 정리한 초안. 수치·주기는 아래 기본값으로 시작하고 설정으로 변경할 수 있게 한다.
 
-## 현재 일일 실행 구조 (2026-10-17)
+## 현재 일일 실행 구조 (2026-10-23)
 
 [공통 하네스](PROJECT-HARNESS.md)와 versioned 운영 설정을 우선한다.
 2026-10-16 외부 전달 목표를 기존 5~10개에서 **20개**로 변경했다.
@@ -19,10 +19,20 @@ LLM 구현과 독립 실행 진입점은 [llm_preselection/](src/sp500_candidate
 [tests/llm_preselection/](tests/llm_preselection/)에 둔다.
 정량 추론 내부에서 LLM을 호출하지 않으며 Qlib export·모델 검증 실패가 LLM 실행을
 막지 않는다. 결과와 실패 상태는 각각 저장하고 두 성공 목록을 RRF k=10으로 통합한다.
-SHORT_5D·API의 명시적 모델 선택과 주간 재학습은 기존 동작을 유지한다.
+SHORT_5D·API의 명시적 모델 선택·과거 주간 history는 유지하되 신규 주말은 MEDIUM만 학습한다.
 최종20개를 다시 일부로 축소하지 않는다. Fusion이 OFF인 MEDIUM은 기존처럼
 `parallel_preselection`에서 종료하고, 승인된 운영의 Fusion·전달 ON 경로는 성공20개 전량
 ACK까지 처리한다. 독립 stage API/CLI는 수집·학습·다른 단계·외부 전송을 시작하지 않는다.
+신규 정규 timer는 Fusion OFF를 허용하지 않으며 위 `parallel_preselection`은 수동/호환 경로다.
+
+현재 운영 정량은 LightGBM MEDIUM v1 `74c367e9-bd84-58ab-b933-19a36dae35c4`(SHADOW)다.
+연구 Ridge schema-v3·Sunday challenger·optional 검색 v6를 정규 모델/정책 교체로 표현하지 않는다.
+운영 LLM은 한국어 `llm-event-preselection-v3-ko`·schema2·`gpt-6.1-sol`·관리 ID,
+180초 timeout·배치당 transport/repair 공유3회다. 주간 v2는 성능 threshold만 유예하고
+coverage·finite·PIT/artifact·CAS·smoke·rollback을 유지한다.
+Quant·LLM 공통 universe cutoff와 Quant 성공 cache fence, DB/외부 동일 근거 설명의
+서버 결합·v2 조회는 배포됐다. 모델 weight·점수·원본 이유·실패 run은 바꾸지 않는다.
+22일 별도 Fusion 복구의 ACK20은 외부 분석/보고서20개 완료가 아니다.
 상세 설계는 [전체 아키텍처](.github/modernize/assessment/engines/facts/architecture-diagram.md),
 운영 설정·오류 확인은 [운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따른다.
 아래 초기 감시100개·종목군·MVP 제안은 역사적 설계이며 현재 운영 정책을 대체하지 않는다.

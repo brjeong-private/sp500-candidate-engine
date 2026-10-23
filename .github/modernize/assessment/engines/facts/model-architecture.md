@@ -1,11 +1,33 @@
 # 후보 선정 모델 아키텍처
 
-갱신일: 2026-10-16
+갱신일: 2026-10-23
 
 이 문서는 point-in-time 원천 데이터가 Qlib 특징, label, 모델 평가, 일일 score와
 MEDIUM 정량 후보 20개로 변환되는 계약을 정의한다. SHORT_5D 레거시 5~10개는 유지한다.
 외부 전달은 기존 5~10개에서 20개로 변경하며 최종 통합·전달 어댑터는 구현·기본 비활성이다.
 후보는 후속 상세 분석 대상이며 매수 신호나 수익 보장이 아니다.
+
+## 현재 serving·연구·승격 구분
+
+| 구분 | 2026-10-23 확인 내용 |
+|---|---|
+| 정규 serving | MEDIUM_20D LightGBM v1 `74c367e9-bd84-58ab-b933-19a36dae35c4`, SHADOW, Alpha158 RAW 158차원 |
+| label / score | `RAW_STOCK_20D_RETURN` / `PREDICTED_20D_RETURN`, 20 sessions·PRICE_RETURN |
+| manifest SHA-256 | `09f163099a3f5d63b018a2c136962624d4990dbc604c2d3ba962e9ef4f1ba5b1` |
+| registry artifact hash | `834826154ed3083601fd590191edb69efc316aee1b1d5b52e57507810f58205e` |
+| 공급 | purpose별 active assignment 우선; 없으면 명시 provision된 manifest/hash pin |
+| 10월18일 challenger | `301785d6-8512-514a-972c-b4a734e7c3b5`, 별도 역사 재구성 SHADOW |
+| 연구용 Ridge winner | Sep25 `861b5f38-f10c-565f-989d-7253d34c13f5`, Oct2 `3fc6ebf4-03ee-5624-bfab-cd259fe2accb`; 정규 serving 교체 아님 |
+
+Ridge schema-v3 numeric JSON은 fitted median imputer·StandardScaler·계수·feature 순서를
+보존한다. serving에서 pickle을 읽거나 processor를 refit하지 않는다. 기존 LightGBM
+schema-v2와 정규 weekly packaging 기본값은 바꾸지 않았고, 연구 binder만 `allow_ridge=True`를 쓴다.
+`historical-membership-price-research-v1`은 9issuer 제외·공식 역사 상태 미인증인
+`EXPERIMENTAL_RESEARCH_ELIGIBILITY`이며 정규 DAILY의 적격성 정책이 아니다.
+
+10월22일 공유 universe selector/cache fence와 23일 Fusion 설명 변환 수정은 모델 weight·
+20D horizon·label·성능 개선이 아니다. 실제 연구 학습·artifact 이력은
+[모델 변경 이력](../../../../../MODEL_CHANGELOG.md)을 따른다.
 
 ## 적용 범위와 상태 표기
 
@@ -340,7 +362,7 @@ VERIFY: 실제 `bagging_freq`, regularization, sample weights, deterministic 설
 16개 test block에서 coverage 100%, Rank IC 0.006072였지만 2년
 historical reconstruction만 검증했으므로 역시 `SHADOW`다.
 
-## 6.1 주간 재학습·artifact binding [CURRENT / PARTIAL]
+## 6.1 주간 재학습·artifact binding [CURRENT]
 
 상세 계약은 루트의 `weekly_retraining_model_design.md`를 기준으로 한다. 여기서
 **구현**은 저장소 코드 존재, **검증**은 자동 테스트 또는 명시된 PostgreSQL 검증
@@ -348,29 +370,39 @@ historical reconstruction만 검증했으므로 역시 `SHADOW`다.
 
 | 항목 | 구현 | 검증 | 배포 |
 |---|---|---|---|
-| production selection을 쓰지 않는 training-only workflow | 완료 | 단위 테스트 | 운영 Job 검증 안 됨 |
-| absolute/relative promotion evaluator | 완료 | finite·경계·목적 단위 테스트 | weekly job과 미통합 |
-| schema-v2 immutable manifest packaging/loader | 완료 | hash·purpose·Blob metadata·multiprocess cache 테스트 | private Blob E2E 안 됨 |
+| production selection을 쓰지 않는 training-only workflow | 완료 | 단위·별도 역사 학습 검증 | 주간 runtime 배포, 실제 신규 자동 승격과 구분 |
+| absolute/relative promotion evaluator | weekly job과 통합 | finite·경계·목적 단위 테스트 | 신규 weekly v2 성능 threshold만 비강제 |
+| schema-v2 immutable manifest packaging/loader | upload/activation 경로 통합 | hash·purpose·Blob metadata·cache 테스트 | 코드 배포와 실제 승격 E2E 구분 |
 | active assignment schema와 generation CAS | 완료 | PostgreSQL 16.15 적용·rollback·CAS 검증 | DB migration 적용 |
-| DAILY process metadata pinning | 완료 | pointer 변경·fallback 단위 테스트 | backend 운영 배포 검증 안 됨 |
-| 자동 activation smoke/rollback | 기반 schema/repository만 완료 | E2E 안 됨 | 안 됨 |
+| DAILY process metadata pinning | 완료 | pointer 변경·fallback·실제 일일 lineage 확인 | Backend 운영 적용 |
+| 자동 activation smoke/rollback | 서비스·Job·orchestrator 연결 구현 | 회귀·CAS 검증 | 운영 코드 배포, 실제 자동 승격 E2E 미주장 |
 
 ### Training-only 경계
 
 `run_training_only_workflow()`는 기존 시간순 walk-forward 학습·평가와 `SHADOW`
 registry 등록을 재사용하지만 `persist_selection=false`로 production scoring 및
 selection 저장을 실행하지 않는다. `WeeklyTrainingJob`은 `PENDING -> RUNNING ->
-EVALUATED` 또는 `FAILED` 상태를 관리한다. 현재 weekly job에는 promotion evaluator,
-artifact upload, `model_promotion_decision` 저장과 active assignment CAS activation이
-아직 연결되지 않았다.
+EVALUATED -> PROMOTED|REJECTED` 또는 `FAILED` 상태를 관리한다.
+현재 weekly job에는 promotion evaluator·artifact upload·`model_promotion_decision`
+저장·assignment CAS가 연결됐고 orchestrator가 승격 시 activation smoke를 호출한다.
+smoke 실패의 rollback도 구현돼 있으나 코드 배포만으로 실제 새 승격 완료를 주장하지 않는다.
+주간 export는 cutoff 이전 snapshot을 제한하지만 run의 `input_manifest_id`와 생성
+export manifest의 명시적 동일성 fence·별도 pre-activation serving smoke는 보완 과제다.
+이를 DAILY의 배포된 binding pinning이나 승격 후 activation-smoke와 혼동하지 않는다.
 
 ### Promotion policy
 
-`weekly_retraining_v1.yaml`은 두 model purpose마다 coverage, test block 수,
+기존 `weekly_retraining_v1.yaml`은 두 model purpose마다 coverage, test block 수,
 Rank IC mean, fold Rank IC median, net Top-10 return, Top-10 max drawdown의 absolute
 gate와 incumbent-relative delta gate를 정의한다. gate 입력이 누락되거나 NaN/Infinity
 등 non-finite이면 `REJECT`한다. incumbent가 없는 최초 bootstrap은 absolute gate를
 통과해야 하며 relative gate는 `no_incumbent`로 기록된다.
+
+신규 주말은 MEDIUM_20D만 `weekly_retraining_v2.yaml`의
+`weekly-v2-20d-performance-suspended`로 실행한다. Rank IC·fold median·net Top10·
+max drawdown의 absolute/relative threshold는 계산·저장하되 `enforced=false`다.
+coverage≥0.80·test blocks≥3·finite·PIT/목적/artifact·CAS·smoke·rollback은 유지한다.
+과거 v1 run의 판정·history를 변경하거나 SHORT를 새로 자동 예약하지 않는다.
 
 이 evaluator의 구현·테스트는 model 승격 사실을 의미하지 않는다. 현재 문서에 기록된
 `SHORT_5D` v2와 `MEDIUM_20D` v1은 계속 `SHADOW`이며 새 `CHAMPION`을 선언하지 않는다.
@@ -399,7 +431,8 @@ local cache에서 manifest/model hash를 재검증하며 manifest의 model versi
 
 assignment가 없을 때만 기존 App Settings manifest fallback을 사용할 수 있다.
 `SHORT_5D`와 `MEDIUM_20D` 사이의 fallback은 금지한다. 이 pinning 경로는 코드와
-단위 테스트가 존재하지만 운영 backend deployment는 별도 검증 대상이다.
+운영 Backend에 적용됐고 10월22일 결과의 모델 ID·artifact lineage를 확인했다.
+assignment가 없을 때 provision된 manifest로 정상 serving하는 것을 새 승격과 혼동하지 않는다.
 
 ### PostgreSQL 16 검증 범위
 
@@ -538,7 +571,8 @@ child는 `SKIPPED_EXISTING`으로 끝난다. 이는 모델 결과 재계산이�
 Candidate POST와 Portal/TradingAgents 신규 분석을 모두 생략한다. 단일 모델 수동
 endpoint는 one-off 진단·호환 경로로 유지된다.
 
-기본 MEDIUM은 `parallel_preselection`에서 종료하며 Portal 제출을 하지 않는다.
+코드 기본 OFF인 수동/호환 MEDIUM은 `parallel_preselection`에서 종료하며 Portal 제출을 하지 않는다.
+승인된 정규 일일은 Fusion ON·성공20개 전달 경로이고 신규 timer는 Fusion OFF 시 차단한다.
 기존 v1 LLM과 신규 비가격 이벤트 v2는 별도 policy로 유지한다. 신규 정책은 90/10
 이벤트·운영 대조 표본 및 최소 3개 근거 항목의 재정규화 점수로 독립 Top 20을 만든다.
 기본 비활성 Fusion은 MEDIUM 전용 k=10·목록 position·동일 instrument 합산·issuer 중복

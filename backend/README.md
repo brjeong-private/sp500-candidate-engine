@@ -97,7 +97,7 @@ These read endpoints require no new DDL.
 
 Historical LLM evaluation is fenced by the frozen run `cutoff_at`, not the retry's wall clock
 or session-day midnight. Fresh inputs, screening lineage, cached packets and pre-model
-inputs must pass `llm-cutoff-v1`; Fusion also revalidates pinned source packets/citations.
+inputs must pass `llm-cutoff-v2-ny-day`; Fusion also revalidates pinned source packets/citations.
 Reconstruction permits later collection of already-public information, never later
 publication. Operational replay additionally requires observation by cutoff.
 An earnings schedule known by cutoff may be in the future; a future published result may not.
@@ -107,9 +107,9 @@ The event prompt is `llm-event-preselection-v3-ko`: instructions and repair requ
 Natural-language summaries, citation reasons and non-null missing reasons must contain Korean;
 English-only responses fail semantic validation and use the existing bounded repair budget.
 JSON keys/enums/UUIDs and supplied source text remain unchanged. The prompt/config hash prevents
-reuse of older English response caches. This local code change is not an operational deployment.
+reuse of older English response caches. This Korean event prompt and the v2 read APIs are deployed.
 
-Optional native-search v4 uses `llm-event-preselection-v7-ko-search` / evidence schema 4.
+Optional native-search v4 uses `llm-event-preselection-v8-ko-ny` / evidence schema 4.
 Select `config/llm_preselection/policy_event_search_v4.yaml` explicitly. Server SEC downloading
 and parsing enrichment was removed. Provider-hosted Responses `web_search` receives only public
 company/archive metadata, never the complete DB packet or internal IDs.
@@ -131,6 +131,46 @@ For tool-level historical date filtering select
 The provider sends `freshness=YYYY-MM-DD..YYYY-MM-DD` in the actual `bing_grounding` tool
 configuration. This is Bing discovery-date filtering, not historical source-version proof.
 The original-version gate remains mandatory; unavailable provenance fails closed.
+
+### Verified production baseline (2026-10-23)
+
+Regular daily serving remains MEDIUM_20D LightGBM
+`74c367e9-bd84-58ab-b933-19a36dae35c4` (SHADOW), RAW Alpha158 with 158 features,
+`RAW_STOCK_20D_RETURN` / `PREDICTED_20D_RETURN`, PRICE_RETURN.
+An active purpose-specific assignment takes precedence; otherwise the explicitly provisioned
+manifest and hash are pinned. Missing assignment is not a missing model. Historical Ridge
+schema-v3 and the Sunday SHADOW challenger are not replacements for this daily binding.
+
+The deployed daily LLM policy is DB-only `daily-llm-event-preselection:2`, prompt
+`llm-event-preselection-v3-ko`, schema 2, deployment `gpt-6.1-sol`, API `2024-10-21`.
+Managed identity with Cognitive Services OpenAI User authenticates the service; an API key
+is not required. Timeout remains 180 seconds and each batch shares three attempts between
+transport errors and semantic repair.
+
+Explicit `policy_event_optional_search_v6.yaml` uses
+`llm-event-preselection-v10-ko-optional-period` / schema 4 and
+`AZURE_BING_GROUNDING_PERIOD`. Its audited `OMIT_EXTERNAL` admission-failure contract
+preserves DB packet/null validation and never labels rejected enrichment successful.
+This policy was used for approved historical research, not enabled as the regular daily policy.
+Required-search v4/v5 failure behavior is unchanged.
+
+Quant export and LLM now share the manifest-bound eligible-universe selector, checking
+as-of date, announcement/effective/source availability and replay fetch cutoff. Prepared-export
+mismatches fail explicitly; successful Quant reuse also requires the selected universe version.
+For latest-session daily execution and its recovery, D uses the next **calendar** day's
+NY 05:30 cutoff (DST-aware). Retries keep the original context/cutoff; explicit historical
+backfills retain their existing versioned contracts.
+
+Fusion explanation projection groups valid citations by
+`(evidence_link_id, criterion, is_external)` and combines distinct reasons deterministically.
+The summary is bounded to 600 characters; complete original assessment reasons remain stored.
+Identical duplicate reasons, conflicting provenance and invalid timing still fail.
+No extra LLM call, scoring, ranking or RRF change is performed.
+
+The October 23 one-function production patch recovered only October 22's failed Fusion,
+reusing successful collection/Quant20/LLM20. New Fusion
+`a98a70fe-1d1c-427a-af92-d0562d2bbc2b` has 20 candidates, 20 explanations and full ACK20.
+Original partial/failed history remains immutable. ACK means external acceptance, not report completion.
 
 LLM publication/version checks use NY calendar dates: prior days need no creation timestamp;
 same-day sources require a trusted timezone-aware time strictly before 05:30 New York.

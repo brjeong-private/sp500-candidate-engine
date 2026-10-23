@@ -1,10 +1,10 @@
 # 주간 재학습 모델 설계
 
-갱신일: 2026-10-18
+갱신일: 2026-10-23
 
 ## 1. 목적과 범위
 
-이 문서는 `SHORT_5D`와 `MEDIUM_20D`의 주간 training-only 실행, 승격 gate,
+이 문서는 신규 `MEDIUM_20D` 전용과 과거 두 목적의 주간 training-only 실행, 승격 gate,
 immutable model artifact, PostgreSQL active assignment와 DAILY pinning 계약을
 정의한다.
 
@@ -41,7 +41,11 @@ Candidate Engine의 범위는 다음으로 제한한다.
 [역사 학습 실행 계약](src/sp500_candidate_engine/analytics/HISTORICAL-TRAINING.md)을 따른다.
 기존 저장 snapshot만 명시적으로 고정하고 실제 학습·생성 시각을 보존하며, 신규 격리
 context/export와 SHADOW artifact를 생성한다. 정규 weekly API·승격·active assignment는
-호출하지 않는다. 구현·단위 검증 상태이며 실제 context 쓰기·학습·배포는 하지 않았다.
+호출하지 않는다. 10월18일 실제 격리 context·학습·SHADOW artifact가 생성됐으며
+Sunday challenger `301785d6-8512-514a-972c-b4a734e7c3b5`와 Sep25/Oct2의 실제
+Ridge winner schema-v3는 정규 일일 serving 교체가 아니다.
+현재 정규 serving은 LightGBM `74c367e9-bd84-58ab-b933-19a36dae35c4`와 provision된
+manifest binding이다. 상세 identity·평가·연구 적격성은 [모델 변경 이력](MODEL_CHANGELOG.md)을 따른다.
 
 ## 2. 상태 용어
 
@@ -129,22 +133,30 @@ scorecard_quality_gate_passed
 `WeeklyTrainingJob`은 PostgreSQL run을 읽고 purpose를 확인한 뒤 다음 전이를 사용한다.
 
 ```text
-PENDING -> RUNNING -> EVALUATED
+PENDING -> RUNNING -> EVALUATED -> PROMOTED | REJECTED
                    -> FAILED
+PROMOTED -> ROLLED_BACK (activation smoke failure with successful rollback)
 ```
 
 성공 시 `export_run_id`와 `challenger_model_version_id`를 weekly run에 기록한다.
 실패 시 secret이나 raw payload를 포함하지 않는 고정 error code/message를 기록한다.
 
-현재 job은 `anchor_session`과 `training_cutoff`에 맞는 export를 선택해 training-only
-workflow를 호출한다. 다음 단계는 아직 job에 연결되지 않았다.
+현재 job은 `anchor_session`·`training_cutoff`에 맞는 export를 준비해
+training-only workflow를 호출한다. 다음 경로는 코드에 연결돼 운영 배포됐다.
+단, 자동 승격·private Blob·smoke·rollback 전체 경로의 **실제 새 승격 E2E 완료**는
+별도 증거가 필요하며 이 문서에서 주장하지 않는다.
 
-1. weekly run의 `input_manifest_id`와 선택한 export manifest의 명시적 동일성 fence
+1. cutoff 이전에 가용한 snapshot만 사용하는 historical export 준비
 2. schema-v2 packaging과 private Blob upload
 3. incumbent metric 조회와 promotion evaluator 호출
 4. `model_promotion_decision` 저장
-5. pre-activation smoke와 assignment CAS
+5. artifact packaging 검증과 assignment CAS
 6. activation smoke 및 실패 시 rollback
+
+`_prepare_training_export`는 cutoff를 전달하지만 weekly run의 `input_manifest_id`와
+생성 export manifest의 명시적 동일성 fence는 직접 연결하지 않는다. 이 입력 pinning
+보완과 별도 pre-activation serving smoke를 완료된 경로로 표현하지 않는다.
+승격 후 activation-smoke 서비스의 artifact load 검증과도 구분한다.
 
 ## 5. Promotion policy
 
@@ -181,8 +193,9 @@ incumbent metric이 없거나 non-finite이면 fail closed한다. active incumbe
 
 `evaluate_promotion()`의 결과는 `PROMOTE` 또는 `REJECT`와 gate별 actual,
 threshold, incumbent, reason을 포함한다. evaluator가 `PROMOTE`를 반환하는 것만으로
-registry status나 active assignment는 바뀌지 않는다. 현재 weekly job에는 이
-evaluator와 decision persistence가 연결되지 않았다.
+registry status나 active assignment는 바뀌지 않는다. 현재 weekly job이 evaluator와
+decision persistence·artifact upload·generation CAS를 조정한다. 신규 v2의 성능 gate
+비강제와 integrity gate 강제는 1.1절을 따른다.
 
 ## 6. Immutable schema-v2 artifact
 
@@ -284,8 +297,9 @@ activation/rollback은 다음 순서를 사용한다.
 5. `active_model_assignment_history`에 `ACTIVATE` 또는 `ROLLBACK`을 append한다.
 
 최초 assignment는 expected generation 0에서 generation 1이 된다. history는
-replaced model identity를 보존한다. 이 repository 기반은 구현·검증됐지만 promotion
-service가 이를 호출하는 end-to-end activation/rollback은 아직 구현되지 않았다.
+replaced model identity를 보존한다. Job activation과 Backend activation-smoke 실패의
+rollback이 이 repository를 사용한다. 코드 연결·배포와 실제 새 모델의 승격/rollback
+운영 E2E 완료는 구분한다.
 
 ## 8. DAILY pinning
 
@@ -365,7 +379,7 @@ manifest는 fallback으로 사용할 수 없다.
 - DAILY pointer 변경 후 기존 process binding 재사용 확인
 - assignment가 없을 때만 fallback 경로로 진행하는지 확인
 
-운영 전 추가 검증:
+새 자동 승격을 완료했다고 주장하기 전에 확인할 E2E 증거:
 
 1. weekly job이 pinned input manifest 밖 snapshot을 읽지 않는 integration test
 2. immutable Blob upload 후 managed identity download
@@ -374,23 +388,23 @@ manifest는 fallback으로 사용할 수 없다.
 5. activation smoke 실패 시 이전 binding rollback
 6. rollback CAS 실패 시 CRITICAL alert
 7. pointer가 DAILY 실행 중 바뀌어도 scoring/selection model identity가 유지되는 E2E
-8. SHORT 실패와 무관한 MEDIUM 독립 실행
+8. 신규 MEDIUM 단독 입력과 과거 두 목적 Durable history의 replay 호환
 
 ## 11. 배포 판정
 
 PostgreSQL weekly migration은 Azure PostgreSQL 16.15에 적용·검증됐다. 저장소에는
-weekly Job, private artifact infrastructure와 orchestration 구현도 존재하지만 이
-문서 작성 시점에 해당 application/IaC 변경의 운영 배포 및 end-to-end promotion
-실행 증거는 없다.
-
-다음은 이 절 작성 당시의 검증 범위다. 최신 독립 후보 실행·Fusion 배포 여부와
-혼동하지 않으며 현재 운영 증거는 [운영 점검서](DAILY-PIPELINE-RUNBOOK.md)를 따른다.
+weekly Job·private artifact·orchestration 코드와 10월18일 Backend/학습 image/Function
+운영 배포를 확인했다. 과거의 `NOT YET INTEGRATED`는 10월16일 상태이며 현재 상태가 아니다.
+신규 weekly v2 적용과 실제 자동 promotion 완료는 구분한다.
+주간 배포 증거는 [후속 확인 문서](WEEKLY-MODEL-FOLLOW-UP-2026-W42.md),
+최신 일일 운영 기준은 [README](README.md)를 따른다.
 
 ```text
 DB schema: DEPLOYED and VALIDATED
 training/policy/artifact/pinning code: IMPLEMENTED and TESTED
-weekly promotion runtime: NOT YET INTEGRATED
-application/infrastructure rollout: NOT VERIFIED
+weekly promotion runtime: INTEGRATED
+backend/training image/orchestrator rollout: DEPLOYED 2026-10-18
+new automatic promotion E2E: NOT CLAIMED
 promoted model: NONE CLAIMED
 ```
 
@@ -401,4 +415,4 @@ promoted model: NONE CLAIMED
 이후2026-10-17 이벤트 v2·Fusion·독립 stage 실행과 전달 어댑터의 배포·계약 검증을
 완료했으며, 이는 이 주간 설계에서 새로운 모델 승격이 발생했다는 뜻이 아니다.
 후보 수 변경은 모델 horizon·label·weight 또는 Top-5/10 promotion 지표 변경이 아니다.
-SHORT_5D 레거시 정책과 두 모델의 주간 training-only 계약은 유지한다.
+SHORT_5D 레거시 정책·과거 두 목적 history는 유지하지만 신규 정규 주말은 MEDIUM만 실행한다.

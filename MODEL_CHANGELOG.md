@@ -2,6 +2,31 @@
 
 모델·라벨·전처리·평가·선정 의미가 바뀔 때마다 새 version과 artifact를 생성하고 이 문서에 기록한다. 기존 실행 기록과 artifact는 덮어쓰지 않는다.
 
+## Live serving identity / non-model production fixes — 2026-10-23
+
+운영 App Settings·source hash와 10월22일 성공 결과 lineage를 대조했다.
+정규 MEDIUM_20D는 계속 Alpha158 RAW 158차원의 LightGBM v1
+`74c367e9-bd84-58ab-b933-19a36dae35c4`(SHADOW)이며
+`RAW_STOCK_20D_RETURN` → `PREDICTED_20D_RETURN`, `PRICE_RETURN`이다.
+
+- provision된 manifest: `models/medium_20d/manifest.json`;
+  SHA-256 `09f163099a3f5d63b018a2c136962624d4990dbc604c2d3ba962e9ef4f1ba5b1`.
+- registry artifact hash: `834826154ed3083601fd590191edb69efc316aee1b1d5b52e57507810f58205e`.
+  이는 manifest 파일 hash와 구분한다. active assignment 부재 시 명시 provision된
+  manifest/hash를 pin하며 다른 목적 모델로 fallback하지 않는다.
+- 10월18일 연구 Ridge winner·Sunday challenger는 별도 SHADOW/연구 artifact다.
+  정규 serving이 Ridge로 교체되거나 새 CHAMPION이 승격됐다는 증거가 아니다.
+- 10월22일 universe cutoff·성공 Quant cache fence, 23일 Fusion 설명 투영 수정은
+  **weight·label·horizon 변경이 아니므로 새 모델 version을 만들지 않았다.**
+- 신규 주말 MEDIUM 전용·weekly v2의 성능 임계값 유예는 운영 배포됐다.
+  coverage/finite/PIT/artifact/CAS/smoke/rollback은 유지하며 실제 자동 승격 완료와 구분한다.
+
+정규 LLM은 `daily-llm-event-preselection:2`·`llm-event-preselection-v3-ko`·schema2,
+`gpt-6.1-sol`·API `2024-10-21`·관리 ID·timeout180초다.
+optional search v6의 과거 연구 실행으로 정규 정책을 바꾸지 않았다.
+원래 LLM assessment를 보존한 서버 인용 결합은 점수/순위 재평가가 아니다.
+10월22일 Fusion 복구의 후보/설명20개·ACK20은 외부 보고서 완료를 뜻하지 않는다.
+
 ## Actual winning Ridge serving / research eligibility — 2026-10-18
 
 사용자 선택에 따라 이미 학습한 실제 Ridge winner를 재학습 없이 schema-v3 numeric JSON으로

@@ -2,6 +2,19 @@
 
 ## 변경 기록과 구현 경계
 
+- **2026-10-23 현재 상태:** 독립 stage·event v2 한국어 평가·Fusion·설명/v2 API·회사명은
+  운영 배포됐고 승인된 정규 일일은 MEDIUM_20D Fusion·전량 ACK를 사용한다.
+  아래 10월16일의 "기본 비활성/배포 별도"는 도입 당시 기록과 코드 안전 기본값이다.
+- 정규 정량은 RAW Alpha158·LightGBM `74c367e9-bd84-58ab-b933-19a36dae35c4`
+  SHADOW를 유지한다. 연구 Ridge schema-v3·Sunday challenger의 생성은 운영 모델 승격이 아니다.
+  정규 LLM은 DB-only v2·`llm-event-preselection-v3-ko`·`gpt-6.1-sol`·관리 ID이며
+  timeout180초·공유3회 시도다. v6 optional 검색은 별도 승인 역사 연구 정책이다.
+- 신규 주말은 MEDIUM만 `weekly-v2-20d-performance-suspended`로 예약한다.
+  성능 임계값만 비강제하며 coverage·finite·시점/artifact·CAS·smoke·rollback은 유지한다.
+- 최신 D cutoff는 D+1 달력일 NY05:30이며 원래 context를 재시도에도 유지한다.
+  공유 universe selector·Quant 성공 cache fence와 DB 근거의 서로 다른 이유 결합을
+  운영 반영했다. 모델 점수/weight·원본 LLM assessment·실패 history는 바꾸지 않았다.
+  22일 Fusion 복구20개·설명20개·ACK20은 외부 보고서 완료와 다르다.
 - 2026-10-16: TradingAgents 전달 후보를 **기존 5~10개에서 20개로 변경**한다.
   최종 Top 20 전체를 전달하며 별도의 5~10개 축소 정책은 폐기한다.
 - 공통 수집 → 고정 cutoff/manifest → 독립 Quant Top 20·LLM Top 20 병렬 생성은
@@ -16,7 +29,7 @@
   이벤트 issuer 최대 90개와 무이벤트 대조 issuer 최대 10개다.
 - 동일 `instrument_id`에만 두 RRF 기여도를 합산한다. 같은 issuer의 다른 share class는
   합산하지 않고 적격 종목 중 RRF가 높은 하나만 남긴다. 동점은 `instrument_id ASC`다.
-- 아래 계약은 승인된 구현 목표다. 기존 독립 파이프라인과 신규 정책·Fusion·전달 기능의
+- 아래 계약은 승인된 계약이며 현행 배포 상태는 위 10월23일 요약을 우선한다. 독립 파이프라인과 정책·Fusion·전달 기능의
   구현 완료 여부를 구분하며, 문서 변경만으로 운영 플래그를 활성화하지 않는다.
 
 ## 1. 목표

@@ -7,6 +7,14 @@
 기간 필터가 필요한 경로는 [policy_event_period_v5.yaml](../../../config/llm_preselection/policy_event_period_v5.yaml)의
 Foundry Bing Grounding을 선택하며 `freshness`를 도구 파라미터에 고정한다.
 
+**2026-10-23 운영 대조:** 정규 일일은 DB-only event v2·한국어
+`llm-event-preselection-v3-ko`·schema2·`gpt-6.1-sol`·API `2024-10-21`·관리 ID다.
+timeout180초·배치당 transport와 semantic repair의 공통3회 시도는 유지한다.
+v4/v5/v6는 별도 정책 선택이며 v6의 승인 역사 연구 실행은 정규 정책 교체가 아니다.
+최신 D 정규 실행·해당 복구는 D+1 달력일 NY05:30과 원래 context/cutoff를 유지한다.
+명시적 역사 backfill의 기존 versioned 계약은 이 최신일 해석 추가로 변경하지 않는다.
+temporal harness identity는 `llm-cutoff-v2-ny-day`다.
+
 ## 1. 취득 주체와 데이터 경계
 
 1. 기존 DB packet은 고정 context/manifest에서 읽는다.
@@ -132,7 +140,7 @@ DB 입력에 보강하고, 승인 자료가 없으면 거부된 응답을 격리
 최소 3개 항목 지원 조건은 유지한다. 인증·설정·DB 시점 오류·artifact 누락/변조는 실패다.
 위의 보강 필수·승인 발췌 0건 실패 규칙은 v4/v5에 그대로 적용한다.
 
-v4는 로컬 구현이며 운영 활성화·배포는 별도다. 검색 도구 지원·허용된 데이터 처리 경계·
+검색 보강 구현·과거 연구 실행과 정규 일일 활성화는 별도다. 검색 도구 지원·허용된 데이터 처리 경계·
 지속적인 artifact 저장소·원문 버전 검증 계약을 확인한 뒤 명시적으로 선택한다.
 근거: [Azure native web search](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/web-search),
 [OpenAI 전체 consulted sources](https://developers.openai.com/api/docs/guides/tools-web-search).

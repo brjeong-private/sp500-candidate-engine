@@ -8,51 +8,49 @@
 공통 범위·무결성·시점·재현성 규칙은 [PROJECT-HARNESS.md](PROJECT-HARNESS.md)를
 우선합니다. 이 문서의 설계 계약은 운영 배포 완료를 의미하지 않습니다.
 
-## 구현·운영 기준 — 2026-10-17
+## 구현·운영 기준 — 2026-10-23 확인
 
-- 정량·LLM·Fusion의 독립 실행 API/CLI, 단계별 상태·고정 계약·재시도와 기존 일일 DAG가
-  구현·배포됐습니다. PostgreSQL migration은 [024](sql/024_candidate_stage_runs.sql)까지 적용했습니다.
-- 코드·설정 예제의 안전한 기본값은 LLM·Fusion·외부 전달 비활성입니다. **현재 승인된 운영은
-  이벤트 LLM v2·Fusion k=10·`fusion-top20-v1` 전달이 활성화**돼 있습니다.
-- 운영에서 세 독립 경로가 고정 context의 성공 20개 결과를 각각 재사용했고,
-  인증·멱등 요청·성공 실행 retry 차단과 새 LLM 호출 0건을 확인했습니다.
-- 전체 테스트 **533건**, Ruff, 신규 stage 모듈 타입 검사와 격리 PostgreSQL의
-  24개 migration·재시도·rollback·중단 복구 검증이 통과했습니다.
-  이는 투자 성능·새 champion 승격·매일 20개 생성 보장을 뜻하지 않습니다.
-- 일일 gate는 **05:30 America/New_York**입니다. 2026-10-17은 **18:30 KST**에
-  직전 10월16일 거래 세션을 처리합니다. DST에 따라 한국 시각이 달라집니다.
-  예정된 실행의 성공 여부는 실제 run으로 확인해야 합니다.
-- 실행·재시도 계약은 [오케스트레이터 가이드](orchestrator/README.md),
-  오류 조회는 [Telemetry·KQL 런북](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을 따릅니다.
-- 로컬 체크리스트 `DAILY-FUSION-2026-10-19-CHECKLIST.md`는
-  10/19 비거래일 skip과 10/20의 10/19 거래 세션 처리·최종 20개·전량 ACK를 구분합니다.
-  신규 타이머의 Fusion 비활성 차단은 로컬 변경이며 이번 작업에서 배포하지 않았습니다.
-- 신규 후보 근거 snapshot·v2 설명/결과 통합 조회와 과거일 LLM cutoff 강제 하네스는
-  로컬 구현이며 아직 운영에 배포하지 않았습니다. 추가 DDL·요약용 LLM 호출은 없습니다.
-  로컬 회귀 649건·Ruff·관련 모듈 타입 검사와 격리 PostgreSQL의 설명 조회·JSONB hash
-  왕복·미래 수정본 차단·원자적 rollback·기존 handoff/ACK를 검증했습니다.
-- 이벤트 LLM의 로컬 prompt는 `llm-event-preselection-v3-ko`로 변경했습니다.
-  질문·재질의와 요약·인용 이유·결측 사유는 한국어이며 JSON 식별자와 원문은 보존합니다.
-  한글이 없는 자연어 응답은 검증 실패로 처리하고 기존 재시도 한도를 적용합니다.
-  운영 배포는 별도이며 단건 확인 요청은 DB 읽기 전용·결과 미적재로 수행합니다.
-- 별도 LLM 검색 v4 정책(`config/llm_preselection/policy_event_search_v4.yaml`)은
-  Azure OpenAI native `web_search`가 추가 자료를 취득합니다. 서버의 SEC 추가 다운로드 방식은
-  제거했습니다. 검색에는 공개 회사 metadata만 보내고 전체 DB packet은 보내지 않습니다.
-  전체 검색 출처·자료 공개일·과거 원문 버전을 검증한 문단만 별도 평가 대화에 전달합니다.
-  모델 이름·버전은 재현성 기록일 뿐 자료 승인/차단 조건이 아닙니다.
-  [LLM 전용 하네스](src/sp500_candidate_engine/llm_preselection/LLM-HARNESS.md)에 따라
-  미래/현재/버전 미확인 출처가 섞이면 검색 전체를 거부하고 점수를 만들지 않습니다.
-  일반 뉴스는 날짜 표기만으로 승인하지 않으며 기존 v2·운영 설정은 유지합니다.
-- 기간 필터가 필요한 [v5 Bing Grounding 정책](config/llm_preselection/policy_event_period_v5.yaml)은
-  실제 tool 설정에 `freshness`를 고정합니다. LLM만 전일 이전 자료는 NY 일자 판정,
-  당일 자료는 NY 05:30 이전의 시각 검증을 적용합니다. 수집·정량 규칙은 유지합니다.
-  [10월16일 VLO 실측 보고서](VLO-2026-10-16-PERIOD-SEARCH-VALIDATION.md)에
-  승인 리소스 생성·기간 검색 성공·후보 출처 확보와 원문 검증 미충족에 따른 평가 사용 0건을 기록했습니다.
-  v4 코드·정책은 로컬 변경이며 이번 문서 푸시나 운영 활성화와 구분합니다.
-- 주간 모델 업데이트 메일은 운영에 별도 활성화했습니다. 시작·모델별 결과·최종 요약을
-  승인된 단일 수신처에 보내며 일일 파이프라인·리소스 가디언 메일은 계속 비활성입니다.
-- 기존 SHORT_5D 후보·선정 근거와 연결 분석 리포트는 2026-10-17 삭제했습니다.
-  이는 데이터 정리이며 SHORT 실행 기능·모델·점수·주간 재학습을 제거한 것은 아닙니다.
+아래는 운영 설정·실제 10월22일 결과 lineage·배포 source hash를 대조한 상태입니다.
+문서 갱신은 새 모델 학습·승격·운영 설정 변경이 아닙니다.
+
+| 구분 | 정규 운영 계약 |
+|---|---|
+| 정량 모델 | Alpha158 RAW 158차원·LightGBM `MEDIUM_20D` v1, `74c367e9-bd84-58ab-b933-19a36dae35c4` |
+| 예측 의미 | `RAW_STOCK_20D_RETURN` → `PREDICTED_20D_RETURN`, `PRICE_RETURN`; 후보 수는 별도로 20개 |
+| 모델 공급 | purpose별 active assignment 우선, 없으면 명시 provision된 manifest/hash; 다른 목적 fallback 금지 |
+| 운영 LLM | `daily-llm-event-preselection:2`, `llm-event-preselection-v3-ko`, evidence schema 2, DB-only |
+| 평가 배포 | `gpt-6.1-sol`, API `2024-10-21`, 관리 ID 인증, 호출 timeout 180초 |
+| Fusion·전달 | k=10·섹터 2→4·최종20, `fusion-top20-v1` 전량 ACK; 코드 기본 OFF와 운영 ON 구분 |
+| 정규 일정 | 매일 NY 05:30에 직전 달력 날짜 처리·비거래일 skip; 신규 주말 학습은 MEDIUM_20D만 |
+| 주간 정책 | `weekly-v2-20d-performance-suspended`: 성능 임계값만 비강제, 데이터·finite·artifact·CAS·smoke·rollback 유지 |
+| DB·조회 | migration [025](sql/025_quant_result_deletion.sql)까지 적용; 독립 stage·v2 이유/설명 API·회사명 조회 배포 |
+
+- 10월22일 배포는 정량 export와 LLM의 manifest-bound 유니버스 선택을 공통화했습니다.
+  `as_of_date`뿐 아니라 공개·적용·원천 가용 시각을 cutoff와 비교하고, 기존 정량 성공 결과의
+  재사용에도 같은 universe version을 요구합니다. 모델 weight·label·horizon 변경은 아닙니다.
+- 10월23일은 운영 baseline의 **설명 변환 함수 하나만** 패치했습니다. 동일 근거·평가항목·
+  source layer의 서로 다른 이유를 서버에서 한 근거로 결합하며 원래 LLM 설명·점수는 보존합니다.
+  완전 중복·provenance 충돌·시점 검증은 차단하며 설명을 위한 LLM 추가 호출은 없습니다.
+- 22일의 성공 수집·Quant20·LLM20과 원래 cutoff/context를 재사용한 Fusion
+  `a98a70fe-1d1c-427a-af92-d0562d2bbc2b`는 후보·설명 각20개와 전량 ACK를 확인했습니다.
+  원래 DAILY의 `PARTIAL_SUCCESS`·실패 Fusion은 보존하며 외부 보고서 완료와 구분합니다.
+- 과거 연구용 Ridge schema-v3·선택적 검색 v6는 별도 승인 재구성에 사용한 경로입니다.
+  정규 운영 LightGBM·DB-only v2를 이 모델/정책으로 교체하지 않았습니다.
+  v4 strict native 검색·v5 기간 검색·v6 선택적 기간 검색의 차이는
+  [LLM 상세 설계](.github/modernize/assessment/engines/facts/llm-pipeline-architecture.md)를 따릅니다.
+- Quant·LLM은 현재 Backend 안의 논리적 병렬 실행과 독립 stage API/CLI입니다.
+  수집·Quant·LLM·Fusion을 각각 다른 Container Apps Job으로 배포하는 물리 분리는
+  아직 제안이며 이미 배포된 주간 **학습용** Job과 혼동하지 않습니다.
+- 최신 거래일 D의 정규 실행과 그 복구는 **D+1 달력일 NY 05:30**의 고정 cutoff를 유지합니다.
+  현재 시각으로 늘리거나 D 자정으로 줄이지 않습니다. 이 해석 추가는 명시적 역사 backfill에
+  새로 적용하지 않으며, 해당 실행의 원래 versioned cutoff/manifest와 공개·revision gate를 유지합니다.
+- LLM은 배치당 통신 재시도·의미검증 repair가 **총3회**를 공유합니다. 180초 timeout이나
+  검증 실패는 여전히 가능하며 성공 보장은 아닙니다. 전체 Candidate 제한은 운영120분입니다.
+- 실제 운영 패치 모듈로 설명 persistence 회귀54건을 통과했고 전체 source hash·설정·기존 결과
+  보존을 확인했습니다. 과거 533/649건 검증은 당시 범위의 기록이지 이번 전체 suite 결과가 아닙니다.
+- 실행·재시도는 [오케스트레이터 가이드](orchestrator/README.md), 운영 오류는
+  [Telemetry·KQL 런북](.github/modernize/assessment/engines/facts/orchestrator-telemetry-runbook.md)을 따릅니다.
+  주간 메일만 활성화하며 일일·guardian 메일은 비활성입니다.
 
 ## 범위와 결과 계약
 
@@ -134,7 +132,7 @@ flowchart LR
 
         Durable["Python Durable Functions<br/>05:30 ET daily · idempotent control plane"]
         Operations["Private Storage · Key Vault<br/>App Insights · weekly-only ACS Email"]
-        Weekly["Weekly Training-only<br/>SHORT and MEDIUM · promotion gate"]
+        Weekly["Weekly Training-only<br/>MEDIUM_20D only · integrity gates"]
         Registry["Immutable Artifacts<br/>active assignment · generation CAS"]
         Operations --> Durable
         Durable --> Collect
@@ -211,7 +209,7 @@ flowchart LR
     LlmApi -.-> Fusion
     Fusion -.-> Portal["외부 Portal<br/>성공 Fusion20 전량 ACK"]
     Portal -.-> Trading["외부 TradingAgents<br/>분석·판정·보고서"]
-    Weekly["주 1회 training-only<br/>SHORT와 MEDIUM 독립 평가"] --> Registry["artifact·promotion gate<br/>active assignment"]
+    Weekly["주 1회 training-only<br/>신규 MEDIUM_20D 전용"] --> Registry["artifact·integrity gate<br/>active assignment"]
     Registry --> Quant
 ```
 
@@ -273,14 +271,18 @@ ACK는 외부 접수 확인이지 분석 보고서 완료가 아닙니다. 포�
 
 ### 주 1회 training-only
 
-- New York 주말 gate와 ISO week 멱등 run으로 SHORT·MEDIUM을 각각 평가합니다.
+- New York 주말 gate와 ISO week 멱등 run으로 **MEDIUM_20D만** 새로 예약합니다.
+  과거 SHORT·MEDIUM history와 명시적 레거시 기능은 보존합니다.
 - 학습과 일일 추론은 분리하며 weekly job은 production 후보를 생성하지 않습니다.
 - expanding purged walk-forward, 성숙 label, train-only fit을 적용합니다.
-- challenger가 절대·상대 promotion gate를 통과할 때만 immutable artifact와
-  generation CAS active assignment를 갱신합니다. 실패·reject는 incumbent를 유지합니다.
+- `weekly-v2-20d-performance-suspended`는 Rank IC·구간 Rank IC·Top-10 순수익률·
+  최대낙폭의 성능 임계값만 비강제합니다. 지표와 `passed`·`enforced=false`는 저장하며
+  coverage≥0.80·test blocks≥3·finite·시점/목적/artifact·CAS·smoke·rollback은 유지합니다.
+  성능 기준 유예를 양의 Rank IC 달성이나 새 champion 승격으로 표현하지 않습니다.
 - DAILY는 assignment를 실행별로 pin하고 hash·schema·model purpose·horizon을 검증합니다.
-- 주간 전용 `ORCHESTRATOR_WEEKLY_EMAIL_ENABLED`와 별도 수신처로 시작·두 모델 결과·
-  최종 요약을 최대 4회 발송합니다. 운영은 주간만 ON이며 공통 파이프라인·guardian 메일은 OFF입니다.
+- 주간 전용 `ORCHESTRATOR_WEEKLY_EMAIL_ENABLED`와 별도 수신처로 시작·MEDIUM 결과·
+  최종 요약을 발송합니다(과거 두 목적 history는 최대4회 계약 보존).
+  운영은 주간만 ON이며 공통 파이프라인·guardian 메일은 OFF입니다.
   주소는 운영 설정에만 보관하며 비적격·이미 접수된 주차는 메일 없이 skip합니다.
 
 상세 계약은 [주간 재학습 설계](weekly_retraining_model_design.md)와
@@ -332,13 +334,13 @@ flowchart LR
     Adjust --> Export["Qlib Export<br/>calendar · instrument spans · binaries"]
     Export --> Features["Alpha158 RAW<br/>158 features · max 60 sessions"]
 
-    subgraph Training["Weekly Training-only · SHORT and MEDIUM"]
-        Labels["Mature Labels<br/>D+1 open to D+5 or D+20 close"]
+    subgraph Training["New Weekly Training-only · MEDIUM_20D"]
+        Labels["Mature Labels<br/>D+1 open to D+20 close"]
         Split["Expanding Purged Walk-forward<br/>time split · train-only processor fit"]
         Baselines["Momentum and Ridge<br/>comparison baselines"]
         LightGBM["Qlib LightGBM<br/>purpose-specific model"]
         Evaluate["IC · Rank IC · Top-5/10 return<br/>cost · drawdown · coverage"]
-        Promotion["Absolute and Relative Promotion Gates<br/>reject keeps incumbent"]
+        Promotion["Data and Artifact Integrity Gates<br/>performance thresholds suspended in weekly v2"]
         Registry["Immutable Artifact Registry<br/>hash · schema · purpose · horizon"]
         Assignment["Active Assignment<br/>generation CAS · rollback history"]
         Labels --> Split
@@ -399,7 +401,7 @@ flowchart LR
     Evidence --> Screening["최근 7일 이벤트 선별<br/>최대 90 issuer + 무이벤트 대조 최대 10"]
     Screening --> Policy{"선택한 LLM 정책"}
     Policy -->|"v2 · 운영"| Assessment["Azure OpenAI 항목별 평가<br/>동일 종목 citation·strict JSON"]
-    Policy -->|"v4 · 로컬"| Search["Native web_search<br/>공개 회사 metadata만 전달"]
+    Policy -->|"v4 · 명시 선택"| Search["Native web_search<br/>공개 회사 metadata만 전달"]
     Search --> Admission["전체 출처·공개 시점·원문 버전 검증<br/>하나라도 미확인 시 전체 실패"]
     Admission --> Clean["승인 인용만 새 평가 대화로<br/>검색 추론·response ID 제외"]
     Clean --> Assessment
@@ -410,7 +412,8 @@ flowchart LR
 이벤트 screening은 유형별 1점이며 평가 pool을 정하는 단계입니다. 실적 일정은
 cutoff까지 알려진 전후 7일 일정을 포함하고, screening 점수를 최종 LLM 점수에 더하지 않습니다.
 평가 입력에서는 가격·Alpha158·정량 점수를 제외합니다.
-v4는 별도 정책 선택·artifact 보존·운영 검증이 필요한 로컬 확장입니다.
+v4/v5/v6는 별도 정책 선택·artifact 보존이 필요한 경로이며 정규 운영 v2와 다릅니다.
+v6는 승인된 과거 연구 재처리에서 사용했으나 정규 일일 설정으로 활성화하지 않았습니다.
 검색 발췌는 원문 자체나 사실성 보장이 아니며 미승인·미확보 자료를 성공으로 대체하지 않습니다.
 
 | 평가 항목 | 가중치 |
@@ -656,8 +659,8 @@ artifact 목적·hash, 정확히 20개 선정·shortfall, SHORT 레거시 보존
 - RRF·전달 어댑터는 기본 비활성입니다. 운영 migration·배포와 Portal 수용·재전달 검증을
   완료한 현재 승인 운영에서는 활성화돼 있습니다. 다른 환경은 동일한 승인·검증 없이 켜지 않습니다.
 - 선정 근거 요약·versioned 설명 조회·과거일 LLM 하네스는
-  [결과 스키마 샘플](RESULT-SCHEMA.sample.md)의 8~12절에 맞춰 로컬 구현했습니다.
-  **운영 배포와 포털/UI 연동은 별도**입니다. 과거일 정보 경계는 해당 run의 cutoff이며
+  [Backend 조회 계약](backend/README.md)에 따라 **운영 배포됐습니다**.
+  포털/UI 연동은 별도 프로젝트입니다. 과거일 정보 경계는 해당 run의 cutoff이며
   재구성 모드도 cutoff 후 공개 정보는 허용하지 않습니다.
 - 공식 point-in-time S&P/GICS, 공식 calendar·halt, 장기 가격·복수 regime 검증,
   champion promotion·live shadow 관찰은 별도 데이터·연구 과제입니다.
